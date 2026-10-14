@@ -1,0 +1,11 @@
+[bundle]
+name = "libreoffice"
+base = { spec = "./libreoffice.appspec" }
+
+[bundle.extensions]
+mount_dir = "/opt/extensions"
+install   = "unopkg add --shared {file}"
+
+[[extensions]]
+name = "grammalecte"
+file = "./extensions/grammalecte.oxt"

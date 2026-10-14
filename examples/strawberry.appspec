@@ -1,0 +1,231 @@
+# =============================================================================
+# appspec spec: strawberry
+#
+# Правила TOML:
+#   * плоские поля — до подтаблиц внутри каждой секции;
+#   * inline-таблицы { ... } — строго в одну строку;
+#   * [runtime.vars] идёт последним в секции [runtime].
+# =============================================================================
+
+[package]
+name        = "strawberry"
+version     = "1.2.31"
+description = "Strawberry music player"
+
+# -----------------------------------------------------------------------------
+# build
+# -----------------------------------------------------------------------------
+[build]
+base     = "debian:trixie"
+arch     = "amd64"
+template = "deb"
+
+# dpkg-dev и binutils больше не нужны: dpkg-deb уже в базовом образе,
+# binutils добавляется шаблоном перед gcc (Debian #1113854).
+tools = [
+    "ca-certificates",
+    "wget",
+    "patchelf",
+]
+
+[build.source]
+type = "deb"
+url  = "https://github.com/strawberrymusicplayer/strawberry/releases/download/{version}/strawberry_{version}-trixie_{arch}.deb"
+
+[build.apt]
+extra = [
+    "dbus", "dbus-daemon", "dbus-x11",
+    "gstreamer1.0-plugins-base",
+    "gstreamer1.0-plugins-good",
+    "gstreamer1.0-plugins-bad",
+    "gstreamer1.0-plugins-ugly",
+    "gstreamer1.0-libav",
+    "libqt6sql6-sqlite",
+    "sqlite3",
+    "libsqlite3-0",
+    "fonts-dejavu-core",
+    # --- TLS-стек GIO (обязательно) ---
+    "glib-networking",
+    "ca-certificates",
+    "libgnutls30",
+    "libp11-kit0",
+    "libidn2-0",
+    "libunistring5",
+    "libtasn1-6",
+    "libnettle8",
+    "libhogweed6",
+    "libgmp10",
+    "libffi8",
+]
+
+[build.collect]
+binary       = "/usr/bin/strawberry"
+timeout_secs = 30
+busybox_url  = "https://busybox.net/downloads/binaries/1.35.0-x86_64-linux-musl/busybox"
+includes = [
+    # --- GStreamer ---
+    "/usr/lib/x86_64-linux-gnu/gstreamer-1.0/*",
+    "/usr/lib/x86_64-linux-gnu/gstreamer1.0/*",
+    "/usr/libexec/gstreamer-1.0/*",
+    "/usr/share/gstreamer-1.0/*",
+    "/usr/lib/x86_64-linux-gnu/libgstsoup.so",
+    "/usr/lib/x86_64-linux-gnu/libgst*.so*",
+
+    # --- GIO: TLS backend + cache ---
+    "/usr/lib/x86_64-linux-gnu/gio/modules/*",
+    "/usr/share/glib-2.0/schemas/*",
+
+    # --- TLS библиотеки ---
+    "/usr/lib/x86_64-linux-gnu/libgnutls.so*",
+    "/usr/lib/x86_64-linux-gnu/libp11-kit.so*",
+    "/usr/lib/x86_64-linux-gnu/libidn2.so*",
+    "/usr/lib/x86_64-linux-gnu/libunistring.so*",
+    "/usr/lib/x86_64-linux-gnu/libtasn1.so*",
+    "/usr/lib/x86_64-linux-gnu/libnettle.so*",
+    "/usr/lib/x86_64-linux-gnu/libhogweed.so*",
+    "/usr/lib/x86_64-linux-gnu/libgmp.so*",
+    "/usr/lib/x86_64-linux-gnu/libffi.so*",
+
+    # --- CA bundle ---
+    "/etc/ssl/certs/*",
+    "/usr/share/ca-certificates/*",
+
+    # --- Fontconfig ---
+    "/etc/fonts/*",
+    "/usr/share/fonts/truetype/dejavu/*",
+
+    # --- D-Bus ---
+    "/usr/share/dbus-1/*",
+    "/usr/bin/dbus-daemon",
+    "/usr/bin/dbus-launch",
+
+    # --- Qt6 plugins: важно оставить /* ---
+    "/usr/lib/x86_64-linux-gnu/qt6/plugins/platforms/*",
+    "/usr/lib/x86_64-linux-gnu/qt6/plugins/xcbglintegrations/*",
+    "/usr/lib/x86_64-linux-gnu/qt6/plugins/sqldrivers/*",
+    "/usr/lib/x86_64-linux-gnu/qt6/plugins/imageformats/*",
+    "/usr/lib/x86_64-linux-gnu/qt6/plugins/iconengines/*",
+    "/usr/lib/x86_64-linux-gnu/qt6/plugins/styles/*",
+    "/usr/lib/x86_64-linux-gnu/qt6/plugins/tls/*",
+
+    # --- NSS + локаль ---
+    "/lib/x86_64-linux-gnu/libnss_*",
+    "/usr/lib/locale/C.utf8/*",
+]
+
+[build.scratch.env]
+LANG                   = "C.UTF-8"
+LC_ALL                 = "C.UTF-8"
+LOCPATH                = "/usr/lib/locale"
+FONTCONFIG_PATH        = "/etc/fonts"
+FONTCONFIG_FILE        = "/etc/fonts/fonts.conf"
+GIO_USE_TLS            = "gnutls"
+GIO_MODULE_DIR         = "/usr/lib/x86_64-linux-gnu/gio/modules"
+GST_PLUGIN_SYSTEM_PATH = "/usr/lib/x86_64-linux-gnu/gstreamer-1.0"
+GST_PLUGIN_PATH        = "/usr/lib/x86_64-linux-gnu/gstreamer-1.0"
+QT_QPA_PLATFORM_PLUGIN_PATH = "/usr/lib/x86_64-linux-gnu/qt6/plugins"
+QT_QPA_PLATFORM        = "xcb"
+LD_LIBRARY_PATH        = "/usr/lib/x86_64-linux-gnu:/usr/lib:/lib"
+SOUP_FORCE_HTTP1       = "1"
+
+# -----------------------------------------------------------------------------
+# runtime
+# -----------------------------------------------------------------------------
+[runtime]
+sif_file        = "strawberry.sif"
+image_name      = "strawberry:latest"
+template        = "default"
+
+state_dirs      = ["home", "log"]
+env_passthrough = ["DISPLAY", "XAUTHORITY", "DBUS_SESSION_BUS_ADDRESS", "XDG_RUNTIME_DIR"]
+xauthority_auto = true
+pulse_auto      = true
+
+create_dirs = [
+    "$MUSIC_DIR",
+    "$CONFIG_DIR/home/.fonts",
+    "$CONFIG_DIR/home/.local/share/fonts",
+]
+
+binds = [
+    "/tmp/.X11-unix:/tmp/.X11-unix",
+
+    # --- хостовый D-Bus: сокет и его каталог ---
+    "$XDG_RUNTIME_DIR/bus:$XDG_RUNTIME_DIR/bus",
+
+    # --- Шрифты с хоста (read-only, пропускаются, если пути нет) ---
+    "/usr/share/fonts:/usr/share/fonts:ro",
+    "/usr/local/share/fonts:/usr/local/share/fonts:ro",
+    # ~/.fonts (legacy) и ~/.local/share/fonts (XDG)
+    "$HOME/.fonts:/config/home/.fonts:ro",
+    "$HOME/.local/share/fonts:/config/home/.local/share/fonts:ro",
+
+    # --- PulseAudio / PipeWire ---
+    "$XDG_RUNTIME_DIR/pulse/native:/tmp/pulse-native",
+    "$CONFIG_DIR/home:/config/home",
+    "$CONFIG_DIR/log:/config/log",
+    "$MUSIC_DIR:/music:ro",
+
+]
+
+optional_binds = [
+    "/dev/snd:/dev/snd",
+    "/dev/dri:/dev/dri",
+]
+
+setup = """
+export HOME=/config/home
+mkdir -p "$HOME/.config" "$HOME/.local/share" "$HOME/.cache" 2>/dev/null || true
+export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u 2>/dev/null || echo 1000)}"
+export LANG=C.UTF-8
+export LC_ALL=C.UTF-8
+export FONTCONFIG_PATH=/etc/fonts
+export GIO_MODULE_DIR=/usr/lib/x86_64-linux-gnu/gio/modules
+
+# Пересобрать кеш GIO-модулей (writable-tmpfs позволяет писать)
+if command -v gio-querymodules >/dev/null 2>&1; then
+    gio-querymodules /usr/lib/x86_64-linux-gnu/gio/modules 2>/dev/null || true
+fi
+
+# Пересобрать кеш шрифтов
+if command -v fc-cache >/dev/null 2>&1; then
+    fc-cache -f /usr/share/fonts /config/home/.local/share/fonts 2>/dev/null || true
+fi
+"""
+
+
+entry = "exec strawberry \"$@\""
+
+[runtime.vars]
+CONFIG_DIR = "$HOME/strawberry_config"
+MUSIC_DIR  = "${MUSIC_DIR:-$HOME/Music}"
+
+# =============================================================================
+# install
+# =============================================================================
+
+[install]
+scope         = "user"
+launcher_name = "strawberry"
+desktop       = true
+icon          = "icons/strawberry.png"
+categories    = ["Audio", "AudioVideo", "Player"]
+mime_types    = ["audio/mpeg", "audio/flac", "audio/ogg", "audio/x-wav"]
+comment       = "Music player and organizer"
+wm_class      = "strawberry"
+
+extra_files = [
+    { from = "icons/strawberry-32.png",  to = "{{icons}}/32x32/apps/strawberry.png" },
+    { from = "icons/strawberry-128.png", to = "{{icons}}/128x128/apps/strawberry.png" },
+]
+
+[install.global]
+sif_dir   = "/opt/appspec/strawberry"
+bin_dir   = "/usr/local/bin"
+state_dir = "/var/lib/appspec/strawberry"
+
+[install.ipfs]
+enabled = false
+pin     = true
+gateway = "https://ipfs.io/ipfs"
+api_url = "http://127.0.0.1:5001"

@@ -1,0 +1,78 @@
+# =============================================================================
+# appspec spec: docker (Alpine / CLI)
+# =============================================================================
+
+[package]
+name        = "docker"
+version     = "27.5.1"
+description = "Docker CLI (Alpine, containerized)"
+
+# -----------------------------------------------------------------------------
+# build
+# -----------------------------------------------------------------------------
+[build]
+base     = "alpine:3.21"
+arch     = "amd64"
+template = "alpine"
+
+[build.source]
+type = ""
+url  = ""
+
+[build.apt]
+extra = [
+    "docker-cli",
+    "docker-cli-compose",
+    "ca-certificates",
+]
+
+[build.collect]
+binary       = "/usr/bin/docker"
+timeout_secs = 10
+busybox_url  = "https://busybox.net/downloads/binaries/1.35.0-x86_64-linux-musl/busybox"
+
+includes = [
+    "/etc/ssl/certs/ca-certificates.crt",
+]
+
+[build.scratch]
+workdir = "/work"
+cmd     = ["/usr/bin/docker", "--version"]
+
+[build.scratch.env]
+LANG   = "C.UTF-8"
+LC_ALL = "C.UTF-8"
+HOME   = "/work"
+DOCKER_HOST = "unix:///var/run/docker.sock"
+
+# -----------------------------------------------------------------------------
+# runtime — CLI mode
+# -----------------------------------------------------------------------------
+[runtime]
+mode    = "cli"
+command = "/usr/bin/docker"
+
+sif_file   = "docker.sif"
+image_name = "docker:latest"
+
+env_passthrough = [
+    "TERM",
+    "DOCKER_HOST",
+    "DOCKER_TLS_VERIFY",
+    "DOCKER_CERT_PATH",
+]
+
+binds = []
+
+create_dirs = []
+
+# -----------------------------------------------------------------------------
+# install
+# -----------------------------------------------------------------------------
+[install]
+scope         = "user"
+launcher_name = "docker-container"
+desktop       = false
+comment       = "Docker CLI (containerized, Alpine)"
+
+extra_files = []

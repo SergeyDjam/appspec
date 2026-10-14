@@ -1,0 +1,55 @@
+# =============================================================================
+# appspec spec: docker-compose
+# =============================================================================
+
+[package]
+name    = "docker-compose"
+version = "2.32.4"
+
+# -----------------------------------------------------------------------------
+# build
+# -----------------------------------------------------------------------------
+[build]
+base     = "alpine:3.24"
+arch     = "amd64"
+template = "alpine"
+
+[build.source]
+type = ""
+url  = ""
+
+[build.apt]
+extra = ["docker-compose"]
+
+[build.collect]
+binary = "/usr/bin/docker-compose"
+
+[build.scratch]
+workdir = "/work"
+cmd     = ["/usr/bin/docker-compose", "--version"]
+
+[build.scratch.env]
+LANG   = "C.UTF-8"
+LC_ALL = "C.UTF-8"
+HOME   = "/work"
+
+# -----------------------------------------------------------------------------
+# runtime — CLI mode
+# -----------------------------------------------------------------------------
+[runtime]
+mode    = "cli"
+command = "/usr/bin/docker-compose"
+
+sif_file   = "docker-compose.sif"
+image_name = "docker-compose:latest"
+
+# -----------------------------------------------------------------------------
+# install
+# -----------------------------------------------------------------------------
+[install]
+scope         = "user"
+launcher_name = "docker-compose-container"
+desktop       = false
+comment       = "docker-compose (containerized)"
+
+extra_files = []

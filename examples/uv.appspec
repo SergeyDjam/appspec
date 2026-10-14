@@ -1,0 +1,55 @@
+[package]
+name        = "uv"
+version     = "0.5.11"
+description = "uv — extremely fast Python package manager (static musl)"
+
+[build]
+base     = "alpine:3.21"
+arch     = "amd64"
+template = "scratch"
+
+[build.source]
+type             = "tar"
+url              = "https://github.com/astral-sh/uv/releases/download/{version}/uv-x86_64-unknown-linux-musl.tar.gz"
+extract_to       = "/usr/local/bin"
+strip_components = 1
+
+[build.collect]
+binary   = "/usr/local/bin/uv"
+includes = []
+
+[build.scratch]
+workdir = "/work"
+cmd     = ["/usr/local/bin/uv", "--version"]
+
+[build.scratch.env]
+LANG                  = "C.UTF-8"
+LC_ALL                = "C.UTF-8"
+UV_CACHE_DIR          = "/cache/uv"
+UV_PYTHON_INSTALL_DIR = "/cache/uv-python"
+UV_LINK_MODE          = "copy"
+
+[runtime]
+mode    = "cli"
+command = "/usr/local/bin/uv"
+
+sif_file   = "uv.sif"
+image_name = "uv:latest"
+
+env_passthrough = [
+    "TERM",
+    "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY",
+    "http_proxy", "https_proxy", "no_proxy",
+]
+
+binds = [
+    "$HOME/.cache/uv:/cache/uv",
+    "$HOME/.local/share/uv/python:/cache/uv-python",
+]
+create_dirs = [
+    "$HOME/.cache/uv",
+    "$HOME/.local/share/uv/python",
+]
+
+[runtime.vars]
+CONFIG_DIR = "$HOME/.local/share/appspec/uv"

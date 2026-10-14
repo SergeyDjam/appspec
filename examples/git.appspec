@@ -1,0 +1,93 @@
+# =============================================================================
+# appspec spec: git (Alpine / CLI)
+# =============================================================================
+
+[package]
+name        = "git"
+version     = "2.47.2"
+description = "Git distributed version control (Alpine, containerized CLI)"
+
+# -----------------------------------------------------------------------------
+# build
+# -----------------------------------------------------------------------------
+[build]
+base     = "alpine:3.21"
+arch     = "amd64"
+template = "alpine"
+
+# Alpine native: .deb/.rpm не нужны — собираем из apk напрямую.
+[build.source]
+type = ""
+url  = ""
+
+[build.apt]
+extra = [
+    "git",
+    "openssh-client",
+    "ca-certificates",
+    "less",
+    "tzdata",
+]
+
+[build.collect]
+binary       = "/usr/bin/git"
+timeout_secs = 10
+busybox_url  = "https://busybox.net/downloads/binaries/1.35.0-x86_64-linux-musl/busybox"
+
+# Alpine-шаблон игнорирует includes в пользу apk --root,
+# но оставь список для совместимости — он полезен в диагностике.
+includes = [
+    "/etc/ssl/certs/ca-certificates.crt",
+]
+
+
+[build.scratch]
+workdir = "/work"
+cmd     = ["/usr/bin/git", "--version"]
+
+[build.scratch.env]
+LANG              = "C.UTF-8"
+LC_ALL            = "C.UTF-8"
+GIT_EXEC_PATH     = "/usr/libexec/git-core"
+GIT_TEMPLATE_DIR  = "/usr/share/git-core/templates"
+GIT_SSH_COMMAND   = "ssh -o StrictHostKeyChecking=accept-new"
+HOME              = "/work"
+
+# -----------------------------------------------------------------------------
+# runtime — CLI mode
+# -----------------------------------------------------------------------------
+[runtime]
+mode    = "cli"
+command = "/usr/bin/git"
+
+sif_file   = "git.sif"
+image_name = "git:latest"
+
+env_passthrough = [
+    "TERM",
+    "SSH_AUTH_SOCK",
+    "GIT_AUTHOR_NAME", "GIT_AUTHOR_EMAIL",
+    "GIT_COMMITTER_NAME", "GIT_COMMITTER_EMAIL",
+    "GIT_EDITOR",
+    "PAGER",
+]
+
+# Дополнительные bind'ы: в CLI-режиме $PWD и $HOME уже монтируются шаблоном.
+binds = []
+
+create_dirs = []
+
+[runtime.vars]
+# не используется в CLI-режиме, но нужно для загрузки шаблона
+CONFIG_DIR = "$HOME/.local/share/appspec/git"
+
+# -----------------------------------------------------------------------------
+# install
+# -----------------------------------------------------------------------------
+[install]
+scope         = "user"
+launcher_name = "git-container"
+desktop       = false
+comment       = "Git (containerized, Alpine)"
+
+extra_files = []

@@ -1,0 +1,18 @@
+[Desktop Entry]
+Type=Application
+Name={{ pkg.name }}
+{% if install.comment %}Comment={{ install.comment }}
+{% endif -%}
+Exec={{ launcher_path }} %U
+{% if install.icon %}Icon={{ pkg.name }}
+{% endif -%}
+Terminal=false
+{% if install.categories %}Categories={{ install.categories | join(";") }};
+{% endif -%}
+{% if install.mime_types %}MimeType={{ install.mime_types | join(";") }};
+{% endif -%}
+{% if install.wm_class %}StartupWMClass={{ install.wm_class }}
+{% endif -%}
+StartupNotify=true
+X-AppSpec-Version={{ pkg.version }}
+X-AppSpec-Scope={{ scope }}

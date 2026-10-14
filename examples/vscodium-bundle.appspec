@@ -1,0 +1,187 @@
+[bundle]
+name        = "vscodium-dev"
+description = "VSCodium + git + offline/online extensions"
+strict      = false
+base        = { spec = "./vscodium.appspec" }
+
+# --- Компоненты --------------------------------------------------------
+[[components]]
+name    = "git"
+spec    = "./git.appspec"
+mount   = "/opt/utils/git"
+provide = "git"
+binary  = "/usr/bin/git"
+target  = "/usr/local/bin/git"
+mounts  = ["PWD", "HOME", "/proc", "/dev", "/tmp", "SSH_AUTH_SOCK"]
+forward = ["TERM", "LANG", "LC_ALL", "SSH_AUTH_SOCK"]
+
+[components.env]
+GIT_EXEC_PATH    = "/usr/libexec/git-core"
+GIT_TEMPLATE_DIR = "/usr/share/git-core/templates"
+GIT_SSH_COMMAND  = "ssh -o StrictHostKeyChecking=accept-new"
+
+[components.selftest]
+cmd             = ["git", "--version"]
+expect_contains = "git version"
+
+[bundle.extensions]
+mount_dir = "/opt/extensions"
+install   = "$CODIUM --no-sandbox --disable-gpu --user-data-dir \"$HOME/.vscodium\" --extensions-dir \"$HOME/.vscodium/extensions\" --install-extension {target} --force"
+
+# Оффлайн из локального файла
+# https://github.com/gitkraken/vscode-gitlens/releases/download/v19.3.0/gitlens-19.3.0.vsix
+[[extensions]]
+name = "opentofu"
+file = "./extensions/opentofu-0.6.3.vsix"
+requires = ["opentofu"]
+
+# Оффлайн из IPFS
+# [[extensions]]
+# name = "gitlab"
+# cid  = "bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi"
+
+# Скачивание по URL один раз в кэш, потом оффлайн
+[[extensions]]
+name = "gitlab-workflow"
+url  = "https://gitlab.com/api/v4/projects/5261717/packages/generic/release/7.2.0/gitlab-workflow-7.2.0.vsix"
+
+# Онлайн из маркетплейса (Open VSX / MS Market)
+[[extensions]]
+name = "ms-azuretools.vscode-docker"
+# ни file, ни cid, ни url
+requires = ["podman", "podman-compose"]
+
+# поддержка Apptiner/Singularity
+[[extensions]]
+name = "onnovalkering.vscode-singularity"
+
+# Интеграция с Forjeio
+[[extensions]]
+name = "maxking.forgejo-vscode"
+
+[[extensions]]
+name = "bazz.uv-manager"
+requires = ["uv"]
+
+# [[extensions]]
+# name     = "eamodio.gitlens"
+# requires = ["git"]
+
+# [[ extensions ]]
+# Open Policy Agent http://www.openpolicyagent.org
+# name = "opa"
+# url = "https://github.com/open-policy-agent/vscode-opa/releases/download/v0.26.0/opa-0.26.0.vsix"
+
+[[components]]
+name    = "kubectl"
+spec    = "./kubectl.appspec"
+provide = "kubectl"
+# Раскомментируйте, если включаете strict = true и нужен self-test:
+
+[components.selftest]
+cmd             = ["kubectl", "version"]
+expect_contains = "kubectl"
+
+[[components]]
+name    = "podman"
+spec    = "./podman.appspec"
+provide = "podman"
+mode    = "both"
+
+contain = false
+
+socket_dir = "$BUNDLE_DIR/run/podman"
+state_dir  = "$BUNDLE_DIR/state/podman"
+
+# daemon — путь к скрипту в instance. Codegen обернёт его в свой wrapper
+# (mount --make-rshared /, XDG_RUNTIME_DIR-fix) и подставит wrapper
+# в `apptainer instance start`.
+daemon        = "/opt/appspec/daemon.sh"
+daemon_socket = "/srv/podman/podman.sock"
+
+mounts  = [
+    "/etc/resolv.conf", "/etc/hosts",
+    "/srv/podman",
+    "/proc", "/tmp",
+]
+forward = ["TERM", "LANG", "LC_ALL"]
+
+[components.env]
+# CONTAINER_HOST нужен CLI-клиенту (podman run из base-шелла ходит
+# в сокет демона). daemon.sh в начале своей работы делает
+# `unset CONTAINER_HOST DOCKER_HOST`, чтобы podman system service
+# не пытался подключиться к себе же как remote-клиент.
+CONTAINER_HOST                  = "unix:///srv/podman/podman.sock"
+PODMAN_IGNORE_CGROUPSV1_WARNING = "1"
+
+# --- daemon.sh: стартует podman system service ---
+[[components.files]]
+to    = "/opt/appspec/daemon.sh"
+scope = "instance"
+mode  = 0o755
+content = """
+#!/bin/sh
+exec > /srv/podman/daemon.log 2>&1
+set -x
+
+# Снимаем remote-переменные — иначе system service попытается
+# подключиться к себе же как к удалённому сокету.
+unset CONTAINER_HOST DOCKER_HOST CONTAINER_CONNECTION CONTAINER_SSHKEY
+
+mkdir -p /srv/podman /srv/podman/runtime /srv/podman/storage /srv/podman/run
+
+export XDG_RUNTIME_DIR=/srv/podman/runtime
+export XDG_DATA_HOME=/srv/podman/data
+
+echo "=== env at daemon start ==="
+env | sort
+echo "=== which binaries ==="
+command -v podman       || true
+command -v conmon       || true
+command -v crun         || true
+command -v netavark     || true
+command -v aardvark-dns || true
+echo "=== starting podman system service ==="
+podman system service --time=0 unix:///srv/podman/podman.sock
+rc=$?
+echo "=== podman system service exited with code $rc ==="
+exit $rc
+"""
+
+# --- storage.conf: ядерный overlay БЕЗ fuse-overlayfs (он не откроет /dev/fuse) ---
+[[components.files]]
+to    = "/etc/containers/storage.conf"
+scope = "instance"
+content = """
+[storage]
+driver    = "overlay"
+graphroot = "/srv/podman/storage"
+runroot   = "/srv/podman/run"
+
+[storage.options]
+skip_mount_home = "true"
+
+[storage.options.overlay]
+ignore_chown_errors = "true"
+"""
+
+# --- CLI в sandbox (когда podman запускается через bridge) ---
+[[components.files]]
+to    = "/etc/containers/storage.conf"
+scope = "sandbox"
+content = """
+[storage]
+driver    = "overlay"
+graphroot = "/tmp/podman-cli-storage"
+runroot   = "/tmp/podman-cli-run"
+
+[storage.options]
+skip_mount_home = "true"
+
+[storage.options.overlay]
+ignore_chown_errors = "true"
+"""
+
+[components.selftest]
+cmd             = ["podman", "info"]
+expect_contains = "graphDriverName"

@@ -1,0 +1,180 @@
+# =============================================================================
+# appspec spec: vscodium (Electron GUI, Debian bookworm, full rootfs)
+# =============================================================================
+
+[package]
+name        = "vscodium"
+version     = "1.135.06055"
+description = "VSCodium — free/libre VS Code binary"
+
+# -----------------------------------------------------------------------------
+# build
+# -----------------------------------------------------------------------------
+[build]
+base     = "debian:bookworm"
+arch     = "amd64"
+template = "full"
+
+tools = [
+    "ca-certificates",
+    "wget",
+]
+
+[build.source]
+type = "deb"
+url  = "https://github.com/VSCodium/vscodium/releases/download/{version}/codium_{version}_amd64.deb"
+
+[build.apt]
+extra = [
+    # --- session: WM + dbus ---
+    "openbox",
+    "dbus",
+    "dbus-x11",
+
+    # --- procps/psmisc: setup.sh использует pkill/sleep ---
+    "procps",
+    "psmisc",
+
+    # --- шрифты ---
+    "fonts-dejavu-core",
+    "xvfb",
+    "xauth",
+    "libgl1",
+    "libegl1",
+    "libgles2",
+    "libcanberra-gtk3-module",
+]
+
+# [build.collect] в режиме "full" не используется — оставлено для совместимости.
+[build.collect]
+binary = "/usr/bin/codium"
+
+[build.scratch]
+workdir = "/config/home"
+cmd     = ["/usr/bin/codium"]
+
+[build.scratch.env]
+LANG                               = "C.UTF-8"
+LC_ALL                             = "C.UTF-8"
+HOME                               = "/config/home"
+ELECTRON_DISABLE_SECURITY_WARNINGS = "1"
+ELECTRON_IS_DEV                    = "0"
+GTK_USE_PORTAL                     = "0"
+
+# -----------------------------------------------------------------------------
+# runtime — плоские поля сначала
+# -----------------------------------------------------------------------------
+[runtime]
+sif_file   = "vscodium.sif"
+image_name = "vscodium:latest"
+template   = "default"
+
+state_dirs      = ["home", "log"]
+env_passthrough = ["DISPLAY", "XAUTHORITY"]
+xauthority_auto = true
+pulse_auto      = true
+
+create_dirs = []
+
+binds = [
+    "/tmp/.X11-unix:/tmp/.X11-unix",
+    "$CONFIG_DIR/home:/config/home",
+    "$CONFIG_DIR/log:/config/log",
+]
+
+optional_binds = [
+    "/dev/dri:/dev/dri",
+    "/dev/snd:/dev/snd",
+]
+
+setup = """
+export HOME=/config/home
+export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u 2>/dev/null || echo 1000)}"
+mkdir -p "$HOME" "$HOME/.config" "$HOME/.local/share" "$HOME/.cache" \
+         "$HOME/.vscodium" 2>/dev/null || true
+mkdir -p "$XDG_RUNTIME_DIR" && chmod 700 "$XDG_RUNTIME_DIR" 2>/dev/null || true
+
+export DBUS_SESSION_BUS_ADDRESS="unix:path=$XDG_RUNTIME_DIR/bus"
+if command -v dbus-daemon >/dev/null 2>&1; then
+    dbus-daemon --session --address="$DBUS_SESSION_BUS_ADDRESS" --fork 2>/dev/null || true
+fi
+
+if command -v openbox >/dev/null 2>&1; then
+    pkill openbox 2>/dev/null || true
+    openbox >/dev/null 2>&1 &
+    sleep 0.5
+fi
+
+export LANG=C.UTF-8
+export LC_ALL=C.UTF-8
+
+# --- Находим бинарь codium среди канонических путей. ---
+# --- В разных релизах VSCodium лаунчер лежит в одном из трёх мест;
+# --- /usr/bin/codium не всегда есть, поэтому проверяем по очереди.
+CODIUM=""
+for cand in \
+    /usr/bin/codium \
+    /usr/share/codium/codium \
+    /usr/share/codium/bin/codium \
+    /opt/vscodium/codium \
+    /opt/VSCodium/codium
+do
+    if [ -x "$cand" ]; then
+        CODIUM="$cand"
+        break
+    fi
+done
+
+if [ -z "$CODIUM" ]; then
+    echo "FATAL: codium binary not found in container." >&2
+    echo "Searched:" >&2
+    echo "  /usr/bin/codium" >&2
+    echo "  /usr/share/codium/codium" >&2
+    echo "  /usr/share/codium/bin/codium" >&2
+    echo "  /opt/vscodium/codium" >&2
+    echo "  /opt/VSCodium/codium" >&2
+    echo "--- ls /usr/share/codium/ ---" >&2
+    ls -la /usr/share/codium/ 2>&1 | head -30 >&2
+    echo "--- ls /usr/share/codium/bin/ ---" >&2
+    ls -la /usr/share/codium/bin/ 2>&1 | head -20 >&2
+    echo "--- ls /usr/bin/ | grep -i cod ---" >&2
+    ls /usr/bin/ 2>/dev/null | grep -i cod >&2 || true
+    exit 127
+fi
+
+echo "=== launching: $CODIUM ==="
+exec "$CODIUM" \
+    --no-sandbox \
+    --disable-gpu-sandbox \
+    --user-data-dir="$HOME/.vscodium" \
+    --extensions-dir="$HOME/.vscodium/extensions" \
+    "$@"
+"""
+
+entry = ""
+
+# --- подтаблица runtime — обязательно последней ---
+
+[runtime.vars]
+CONFIG_DIR = "$HOME/vscodium_config"
+
+# -----------------------------------------------------------------------------
+# install
+# -----------------------------------------------------------------------------
+[install]
+scope         = "user"
+launcher_name = "codium-container"
+desktop       = true
+icon          = "icons/vscodium.png"
+categories    = ["Development", "TextEditor", "IDE"]
+mime_types    = [
+    "text/plain",
+    "text/x-python",
+    "text/x-csrc",
+    "application/json",
+    "application/x-shellscript",
+]
+comment       = "VSCodium (containerized)"
+wm_class      = "codium"
+
+extra_files = []

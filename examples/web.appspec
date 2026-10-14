@@ -1,0 +1,113 @@
+# =============================================================================
+# appspec spec: web — статика на nginx, публикуется на localhost:8099
+# =============================================================================
+
+[package]
+name        = "web"
+version     = "1.0.0"
+description = "Static web server (nginx) on 127.0.0.1:8099"
+bin         = "nginx"          # → %{bin}
+
+[build]
+base     = "alpine:3.24"
+arch     = "amd64"
+template = "alpine"
+
+[build.apt]
+extra = ["%{bin}", "ca-certificates"]
+
+[build.scratch]
+workdir = "/srv"
+cmd     = ["%{_sbindir}/%{bin}", "-g", "daemon off;"]
+
+[build.scratch.env]
+LANG   = "C.UTF-8"
+LC_ALL = "C.UTF-8"
+
+[runtime]
+sif_file   = "web.sif"
+image_name = "web:latest"
+template   = "default"
+
+workdir = "/srv/www"
+persist = true
+
+env_passthrough = ["TERM"]
+
+state_dirs = ["www", "log"]
+
+binds = [
+    "$CONFIG_DIR/www:/srv/www",
+    "$CONFIG_DIR/log:/srv/log",
+]
+
+create_dirs = []
+
+setup = """
+if [ ! -f /srv/www/index.html ]; then
+    cat > /srv/www/index.html <<'HTML'
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>SIF web server</title>
+    <style>
+        body { font-family: system-ui, sans-serif; max-width: 40em; margin: 4em auto; }
+        code { background: #f4f4f4; padding: 2px 6px; border-radius: 3px; }
+    </style>
+</head>
+<body>
+    <h1>Hello from inside a SIF container</h1>
+    <p>Served by <strong>%{bin}</strong> on port <code>8099</code>.</p>
+    <p>Edit <code>~/web_config/www/index.html</code> on the host and reload — no rebuild needed.</p>
+</body>
+</html>
+HTML
+    echo "created default /srv/www/index.html"
+fi
+
+mkdir -p /run/%{bin}
+cat > /run/%{bin}/%{bin}.conf <<'CONF'
+user root;
+worker_processes auto;
+error_log  /srv/log/error.log warn;
+pid        /run/%{bin}/%{bin}.pid;
+
+events { worker_connections 1024; }
+
+http {
+    default_type application/octet-stream;
+    access_log /srv/log/access.log;
+    sendfile on;
+    keepalive_timeout 65;
+
+    server {
+        listen 127.0.0.1:8099;
+        server_name _;
+        root  /srv/www;
+        index index.html;
+        location / { try_files $uri $uri/ =404; }
+    }
+}
+CONF
+
+echo "=== starting %{bin} ==="
+%{_sbindir}/%{bin} -c /run/%{bin}/%{bin}.conf
+sleep 0.5
+if [ -f /run/%{bin}/%{bin}.pid ]; then
+    echo "%{bin} pid: $(cat /run/%{bin}/%{bin}.pid)"
+fi
+"""
+
+entry = ""
+
+[runtime.vars]
+CONFIG_DIR = "$HOME/web_config"
+
+# -----------------------------------------------------------------------------
+# Пользовательские макросы (опционально).
+# Могут ссылаться друг на друга и на встроенные.
+# -----------------------------------------------------------------------------
+[macros]
+# Пример: свой префикс для будущих SIF'ов.
+# install_prefix = "%{_prefix}/local"

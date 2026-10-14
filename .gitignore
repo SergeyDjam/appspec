@@ -1,0 +1,15 @@
+builder
+.vscode/*
+.vscode
+*.o
+.*~
+*~
+target
+config.toml
+*.log
+tests/*
+examples/*.sif
+examples/*.sh
+examples/Dockerfile*
+examples/*.img
+project.txt

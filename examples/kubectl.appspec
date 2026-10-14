@@ -1,0 +1,55 @@
+# =============================================================================
+# appspec spec: kubectl
+# =============================================================================
+
+[package]
+name    = "kubectl"
+version = "1.0.0"
+
+# -----------------------------------------------------------------------------
+# build
+# -----------------------------------------------------------------------------
+[build]
+base     = "alpine:3.24"
+arch     = "amd64"
+template = "alpine"
+
+[build.source]
+type = ""
+url  = ""
+
+[build.apt]
+extra = ["kubectl"]
+
+[build.collect]
+binary = "/usr/bin/kubectl"
+
+[build.scratch]
+workdir = "/work"
+cmd     = ["/usr/bin/kubectl", "--version"]
+
+[build.scratch.env]
+LANG   = "C.UTF-8"
+LC_ALL = "C.UTF-8"
+HOME   = "/work"
+
+# -----------------------------------------------------------------------------
+# runtime — CLI mode
+# -----------------------------------------------------------------------------
+[runtime]
+mode    = "cli"
+command = "/usr/bin/kubectl"
+
+sif_file   = "kubectl.sif"
+image_name = "kubectl:latest"
+
+# -----------------------------------------------------------------------------
+# install
+# -----------------------------------------------------------------------------
+[install]
+scope         = "user"
+launcher_name = "kubectl-container"
+desktop       = false
+comment       = "kubectl (containerized)"
+
+extra_files = []
