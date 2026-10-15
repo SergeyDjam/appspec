@@ -195,7 +195,7 @@ pub(crate) fn load_spec(path: &Path) -> Result<Spec> {
         .try_into()
         .with_context(|| format!("converting spec {}", path.display()))?;
 
-    spec.build.qualify_base_image();
+    spec.build.qualify_base_image(); // ← эта строка обязательна
     Ok(spec)
 }
 

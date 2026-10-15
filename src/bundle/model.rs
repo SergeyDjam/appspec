@@ -1,3 +1,4 @@
+#![allow(dead_code)] // reserved: bundle ls --json, [bundle.extensions], публичный API
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::PathBuf;

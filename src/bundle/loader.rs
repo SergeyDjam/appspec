@@ -435,20 +435,21 @@ pub fn prepare_extension(
         .map(str::to_owned);
 
     let fp_file = target.join(".appspec-fingerprint");
-    if target.is_dir() && fp_file.is_file() {
-        if std::fs::read_to_string(&fp_file).ok().as_deref() == Some(fp.as_str()) {
-            let _ = std::fs::remove_dir_all(&tmp_root);
-            return Ok(PreparedExtension {
-                id: full_id,
-                version: version.to_string(),
-                dir: target,
-                source: source_label,
-                dependencies,
-                extension_pack,
-                engines_vscode,
-                requires: ext.requires.clone(),
-            });
-        }
+    if target.is_dir()
+        && fp_file.is_file()
+        && std::fs::read_to_string(&fp_file).ok().as_deref() == Some(fp.as_str())
+    {
+        let _ = std::fs::remove_dir_all(&tmp_root);
+        return Ok(PreparedExtension {
+            id: full_id,
+            version: version.to_string(),
+            dir: target,
+            source: source_label,
+            dependencies,
+            extension_pack,
+            engines_vscode,
+            requires: ext.requires.clone(),
+        });
     }
 
     let src = tmp_root.join("extension");

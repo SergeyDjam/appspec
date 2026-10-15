@@ -78,6 +78,7 @@ struct Resolved {
     comps: Vec<(model::Component, PathBuf)>,
     exts: Vec<PreparedExtension>,
     files: Vec<ResolvedFile>,
+    #[allow(dead_code)] // reserved: отчёт об автодобавленных расширениях
     auto_added: HashSet<String>,
 }
 

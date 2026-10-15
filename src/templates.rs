@@ -9,6 +9,7 @@
 //   5.  $XDG_CONFIG_HOME/appspec/templates/
 //   6.  $XDG_DATA_DIRS/appspec/templates/
 //   7.  вкомпилированный include_str!  — fallback
+#![allow(dead_code)] // reserved: конфиг-файлы appspec (~/.config/appspec/*.toml)
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
