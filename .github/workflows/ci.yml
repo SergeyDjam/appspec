@@ -1,0 +1,235 @@
+name: ci
+
+on:
+  push:
+    branches: [main, master]
+    tags: ['v*']
+  pull_request:
+    branches: [main, master]
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+  RUST_BACKTRACE: "1"
+
+jobs:
+
+  # -------------------------------------------------------------------------
+  # Lint: rustfmt + clippy
+  # -------------------------------------------------------------------------
+  lint:
+    name: lint
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: lint
+
+      - name: rustfmt
+        run: cargo fmt --all -- --check
+
+      - name: clippy
+        run: cargo clippy --all-targets --locked -- -D warnings
+
+  # -------------------------------------------------------------------------
+  # Native tests: x86_64 + aarch64
+  # -------------------------------------------------------------------------
+  test-native:
+    name: test (${{ matrix.arch }})
+    needs: lint
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch:   x86_64
+            runner: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+          - arch:   aarch64
+            runner: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: test-${{ matrix.target }}
+
+      - name: cargo test
+        run: cargo test --release --locked --target ${{ matrix.target }}
+
+  # -------------------------------------------------------------------------
+  # riscv64 tests через cross + QEMU
+  # -------------------------------------------------------------------------
+  test-riscv64:
+    name: test (riscv64, qemu)
+    needs: lint
+    runs-on: ubuntu-22.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: riscv64gc-unknown-linux-gnu
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: test-riscv64
+
+      - name: Install cross
+        run: cargo install cross --git https://github.com/cross-rs/cross --locked
+
+      - name: cargo test (cross, QEMU)
+        run: cross test --release --locked --target riscv64gc-unknown-linux-gnu
+
+  # -------------------------------------------------------------------------
+  # Build & package
+  # -------------------------------------------------------------------------
+  build:
+    name: build (${{ matrix.arch }})
+    needs: [test-native, test-riscv64]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch:   x86_64
+            runner: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            native: true
+          - arch:   aarch64
+            runner: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            native: true
+          - arch:   riscv64
+            runner: ubuntu-22.04
+            target: riscv64gc-unknown-linux-gnu
+            native: false
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: build-${{ matrix.target }}
+
+      - name: Install cross
+        if: ${{ !matrix.native }}
+        run: cargo install cross --git https://github.com/cross-rs/cross --locked
+
+      - name: Build (native)
+        if: ${{ matrix.native }}
+        run: cargo build --release --locked --target ${{ matrix.target }}
+
+      - name: Build (cross)
+        if: ${{ !matrix.native }}
+        run: cross build --release --locked --target ${{ matrix.target }}
+
+      - name: Package
+        id: pack
+        run: |
+          set -eu
+
+          VERSION=$(awk -F'"' '/^version/{print $2; exit}' Cargo.toml)
+          ARCH="${{ matrix.arch }}"
+          NAME="appspec-${VERSION}-linux-${ARCH}"
+          BIN="target/${{ matrix.target }}/release/appspec"
+
+          if [ ! -f "$BIN" ]; then
+            echo "ERROR: binary not found at $BIN" >&2
+            find target -maxdepth 4 -name appspec -type f -exec ls -la {} \; || true
+            exit 1
+          fi
+
+          # Binary уже stripped через [profile.release] strip = true,
+          # но на всякий случай:
+          strip "$BIN" 2>/dev/null || true
+
+          mkdir -p "dist/${NAME}"
+          cp "$BIN" "dist/${NAME}/appspec"
+          cp README.md "dist/${NAME}/"
+          cp -r docs      "dist/${NAME}/"
+          cp -r examples  "dist/${NAME}/"
+          cp -r templates "dist/${NAME}/"
+
+          tar -C dist -czf "dist/${NAME}.tar.gz" "${NAME}"
+          ( cd dist && sha256sum "${NAME}.tar.gz" > "${NAME}.tar.gz.sha256" )
+
+          echo "name=${NAME}" >> "$GITHUB_OUTPUT"
+          ls -la dist/
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: appspec-${{ matrix.arch }}
+          path: |
+            dist/${{ steps.pack.outputs.name }}.tar.gz
+            dist/${{ steps.pack.outputs.name }}.tar.gz.sha256
+          if-no-files-found: error
+          retention-days: 14
+
+  # -------------------------------------------------------------------------
+  # Release: по тегу v* публикуем всё в GitHub Releases
+  # -------------------------------------------------------------------------
+  release:
+    name: release
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Sanity — версия из тега совпадает с Cargo.toml
+        run: |
+          set -eu
+          CARGO_VER=$(awk -F'"' '/^version/{print $2; exit}' Cargo.toml)
+          TAG_VER="${GITHUB_REF_NAME#v}"
+          echo "Cargo.toml: $CARGO_VER"
+          echo "Tag:        $TAG_VER"
+          if [ "$CARGO_VER" != "$TAG_VER" ]; then
+            echo "WARNING: version mismatch (tag=$TAG_VER, cargo=$CARGO_VER)" >&2
+          fi
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Collect checksums
+        run: |
+          set -eu
+          cd dist
+          cat *.sha256 > SHA256SUMS
+          echo "--- SHA256SUMS ---"
+          cat SHA256SUMS
+          echo "--- files ---"
+          ls -la
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/*.tar.gz
+            dist/SHA256SUMS
+          generate_release_notes: true
+          draft: false
+          fail_on_unmatched_files: true
