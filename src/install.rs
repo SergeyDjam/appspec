@@ -72,10 +72,7 @@ pub fn resolve_paths(spec: &Spec, scope: Scope) -> Result<Paths> {
                 .sif_dir
                 .clone()
                 .ok_or_else(|| anyhow!("scope = custom требует [install].sif_dir"))?;
-            let bin_dir = ov
-                .bin_dir
-                .clone()
-                .unwrap_or_else(|| sif_dir.join("bin"));
+            let bin_dir = ov.bin_dir.clone().unwrap_or_else(|| sif_dir.join("bin"));
             let desktop_dir = ov
                 .desktop_dir
                 .clone()
@@ -228,9 +225,15 @@ pub fn install(spec_path: &Path, opts: InstallOpts) -> Result<Manifest> {
                 .and_then(|s| s.to_str())
                 .unwrap_or("png");
             let icon_dst = if ext.eq_ignore_ascii_case("svg") {
-                paths.icon_dir.join("scalable/apps").join(format!("{name}.svg"))
+                paths
+                    .icon_dir
+                    .join("scalable/apps")
+                    .join(format!("{name}.svg"))
             } else {
-                paths.icon_dir.join("256x256/apps").join(format!("{name}.png"))
+                paths
+                    .icon_dir
+                    .join("256x256/apps")
+                    .join(format!("{name}.png"))
             };
             if let Some(p) = icon_dst.parent() {
                 fs::create_dir_all(p)?;
@@ -326,9 +329,7 @@ fn copy(from: &Path, to: &Path) -> Result<()> {
     if let Some(p) = to.parent() {
         fs::create_dir_all(p)?;
     }
-    fs::copy(from, to).with_context(|| {
-        format!("copy {} → {}", from.display(), to.display())
-    })?;
+    fs::copy(from, to).with_context(|| format!("copy {} → {}", from.display(), to.display()))?;
     Ok(())
 }
 

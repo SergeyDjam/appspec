@@ -32,10 +32,10 @@ pub enum BundleCommand {
 
 pub fn run(cmd: BundleCommand) -> Result<i32> {
     match cmd {
-        BundleCommand::Build(a)  => commands::build(a),
-        BundleCommand::Ls(a)     => commands::ls(a),
-        BundleCommand::Check(a)  => commands::check(a),
-        BundleCommand::Add(a)    => commands::add(a),
+        BundleCommand::Build(a) => commands::build(a),
+        BundleCommand::Ls(a) => commands::ls(a),
+        BundleCommand::Check(a) => commands::check(a),
+        BundleCommand::Add(a) => commands::add(a),
         BundleCommand::Remove(a) => commands::remove(a),
     }
 }

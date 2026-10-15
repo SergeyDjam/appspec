@@ -9,29 +9,49 @@ use super::{codegen, loader, model, validate};
 #[derive(Debug, Args)]
 pub struct BuildArgs {
     pub spec: String,
-    #[arg(long, short)] pub output: Option<String>,
-    #[arg(long)] pub no_build: bool,
+    #[arg(long, short)]
+    pub output: Option<String>,
+    #[arg(long)]
+    pub no_build: bool,
 }
 #[derive(Debug, Args)]
-pub struct LsArgs { pub spec: String, #[arg(long)] pub json: bool }
+pub struct LsArgs {
+    pub spec: String,
+    #[arg(long)]
+    pub json: bool,
+}
 #[derive(Debug, Args)]
-pub struct CheckArgs { pub spec: String }
+pub struct CheckArgs {
+    pub spec: String,
+}
 #[derive(Debug, Args)]
 pub struct AddArgs {
     pub spec: String,
     pub name: String,
-    #[arg(long)] pub from_spec: Option<String>,
-    #[arg(long)] pub provide: Option<String>,
-    #[arg(long)] pub dry_run: bool,
+    #[arg(long)]
+    pub from_spec: Option<String>,
+    #[arg(long)]
+    pub provide: Option<String>,
+    #[arg(long)]
+    pub dry_run: bool,
 }
 #[derive(Debug, Args)]
-pub struct RemoveArgs { pub spec: String, pub name: String }
+pub struct RemoveArgs {
+    pub spec: String,
+    pub name: String,
+}
 
 fn print_issues(issues: &[validate::Issue]) {
     for i in issues {
-        let p = if i.level == "error" { "error:" } else { "warn: " };
+        let p = if i.level == "error" {
+            "error:"
+        } else {
+            "warn: "
+        };
         eprintln!("{p} [{}] {}", i.scope, i.msg);
-        if !i.detail.is_empty() { eprintln!("       {}", i.detail); }
+        if !i.detail.is_empty() {
+            eprintln!("       {}", i.detail);
+        }
     }
 }
 
@@ -46,7 +66,8 @@ fn load(spec: &str) -> Result<(model::BundleFile, PathBuf, PathBuf)> {
 }
 
 fn spec_base_dir(spec_path: &std::path::Path) -> PathBuf {
-    spec_path.parent()
+    spec_path
+        .parent()
         .filter(|p| !p.as_os_str().is_empty())
         .map(|p| p.to_path_buf())
         .unwrap_or_else(|| PathBuf::from("."))
@@ -61,47 +82,63 @@ struct Resolved {
 }
 
 fn resolve_all(
-    file: &model::BundleFile, base_dir: &std::path::Path,
-    cache: &std::path::Path, allow_fetch: bool,
+    file: &model::BundleFile,
+    base_dir: &std::path::Path,
+    cache: &std::path::Path,
+    allow_fetch: bool,
 ) -> Result<Resolved> {
     let base = loader::resolve_base(&file.bundle.base, cache, base_dir, allow_fetch)?;
 
     let mut comps: Vec<(model::Component, PathBuf)> = Vec::new();
     let mut files: Vec<ResolvedFile> = Vec::new();
     for c in &file.components {
-        let r = loader::resolve_source(&c.source, cache, base_dir, allow_fetch,
-            &format!("component `{}`", c.name))?;
+        let r = loader::resolve_source(
+            &c.source,
+            cache,
+            base_dir,
+            allow_fetch,
+            &format!("component `{}`", c.name),
+        )?;
         comps.push((c.clone(), r.sif));
         for fr in &c.files {
-            let rf = loader::resolve_file(fr, &c.name, base_dir,
-                &format!("component `{}`", c.name))?;
+            let rf =
+                loader::resolve_file(fr, &c.name, base_dir, &format!("component `{}`", c.name))?;
             files.push(rf);
         }
     }
 
-    let provide_map: std::collections::BTreeMap<String, String> =
-        comps.iter().map(|(c, _)| (c.provide(), c.name.clone())).collect();
+    let provide_map: std::collections::BTreeMap<String, String> = comps
+        .iter()
+        .map(|(c, _)| (c.provide(), c.name.clone()))
+        .collect();
 
     let resolve_deps = file.bundle.resolve_dependencies;
     let expand_packs = file.bundle.expand_packs;
 
     let mut queue: VecDeque<model::Extension> = VecDeque::new();
     let mut auto_added: HashSet<String> = HashSet::new();
-    for e in &file.extensions { queue.push_back(e.clone()); }
+    for e in &file.extensions {
+        queue.push_back(e.clone());
+    }
 
     let mut prepared: Vec<PreparedExtension> = Vec::new();
     let mut seen_ids: HashSet<String> = HashSet::new();
 
     while let Some(ext) = queue.pop_front() {
         let p = loader::prepare_extension(&ext, cache, base_dir, allow_fetch)?;
-        if !seen_ids.insert(p.id.clone()) { continue; }
+        if !seen_ids.insert(p.id.clone()) {
+            continue;
+        }
         for req in &p.requires {
             match provide_map.get(req) {
                 Some(comp) => crate::log(format!(
                     "bundle: `{}` требует CLI `{}` — предоставляется компонентом `{}`",
-                    p.id, req, comp)),
+                    p.id, req, comp
+                )),
                 None => crate::log(format!(
-                    "bundle: `{}` требует CLI `{}` — компонент не найден", p.id, req)),
+                    "bundle: `{}` требует CLI `{}` — компонент не найден",
+                    p.id, req
+                )),
             }
         }
         if resolve_deps {
@@ -123,14 +160,26 @@ fn resolve_all(
         prepared.push(p);
     }
 
-    Ok(Resolved { base, comps, exts: prepared, files, auto_added })
+    Ok(Resolved {
+        base,
+        comps,
+        exts: prepared,
+        files,
+        auto_added,
+    })
 }
 
 fn entry_hint(file: &model::BundleFile) -> Option<&str> {
     let b = &file.bundle.base;
-    if b.entry.is_some()       { return Some(""); }
-    if b.setup.is_some()       { return Some(""); }
-    if b.source.spec.is_some() { return Some(""); }
+    if b.entry.is_some() {
+        return Some("");
+    }
+    if b.setup.is_some() {
+        return Some("");
+    }
+    if b.source.spec.is_some() {
+        return Some("");
+    }
     None
 }
 
@@ -140,8 +189,12 @@ pub fn build(a: BuildArgs) -> Result<i32> {
     let allow_fetch = !a.no_build;
 
     let static_issues = validate::validate_static(
-        &file.bundle.base.source, entry_hint(&file),
-        &file.components, &file.extensions, file.bundle.strict);
+        &file.bundle.base.source,
+        entry_hint(&file),
+        &file.components,
+        &file.extensions,
+        file.bundle.strict,
+    );
     let preflight_issues = validate::preflight(&file, &base_dir, &cache);
 
     print_issues(&static_issues);
@@ -151,18 +204,20 @@ pub fn build(a: BuildArgs) -> Result<i32> {
     }
 
     let r = resolve_all(&file, &base_dir, &cache, allow_fetch)?;
-    let resolved_issues = validate::validate_resolved(
-        &r.base, &r.comps, &r.exts, file.bundle.strict);
+    let resolved_issues =
+        validate::validate_resolved(&r.base, &r.comps, &r.exts, file.bundle.strict);
     print_issues(&resolved_issues);
-    if validate::has_errors(&resolved_issues) { return Ok(2); }
+    if validate::has_errors(&resolved_issues) {
+        return Ok(2);
+    }
 
     loader::reset_extensions_index(&cache);
-    let launcher = codegen::render_launcher(
-        &file, &r.base, &r.comps, &r.exts, &r.files)?;
+    let launcher = codegen::render_launcher(&file, &r.base, &r.comps, &r.exts, &r.files)?;
 
     let out_path = match a.output {
         Some(o) => PathBuf::from(o),
-        None => spec_path.parent()
+        None => spec_path
+            .parent()
             .unwrap_or_else(|| std::path::Path::new("."))
             .join(format!("run.{}.sh", file.bundle.name)),
     };
@@ -173,14 +228,31 @@ pub fn build(a: BuildArgs) -> Result<i32> {
     println!("ok: {}", out_path.display());
     println!("    cache      = {}", cache.display());
     println!("    base       = {}", r.base.origin);
-    println!("    utils      = {}",
-        if r.comps.is_empty() { "-".to_string() }
-        else { r.comps.iter().map(|(c, _)| c.name.as_str()).collect::<Vec<_>>().join(", ") });
-    println!("    instances  = {}",
+    println!(
+        "    utils      = {}",
+        if r.comps.is_empty() {
+            "-".to_string()
+        } else {
+            r.comps
+                .iter()
+                .map(|(c, _)| c.name.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        }
+    );
+    println!(
+        "    instances  = {}",
         if r.comps.iter().any(|(c, _)| c.has_instance()) {
-            r.comps.iter().filter(|(c, _)| c.has_instance())
-                .map(|(c, _)| c.name.as_str()).collect::<Vec<_>>().join(", ")
-        } else { "-".to_string() });
+            r.comps
+                .iter()
+                .filter(|(c, _)| c.has_instance())
+                .map(|(c, _)| c.name.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        } else {
+            "-".to_string()
+        }
+    );
     println!("    extensions = {}", r.exts.len());
     Ok(0)
 }
@@ -190,8 +262,12 @@ pub fn check(a: CheckArgs) -> Result<i32> {
     let base_dir = spec_base_dir(&spec_path);
 
     let static_issues = validate::validate_static(
-        &file.bundle.base.source, entry_hint(&file),
-        &file.components, &file.extensions, file.bundle.strict);
+        &file.bundle.base.source,
+        entry_hint(&file),
+        &file.components,
+        &file.extensions,
+        file.bundle.strict,
+    );
     let preflight_issues = validate::preflight(&file, &base_dir, &cache);
 
     print_issues(&static_issues);
@@ -204,7 +280,10 @@ pub fn check(a: CheckArgs) -> Result<i32> {
         Ok(r) => {
             let ri = validate::validate_resolved(&r.base, &r.comps, &r.exts, file.bundle.strict);
             print_issues(&ri);
-            if validate::has_errors(&ri) { eprintln!("check: FAILED"); return Ok(2); }
+            if validate::has_errors(&ri) {
+                eprintln!("check: FAILED");
+                return Ok(2);
+            }
         }
         Err(e) => eprintln!("warn: {e:#}"),
     }
@@ -217,8 +296,12 @@ pub fn ls(a: LsArgs) -> Result<i32> {
     let base_dir = spec_base_dir(&spec_path);
 
     let static_issues = validate::validate_static(
-        &file.bundle.base.source, entry_hint(&file),
-        &file.components, &file.extensions, file.bundle.strict);
+        &file.bundle.base.source,
+        entry_hint(&file),
+        &file.components,
+        &file.extensions,
+        file.bundle.strict,
+    );
     let preflight_issues = validate::preflight(&file, &base_dir, &cache);
     print_issues(&static_issues);
     print_issues(&preflight_issues);
@@ -231,15 +314,21 @@ pub fn ls(a: LsArgs) -> Result<i32> {
     println!("Components ({}):", file.components.len());
     for c in &file.components {
         let mode = match c.mode() {
-            ComponentMode::Chroot   => "chroot",
+            ComponentMode::Chroot => "chroot",
             ComponentMode::Instance => "instance",
-            ComponentMode::Both     => "both",
+            ComponentMode::Both => "both",
         };
         println!("  [{}] {:<8} {}", mode, c.name, c.source.origin());
         println!("       provide: {}", c.provide());
-        if let Some(sd) = c.socket_dir() { println!("       socket:  {}", sd); }
-        if let Some(sd) = c.state_dir()  { println!("       state:   {}", sd); }
-        if let Some(d)  = c.daemon()     { println!("       daemon:  {}", d); }
+        if let Some(sd) = c.socket_dir() {
+            println!("       socket:  {}", sd);
+        }
+        if let Some(sd) = c.state_dir() {
+            println!("       state:   {}", sd);
+        }
+        if let Some(d) = c.daemon() {
+            println!("       daemon:  {}", d);
+        }
         for fr in &c.files {
             let scope = fr.scope.as_deref().unwrap_or("base");
             println!("       file:    {} [{}]", fr.to, scope);
@@ -262,7 +351,10 @@ pub fn add(a: AddArgs) -> Result<i32> {
         anyhow::bail!("component `{}` уже присутствует", a.name);
     }
 
-    let spec_rel = a.from_spec.clone().unwrap_or_else(|| format!("./{}.appspec", a.name));
+    let spec_rel = a
+        .from_spec
+        .clone()
+        .unwrap_or_else(|| format!("./{}.appspec", a.name));
     let spec_abs = loader::resolve_relative(&spec_rel, &base_dir);
     let spec_exists = spec_abs.is_file();
 
@@ -273,13 +365,23 @@ pub fn add(a: AddArgs) -> Result<i32> {
          name    = \"{name}\"\n\
          spec    = \"{spec_rel}\"\n\
          provide = \"{provide}\"\n",
-        name = a.name, spec_rel = spec_rel, provide = provide);
+        name = a.name,
+        spec_rel = spec_rel,
+        provide = provide
+    );
 
-    if a.dry_run { print!("{block}"); return Ok(0); }
+    if a.dry_run {
+        print!("{block}");
+        return Ok(0);
+    }
 
     let mut text = std::fs::read_to_string(&spec_path)?;
-    if !text.ends_with('\n') { text.push('\n'); }
-    if !text.ends_with("\n\n") { text.push('\n'); }
+    if !text.ends_with('\n') {
+        text.push('\n');
+    }
+    if !text.ends_with("\n\n") {
+        text.push('\n');
+    }
     text.push_str(&block);
     std::fs::write(&spec_path, text)?;
 
@@ -313,12 +415,16 @@ pub fn remove(a: RemoveArgs) -> Result<i32> {
     let mut prev_blank = false;
     for ln in new_lines {
         let blank = ln.trim().is_empty();
-        if blank && prev_blank { continue; }
+        if blank && prev_blank {
+            continue;
+        }
         out_lines.push(ln);
         prev_blank = blank;
     }
     let mut out = out_lines.join("\n");
-    if !out.ends_with('\n') { out.push('\n'); }
+    if !out.ends_with('\n') {
+        out.push('\n');
+    }
     std::fs::write(&spec_path, out)?;
 
     println!("ok: component `{}` удалён", a.name);
@@ -332,7 +438,10 @@ fn locate_component_block(lines: &[&str], name: &str) -> Option<(usize, usize)> 
             let mut found = false;
             let mut j = i + 1;
             while j < lines.len() && !lines[j].starts_with('[') {
-                if is_name_assignment(lines[j], name) { found = true; break; }
+                if is_name_assignment(lines[j], name) {
+                    found = true;
+                    break;
+                }
                 j += 1;
             }
             if found {
@@ -340,7 +449,10 @@ fn locate_component_block(lines: &[&str], name: &str) -> Option<(usize, usize)> 
                 while k < lines.len() {
                     let lk = lines[k];
                     if lk.starts_with('[') {
-                        if lk.starts_with("[components.") { k += 1; continue; }
+                        if lk.starts_with("[components.") {
+                            k += 1;
+                            continue;
+                        }
                         break;
                     }
                     k += 1;
@@ -355,8 +467,12 @@ fn locate_component_block(lines: &[&str], name: &str) -> Option<(usize, usize)> 
 
 fn is_name_assignment(line: &str, name: &str) -> bool {
     let t = line.trim();
-    let Some((k, v)) = t.split_once('=') else { return false; };
-    if k.trim() != "name" { return false; }
+    let Some((k, v)) = t.split_once('=') else {
+        return false;
+    };
+    if k.trim() != "name" {
+        return false;
+    }
     v.trim().trim_start_matches('"').trim_end_matches('"') == name
 }
 
@@ -368,6 +484,9 @@ fn set_exec(p: &std::path::Path) -> Result<()> {
         m.set_mode(0o755);
         std::fs::set_permissions(p, m)?;
     }
-    #[cfg(not(unix))] { let _ = p; }
+    #[cfg(not(unix))]
+    {
+        let _ = p;
+    }
     Ok(())
 }

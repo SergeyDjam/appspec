@@ -21,7 +21,7 @@ use crate::spec::Spec;
 #[command(
     name = "appspec",
     version,
-    about = "Apptainer SIF builder from TOML spec",
+    about = "Apptainer SIF builder from TOML spec"
 )]
 struct Cli {
     #[command(subcommand)]
@@ -113,7 +113,14 @@ fn main() {
             .map(|_| 0),
         Cmd::Clean { spec } => cmd_clean(&spec).map(|_| 0),
 
-        Cmd::Install { spec, user, global, custom, no_desktop, ipfs } => {
+        Cmd::Install {
+            spec,
+            user,
+            global,
+            custom,
+            no_desktop,
+            ipfs,
+        } => {
             let _ = user;
             let scope = if global {
                 install::Scope::Global
@@ -122,11 +129,14 @@ fn main() {
             } else {
                 install::Scope::User
             };
-            install::install(&spec, install::InstallOpts {
-                scope,
-                with_desktop: !no_desktop,
-                with_ipfs: ipfs,
-            })
+            install::install(
+                &spec,
+                install::InstallOpts {
+                    scope,
+                    with_desktop: !no_desktop,
+                    with_ipfs: ipfs,
+                },
+            )
             .map(|m| {
                 log(format!("installed: {} (scope={})", m.name, m.scope));
                 0
@@ -172,11 +182,11 @@ pub(crate) fn log(msg: impl AsRef<str>) {
 /// `macros::expand_all`, конвертируем в `Spec`, при необходимости
 /// квалифицируем base-образ.
 pub(crate) fn load_spec(path: &Path) -> Result<Spec> {
-    let text = fs::read_to_string(path)
-        .with_context(|| format!("reading spec {}", path.display()))?;
+    let text =
+        fs::read_to_string(path).with_context(|| format!("reading spec {}", path.display()))?;
 
-    let mut value: toml::Value = toml::from_str(&text)
-        .with_context(|| format!("parsing spec {}", path.display()))?;
+    let mut value: toml::Value =
+        toml::from_str(&text).with_context(|| format!("parsing spec {}", path.display()))?;
 
     macros::expand_all(&mut value)
         .with_context(|| format!("expanding macros in {}", path.display()))?;
@@ -199,16 +209,16 @@ pub(crate) fn spec_dir(spec_path: &Path) -> PathBuf {
 
 /// Тип spec-файла: обычный (`[package]`) или bundle (`[bundle]`).
 fn spec_kind(path: &Path) -> Result<SpecKind> {
-    let text = fs::read_to_string(path)
-        .with_context(|| format!("reading spec {}", path.display()))?;
-    let v: toml::Value = toml::from_str(&text)
-        .with_context(|| format!("parsing spec {}", path.display()))?;
-    let has_bundle  = v.get("bundle").is_some();
+    let text =
+        fs::read_to_string(path).with_context(|| format!("reading spec {}", path.display()))?;
+    let v: toml::Value =
+        toml::from_str(&text).with_context(|| format!("parsing spec {}", path.display()))?;
+    let has_bundle = v.get("bundle").is_some();
     let has_package = v.get("package").is_some();
     Ok(match (has_bundle, has_package) {
-        (true, false)  => SpecKind::Bundle,
-        (false, true)  => SpecKind::App,
-        (true, true)   => bail!(
+        (true, false) => SpecKind::Bundle,
+        (false, true) => SpecKind::App,
+        (true, true) => bail!(
             "{}: содержит и [bundle], и [package] — не могу определить тип",
             path.display()
         ),
@@ -232,8 +242,12 @@ fn bundle_name(path: &Path) -> Result<String> {
         .and_then(|b| b.get("name"))
         .and_then(|n| n.as_str())
         .map(str::to_owned)
-        .ok_or_else(|| anyhow!("{}: [bundle].name отсутствует или не строка",
-                              path.display()))
+        .ok_or_else(|| {
+            anyhow!(
+                "{}: [bundle].name отсутствует или не строка",
+                path.display()
+            )
+        })
 }
 
 // ---------------------------------------------------------------------------
@@ -273,8 +287,8 @@ fn detect_engine() -> Result<Engine> {
 
     for (name, engine) in [
         ("buildah", Engine::Buildah),
-        ("podman",  Engine::Podman),
-        ("docker",  Engine::Docker),
+        ("podman", Engine::Podman),
+        ("docker", Engine::Docker),
     ] {
         if which(name) {
             return Ok(engine);
@@ -284,9 +298,8 @@ fn detect_engine() -> Result<Engine> {
 }
 
 fn which(name: &str) -> bool {
-    std::env::var_os("PATH").is_some_and(|paths| {
-        std::env::split_paths(&paths).any(|p| p.join(name).is_file())
-    })
+    std::env::var_os("PATH")
+        .is_some_and(|paths| std::env::split_paths(&paths).any(|p| p.join(name).is_file()))
 }
 
 fn run(args: &[&str]) -> Result<()> {
@@ -325,19 +338,27 @@ fn build_image(engine: Engine, df: &Path, dir: &Path, image: &str) -> Result<()>
 
     match engine {
         Engine::Docker | Engine::Podman => run(&[
-            engine.binary(), "build",
-            "--network", "host",
+            engine.binary(),
+            "build",
+            "--network",
+            "host",
             "--no-cache",
-            "-t", image,
-            "-f", df_str,
+            "-t",
+            image,
+            "-f",
+            df_str,
             dir_str,
         ]),
         Engine::Buildah => run(&[
-            "buildah", "bud",
+            "buildah",
+            "bud",
             "--no-cache",
-            "--format", "oci",
-            "-t", image,
-            "-f", df_str,
+            "--format",
+            "oci",
+            "-t",
+            image,
+            "-f",
+            df_str,
             dir_str,
         ]),
     }
@@ -366,7 +387,7 @@ fn export_image(engine: Engine, image: &str, tar: &Path) -> Result<String> {
 
 fn cmd_gen(spec_path: &Path) -> Result<()> {
     match spec_kind(spec_path)? {
-        SpecKind::App    => cmd_gen_app(spec_path),
+        SpecKind::App => cmd_gen_app(spec_path),
         SpecKind::Bundle => cmd_gen_bundle(spec_path),
     }
 }
@@ -407,7 +428,7 @@ fn cmd_gen_bundle(bundle_path: &Path) -> Result<()> {
 
 fn cmd_build(spec_path: &Path, force: bool) -> Result<()> {
     match spec_kind(spec_path)? {
-        SpecKind::App    => cmd_build_app(spec_path, force),
+        SpecKind::App => cmd_build_app(spec_path, force),
         SpecKind::Bundle => cmd_build_bundle(spec_path),
     }
 }
@@ -461,9 +482,13 @@ fn cmd_build_app(spec_path: &Path, force: bool) -> Result<()> {
 
     if has_startscript_flag {
         let result = run(&[
-            "apptainer", "build", "--force",
+            "apptainer",
+            "build",
+            "--force",
             "--startscript",
-            startscript_path.to_str().context("non-UTF-8 startscript path")?,
+            startscript_path
+                .to_str()
+                .context("non-UTF-8 startscript path")?,
             sif.to_str().context("non-UTF-8 SIF path")?,
             &source_uri,
         ]);
@@ -495,12 +520,7 @@ fn apptainer_supports_startscript() -> bool {
 
 /// Fallback для Apptainer без `--startscript`: собрать SIF как sandbox,
 /// переписать `/.singularity.d/startscript`, упаковать обратно в SIF.
-fn patch_startscript_via_sandbox(
-    sif: &Path,
-    ss_body: &str,
-    name: &str,
-    dir: &Path,
-) -> Result<()> {
+fn patch_startscript_via_sandbox(sif: &Path, ss_body: &str, name: &str, dir: &Path) -> Result<()> {
     let sandbox = dir.join(format!(".{name}.sandbox.tmp"));
     let _ = fs::remove_dir_all(&sandbox);
 
@@ -508,9 +528,15 @@ fn patch_startscript_via_sandbox(
     //    Сначала соберём SIF штатно, потом `apptainer build --sandbox` из него.
     //    Напрямую `build --sandbox` из oci-archive тоже работает,
     //    но оставляем двухшаговую схему для предсказуемости.
-    log(format!("  [startscript] extracting {} → sandbox", sif.display()));
+    log(format!(
+        "  [startscript] extracting {} → sandbox",
+        sif.display()
+    ));
     run(&[
-        "apptainer", "build", "--force", "--sandbox",
+        "apptainer",
+        "build",
+        "--force",
+        "--sandbox",
         sandbox.to_str().context("non-UTF-8 sandbox path")?,
         sif.to_str().context("non-UTF-8 SIF path")?,
     ])?;
@@ -519,17 +545,20 @@ fn patch_startscript_via_sandbox(
     let ss = sandbox.join(".singularity.d/startscript");
     let rs = sandbox.join(".singularity.d/runscript");
     fs::create_dir_all(ss.parent().unwrap())?;
-    fs::write(&ss, ss_body)
-        .with_context(|| format!("writing {}", ss.display()))?;
+    fs::write(&ss, ss_body).with_context(|| format!("writing {}", ss.display()))?;
     set_exec(&ss)?;
-    fs::copy(&ss, &rs)
-        .with_context(|| format!("copy to {}", rs.display()))?;
+    fs::copy(&ss, &rs).with_context(|| format!("copy to {}", rs.display()))?;
 
     // 3) Пакуем sandbox назад в SIF (в тот же файл, --force перезапишет).
     let _ = fs::remove_file(sif);
-    log(format!("  [startscript] repacking sandbox → {}", sif.display()));
+    log(format!(
+        "  [startscript] repacking sandbox → {}",
+        sif.display()
+    ));
     run(&[
-        "apptainer", "build", "--force",
+        "apptainer",
+        "build",
+        "--force",
         sif.to_str().context("non-UTF-8 SIF path")?,
         sandbox.to_str().context("non-UTF-8 sandbox path")?,
     ])?;
@@ -540,7 +569,6 @@ fn patch_startscript_via_sandbox(
     log(format!("  [startscript] patched: {}", sif.display()));
     Ok(())
 }
-
 
 fn cmd_build_bundle(bundle_path: &Path) -> Result<()> {
     use crate::bundle;
@@ -558,7 +586,7 @@ fn cmd_build_bundle(bundle_path: &Path) -> Result<()> {
 
 fn cmd_run(spec_path: &Path) -> Result<()> {
     match spec_kind(spec_path)? {
-        SpecKind::App    => cmd_run_app(spec_path),
+        SpecKind::App => cmd_run_app(spec_path),
         SpecKind::Bundle => cmd_run_bundle(spec_path),
     }
 }
@@ -689,7 +717,7 @@ fn cmd_stop(spec_path: &Path) -> Result<()> {
 
 fn cmd_clean(spec_path: &Path) -> Result<()> {
     match spec_kind(spec_path)? {
-        SpecKind::App    => cmd_clean_app(spec_path),
+        SpecKind::App => cmd_clean_app(spec_path),
         SpecKind::Bundle => cmd_clean_bundle(spec_path),
     }
 }

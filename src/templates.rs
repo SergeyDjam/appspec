@@ -23,34 +23,34 @@ use crate::spec::{Runtime, Spec};
 // Встроенные шаблоны
 // ===========================================================================
 
-const TPL_DF_DEB:     &str = include_str!("../templates/Dockerfile.deb.j2");
-const TPL_DF_TAR:     &str = include_str!("../templates/Dockerfile.tar.j2");
-const TPL_DF_APT:     &str = include_str!("../templates/Dockerfile.apt.j2");
+const TPL_DF_DEB: &str = include_str!("../templates/Dockerfile.deb.j2");
+const TPL_DF_TAR: &str = include_str!("../templates/Dockerfile.tar.j2");
+const TPL_DF_APT: &str = include_str!("../templates/Dockerfile.apt.j2");
 const TPL_DF_GENERIC: &str = include_str!("../templates/Dockerfile.generic.j2");
-const TPL_DF_RPM:     &str = include_str!("../templates/Dockerfile.rpm.j2");
-const TPL_DF_ALPINE:  &str = include_str!("../templates/Dockerfile.alpine.j2");
+const TPL_DF_RPM: &str = include_str!("../templates/Dockerfile.rpm.j2");
+const TPL_DF_ALPINE: &str = include_str!("../templates/Dockerfile.alpine.j2");
 const TPL_DF_ALPINE_SLIM: &str = include_str!("../templates/Dockerfile.alpine-slim.j2");
-const TPL_DF_FULL:    &str = include_str!("../templates/Dockerfile.full.j2");
-const TPL_DF_STATIC:  &str = include_str!("../templates/Dockerfile.static.j2");
+const TPL_DF_FULL: &str = include_str!("../templates/Dockerfile.full.j2");
+const TPL_DF_STATIC: &str = include_str!("../templates/Dockerfile.static.j2");
 const TPL_DF_SCRATCH: &str = include_str!("../templates/Dockerfile.scratch.j2");
 
-const TPL_RUN_DEFAULT:        &str = include_str!("../templates/run.sh.j2");
-const TPL_RUN_CLI:            &str = include_str!("../templates/run-cli.sh.j2");
+const TPL_RUN_DEFAULT: &str = include_str!("../templates/run.sh.j2");
+const TPL_RUN_CLI: &str = include_str!("../templates/run-cli.sh.j2");
 const TPL_INSTALLED_LAUNCHER: &str = include_str!("../templates/launcher.sh.j2");
-const TPL_DESKTOP:            &str = include_str!("../templates/app.desktop.j2");
+const TPL_DESKTOP: &str = include_str!("../templates/app.desktop.j2");
 
 fn builtin_dockerfile(name: &str) -> Option<&'static str> {
     Some(match name {
-        "deb"                   => TPL_DF_DEB,
+        "deb" => TPL_DF_DEB,
         "tar" | "tgz" | "targz" => TPL_DF_TAR,
-        "apt"                   => TPL_DF_APT,
-        "generic"               => TPL_DF_GENERIC,
-        "rpm"                   => TPL_DF_RPM,
-        "alpine"                => TPL_DF_ALPINE,
-        "alpine-slim"           => TPL_DF_ALPINE_SLIM,
-        "full"                  => TPL_DF_FULL,
-        "static"                => TPL_DF_STATIC,
-        "scratch"               => TPL_DF_SCRATCH,
+        "apt" => TPL_DF_APT,
+        "generic" => TPL_DF_GENERIC,
+        "rpm" => TPL_DF_RPM,
+        "alpine" => TPL_DF_ALPINE,
+        "alpine-slim" => TPL_DF_ALPINE_SLIM,
+        "full" => TPL_DF_FULL,
+        "static" => TPL_DF_STATIC,
+        "scratch" => TPL_DF_SCRATCH,
         _ => return None,
     })
 }
@@ -58,7 +58,7 @@ fn builtin_dockerfile(name: &str) -> Option<&'static str> {
 fn builtin_launcher(name: &str) -> Option<&'static str> {
     Some(match name {
         "default" | "run.sh" => TPL_RUN_DEFAULT,
-        "cli"                => TPL_RUN_CLI,
+        "cli" => TPL_RUN_CLI,
         _ => return None,
     })
 }
@@ -248,9 +248,9 @@ fn env() -> &'static Environment<'static> {
     static ENV: OnceLock<Environment<'static>> = OnceLock::new();
     ENV.get_or_init(|| {
         let mut e = Environment::new();
-        e.add_filter("sh_quote",   |s: String|       sh_quote(&s));
+        e.add_filter("sh_quote", |s: String| sh_quote(&s));
         e.add_filter("json_array", |v: Vec<String>| json_array(&v));
-        e.add_filter("docker_env", |s: String|       docker_env(&s));
+        e.add_filter("docker_env", |s: String| docker_env(&s));
         e
     })
 }
@@ -289,15 +289,15 @@ pub fn docker_env(value: &str) -> String {
     let mut out = String::with_capacity(value.len() + 8);
     for c in value.chars() {
         match c {
-            ' '  => out.push_str("\\ "),
+            ' ' => out.push_str("\\ "),
             '\t' => out.push_str("\\t"),
             '\n' => out.push_str("\\n"),
             '\r' => out.push_str("\\r"),
             '\\' => out.push_str("\\\\"),
-            '"'  => out.push_str("\\\""),
+            '"' => out.push_str("\\\""),
             '\'' => out.push_str("\\'"),
-            '#'  => out.push_str("\\#"),
-            _    => out.push(c),
+            '#' => out.push_str("\\#"),
+            _ => out.push(c),
         }
     }
     out
@@ -493,7 +493,7 @@ pub fn render_launcher(spec: &Spec, spec_dir: &Path) -> Result<String> {
 
     let default_name = match rt.mode.as_deref() {
         Some("cli") => "cli",
-        _           => "default",
+        _ => "default",
     };
     let name = rt.template.clone().unwrap_or_else(|| default_name.into());
     let builtin = builtin_launcher(&name);
@@ -528,11 +528,7 @@ pub fn render_launcher(spec: &Spec, spec_dir: &Path) -> Result<String> {
 
     let env_checks: Vec<String> = env_passthrough
         .iter()
-        .map(|v| {
-            format!(
-                r#"[ -n "${{{v}:-}}" ] && X_ENV="$X_ENV --env {v}=${{{v}}}" || true"#
-            )
-        })
+        .map(|v| format!(r#"[ -n "${{{v}:-}}" ] && X_ENV="$X_ENV --env {v}=${{{v}}}" || true"#))
         .collect();
 
     let bind_lines = build_bind_lines(rt);
@@ -577,10 +573,7 @@ pub fn render_installed_launcher(
 ) -> Result<String> {
     let rt = &spec.runtime;
 
-    let variants = vec![
-        "launcher.j2".to_string(),
-        "launcher.sh.j2".to_string(),
-    ];
+    let variants = vec!["launcher.j2".to_string(), "launcher.sh.j2".to_string()];
     let (source, origin) = load_template(
         None,
         None,
