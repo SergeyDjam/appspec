@@ -1,10 +1,10 @@
 [package]
 name        = "uv"
-version     = "0.5.11"
+version     = "0.13.0"
 description = "uv — extremely fast Python package manager (static musl)"
 
 [build]
-base     = "alpine:3.21"
+base     = "alpine:3.24"
 arch     = "amd64"
 template = "scratch"
 

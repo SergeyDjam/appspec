@@ -5,6 +5,7 @@ strict      = false
 base        = { spec = "./vscodium.appspec" }
 
 # --- Компоненты --------------------------------------------------------
+
 [[components]]
 name    = "git"
 spec    = "./git.appspec"
@@ -24,63 +25,173 @@ GIT_SSH_COMMAND  = "ssh -o StrictHostKeyChecking=accept-new"
 cmd             = ["git", "--version"]
 expect_contains = "git version"
 
+# --- extensions ---
+
 [bundle.extensions]
 mount_dir = "/opt/extensions"
 install   = "$CODIUM --no-sandbox --disable-gpu --user-data-dir \"$HOME/.vscodium\" --extensions-dir \"$HOME/.vscodium/extensions\" --install-extension {target} --force"
 
-# Оффлайн из локального файла
-# https://github.com/gitkraken/vscode-gitlens/releases/download/v19.3.0/gitlens-19.3.0.vsix
 [[extensions]]
-name = "opentofu"
-file = "./extensions/opentofu-0.6.3.vsix"
-requires = ["opentofu"]
+name     = "opentofu"
+file     = "./extensions/opentofu-0.6.3.vsix"
+requires = ["opentofu", "tofu-ls"]
 
-# Оффлайн из IPFS
-# [[extensions]]
-# name = "gitlab"
-# cid  = "bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi"
-
-# Скачивание по URL один раз в кэш, потом оффлайн
 [[extensions]]
 name = "gitlab-workflow"
 url  = "https://gitlab.com/api/v4/projects/5261717/packages/generic/release/7.2.0/gitlab-workflow-7.2.0.vsix"
 
-# Онлайн из маркетплейса (Open VSX / MS Market)
 [[extensions]]
-name = "ms-azuretools.vscode-docker"
-# ни file, ни cid, ни url
+name     = "ms-azuretools.vscode-docker"
 requires = ["podman", "podman-compose"]
 
-# поддержка Apptiner/Singularity
 [[extensions]]
 name = "onnovalkering.vscode-singularity"
 
-# Интеграция с Forjeio
 [[extensions]]
 name = "maxking.forgejo-vscode"
 
 [[extensions]]
-name = "bazz.uv-manager"
+name     = "bazz.uv-manager"
 requires = ["uv"]
 
-# [[extensions]]
-# name     = "eamodio.gitlens"
-# requires = ["git"]
-
-# [[ extensions ]]
-# Open Policy Agent http://www.openpolicyagent.org
-# name = "opa"
-# url = "https://github.com/open-policy-agent/vscode-opa/releases/download/v0.26.0/opa-0.26.0.vsix"
+# --- kubectl ---
 
 [[components]]
 name    = "kubectl"
 spec    = "./kubectl.appspec"
 provide = "kubectl"
-# Раскомментируйте, если включаете strict = true и нужен self-test:
+binary  = "/usr/bin/kubectl"
+target  = "/usr/local/bin/kubectl"
+mounts  = ["PWD", "HOME", "/proc", "/dev", "/tmp"]
+forward = ["TERM", "LANG", "LC_ALL"]
 
 [components.selftest]
-cmd             = ["kubectl", "version"]
-expect_contains = "kubectl"
+cmd             = ["kubectl", "version", "--client"]
+expect_contains = "Client Version"
+
+# --- uv ---
+
+[[components]]
+name    = "uv"
+spec    = "./uv.appspec"
+provide = "uv"
+binary  = "/usr/local/bin/uv"
+target  = "/usr/local/bin/uv"
+mounts  = ["PWD", "HOME", "/proc", "/dev", "/tmp"]
+forward = ["TERM", "LANG", "LC_ALL"]
+
+[components.selftest]
+cmd             = ["uv", "--version"]
+expect_contains = "uv "
+
+# ---- mkisofs -----
+
+[[components]]
+name    = "mkisofs"
+spec    = "./mkisofs.appspec"
+provide = "mkisofs"
+mounts  = ["PWD", "HOME", "/tmp", "/proc", "/dev"]
+forward = ["TERM", "LANG", "LC_ALL"]
+
+[components.selftest]
+cmd             = ["mkisofs", "--version"]
+expect_contains = "mkisofs"
+
+# ---- opentofu -----
+
+[[components]]
+name    = "opentofu"
+spec    = "./opentofu.appspec"
+provide = "opentofu"
+binary  = "/usr/local/bin/tofu"
+target  = "/usr/local/bin/tofu"
+mounts  = [
+    "PWD", "HOME", "/proc", "/dev", "/tmp",
+    "/opt/utils/mkisofs",           # пробрасываем mkisofs-sandbox внутрь opentofu-sandbox
+    "/var/run/libvirt/libvirt-sock",
+    "/var/run/libvirt/libvirt-sock-ro",      # ← опционально: ro-сокет для virt-top и пр.
+]
+forward = ["TERM", "LANG", "LC_ALL", "TF_LOG", "TF_LOG_PROVIDER",
+           "TF_CLI_ARGS", "TF_DATA_DIR", "SSH_AUTH_SOCK"]
+
+# Wrapper: делает nested chroot в mkisofs-sandbox, чтобы tofu "увидел" mkisofs
+[[components.files]]
+to    = "/usr/local/bin/mkisofs"
+scope = "sandbox"
+mode  = 0o755
+content = """
+#!/bin/sh
+# appspec: mkisofs из отдельного контейнера.
+#
+# Мы находимся в opentofu-sandbox'е. /opt/utils/mkisofs — bind на mkisofs-
+# sandbox, но без submount'ов (opentofu получил его через --bind, а не --rbind).
+# Поэтому /tmp, /proc, /dev, $HOME и $PWD внутри mkisofs-sandbox отсутствуют,
+# и xorriso не может открыть /tmp/cloudinitXXX/cloudinit.iso.
+#
+# Восстанавливаем submount'ы здесь, перед chroot. --fakeroot даёт
+# CAP_SYS_ADMIN в userns, mount --bind работает.
+
+SANDBOX=/opt/utils/mkisofs
+[ -d "$SANDBOX/usr/bin" ] || { echo "mkisofs: $SANDBOX не смонтирован" >&2; exit 127; }
+
+# Пробрасываем «одноуровневые» пути, которые нужны xorriso.
+for p in /tmp /proc /dev /sys /etc/resolv.conf /etc/hosts; do
+    [ -e "$p" ] || continue
+    tgt="$SANDBOX$p"
+    mkdir -p "$(dirname "$tgt")" 2>/dev/null || true
+    [ -e "$tgt" ] || { [ -d "$p" ] && mkdir -p "$tgt" || ( : > "$tgt" ); } 2>/dev/null || true
+    /bin/busybox mountpoint -q "$tgt" 2>/dev/null && continue
+    /bin/busybox mount --bind "$p" "$tgt" 2>/dev/null || true
+done
+
+# PWD и HOME — чтобы относительные пути и os.MkdirTemp были видны.
+CWD="$(pwd -P)"
+if [ "$CWD" != "/" ] && [ -e "$CWD" ]; then
+    mkdir -p "$SANDBOX$CWD" 2>/dev/null || true
+    /bin/busybox mount --bind "$CWD" "$SANDBOX$CWD" 2>/dev/null || true
+fi
+HOME_REAL="${HOME:-/config/home}"
+if [ -e "$HOME_REAL" ]; then
+    mkdir -p "$SANDBOX$HOME_REAL" 2>/dev/null || true
+    /bin/busybox mount --bind "$HOME_REAL" "$SANDBOX$HOME_REAL" 2>/dev/null || true
+fi
+
+# Ищем реальный бинарь (cdrkit даёт mkisofs, xorriso даёт xorrisofs).
+BIN=""
+for c in /usr/bin/mkisofs /usr/bin/xorrisofs /usr/bin/genisoimage; do
+    if [ -e "$SANDBOX$c" ]; then BIN="$c"; break; fi
+done
+[ -n "$BIN" ] || { echo "mkisofs: бинарь не найден в $SANDBOX" >&2; exit 127; }
+
+exec /bin/busybox chroot "$SANDBOX" /bin/sh -c '
+    cd "$1" 2>/dev/null || cd /
+    shift
+    exec "$@"
+' sh "$CWD" "$BIN" "$@"
+"""
+
+
+[components.selftest]
+cmd             = ["tofu", "--version"]
+expect_contains = "OpenTofu"
+
+
+# --- tofu-ls ---
+
+[[components]]
+name    = "tofu-ls"
+spec    = "./tofu-ls.appspec"
+provide = "tofu-ls"
+binary  = "/usr/local/bin/tofu-ls"
+target  = "/usr/local/bin/tofu-ls"
+mounts  = ["PWD", "HOME", "/proc", "/dev", "/tmp"]
+forward = ["TERM", "LANG", "LC_ALL"]
+
+[components.selftest]
+cmd             = ["tofu-ls", "--version"]
+expect_contains = "tofu-ls"
+
+# --- podman ---
 
 [[components]]
 name    = "podman"
@@ -93,9 +204,6 @@ contain = false
 socket_dir = "$BUNDLE_DIR/run/podman"
 state_dir  = "$BUNDLE_DIR/state/podman"
 
-# daemon — путь к скрипту в instance. Codegen обернёт его в свой wrapper
-# (mount --make-rshared /, XDG_RUNTIME_DIR-fix) и подставит wrapper
-# в `apptainer instance start`.
 daemon        = "/opt/appspec/daemon.sh"
 daemon_socket = "/srv/podman/podman.sock"
 
@@ -107,14 +215,9 @@ mounts  = [
 forward = ["TERM", "LANG", "LC_ALL"]
 
 [components.env]
-# CONTAINER_HOST нужен CLI-клиенту (podman run из base-шелла ходит
-# в сокет демона). daemon.sh в начале своей работы делает
-# `unset CONTAINER_HOST DOCKER_HOST`, чтобы podman system service
-# не пытался подключиться к себе же как remote-клиент.
 CONTAINER_HOST                  = "unix:///srv/podman/podman.sock"
 PODMAN_IGNORE_CGROUPSV1_WARNING = "1"
 
-# --- daemon.sh: стартует podman system service ---
 [[components.files]]
 to    = "/opt/appspec/daemon.sh"
 scope = "instance"
@@ -124,8 +227,6 @@ content = """
 exec > /srv/podman/daemon.log 2>&1
 set -x
 
-# Снимаем remote-переменные — иначе system service попытается
-# подключиться к себе же как к удалённому сокету.
 unset CONTAINER_HOST DOCKER_HOST CONTAINER_CONNECTION CONTAINER_SSHKEY
 
 mkdir -p /srv/podman /srv/podman/runtime /srv/podman/storage /srv/podman/run
@@ -148,7 +249,24 @@ echo "=== podman system service exited with code $rc ==="
 exit $rc
 """
 
-# --- storage.conf: ядерный overlay БЕЗ fuse-overlayfs (он не откроет /dev/fuse) ---
+[[components.files]]
+to    = "/usr/local/bin/mkisofs"
+scope = "sandbox"
+mode  = 0o755
+content = """
+#!/bin/sh
+# appspec wrapper: вызывает mkisofs из отдельного sandbox-а
+SANDBOX=/opt/utils/mkisofs
+[ -d "$SANDBOX" ] || { echo "mkisofs: $SANDBOX не смонтирован" >&2; exit 127; }
+CWD="$(pwd -P)"
+exec chroot --skip-chdir "$SANDBOX" /bin/sh -c '
+    cd "$1" 2>/dev/null || cd /
+    shift
+    exec "$@"
+' sh "$CWD" /usr/bin/mkisofs "$@"
+"""
+
+
 [[components.files]]
 to    = "/etc/containers/storage.conf"
 scope = "instance"
@@ -165,7 +283,6 @@ skip_mount_home = "true"
 ignore_chown_errors = "true"
 """
 
-# --- CLI в sandbox (когда podman запускается через bridge) ---
 [[components.files]]
 to    = "/etc/containers/storage.conf"
 scope = "sandbox"
@@ -185,3 +302,22 @@ ignore_chown_errors = "true"
 [components.selftest]
 cmd             = ["podman", "info"]
 expect_contains = "graphDriverName"
+
+# --- podman-compose ---
+# Требуется расширением ms-azuretools.vscode-docker. Использует тот же SIF,
+# что и podman, но отдельный sandbox — двойной расход диска (~100 МБ).
+# Если это нежелательно, убери "podman-compose" из requires расширения выше.
+
+[[components]]
+name    = "podman-compose"
+spec    = "./podman.appspec"
+mount   = "/opt/utils/podman-compose"
+provide = "podman-compose"
+binary  = "/usr/bin/podman-compose"
+target  = "/usr/local/bin/podman-compose"
+mounts  = ["PWD", "HOME", "/proc", "/dev", "/tmp"]
+forward = ["TERM", "LANG", "LC_ALL"]
+
+[components.selftest]
+cmd             = ["podman-compose", "version"]
+expect_contains = "podman-compose"

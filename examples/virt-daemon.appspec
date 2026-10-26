@@ -1,0 +1,60 @@
+[package]
+name        = "virt-daemon"
+version     = "9.0.0"
+description = "libvirtd + QEMU/KVM daemon (containerized, instance mode)"
+
+[build]
+base     = "debian:bookworm"
+arch     = "amd64"
+template = "full"
+tools    = ["ca-certificates"]
+
+[build.source]
+type = ""
+url  = ""
+
+[build.apt]
+extra = [
+    # --- libvirt (демон, драйвер qemu, сеть, storage) ---
+    "libvirt-daemon-system",
+    "libvirt-daemon-driver-qemu",
+    "libvirt-clients",
+    # --- QEMU ---
+    "qemu-system-x86",
+    "qemu-utils",
+    # --- network / storage backend ---
+    "dnsmasq-base",
+    "iproute2",
+    "iptables",
+    "nftables",
+    # --- утилиты ---
+    "procps", "psmisc",
+    "dbus",
+]
+
+[build.collect]
+binary   = "/usr/sbin/libvirtd"
+includes = []
+
+[build.scratch]
+workdir = "/work"
+cmd     = ["/usr/sbin/libvirtd", "--version"]
+
+[build.scratch.env]
+LANG   = "C.UTF-8"
+LC_ALL = "C.UTF-8"
+
+# -----------------------------------------------------------------------------
+# runtime — instance mode, единственный daemon
+# -----------------------------------------------------------------------------
+[runtime]
+mode    = "instance"
+workdir = "/work"
+
+sif_file   = "virt-daemon.sif"
+image_name = "virt-daemon:latest"
+
+persist = true                                # instance живёт до stop
+env_passthrough = ["TERM", "LANG", "LC_ALL"]
+binds       = []
+create_dirs = []

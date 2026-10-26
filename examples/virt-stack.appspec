@@ -1,0 +1,166 @@
+# =============================================================================
+# appspec spec: virt-stack
+#
+# Составное окружение:
+#   * base         — virt-manager (GTK GUI клиент)
+#   * component    — libvirtd + qemu-system-x86_64 (instance mode)
+#
+# Цепочка запуска (это делает bundle codegen):
+#   1. apptainer instance start <virt-manager>
+#   2. apptainer instance start <libvirtd>, ждём /var/run/libvirt/libvirt-sock
+#   3. в базовом instance стартует virt-manager, сокет уже проброшен bind'ом.
+# =============================================================================
+
+[bundle]
+name        = "virt-stack"
+description = "virt-manager + containerized libvirtd/qemu"
+strict      = false
+
+# base — как подтаблица, не inline: иначе нельзя добавить entry рядом.
+[bundle.base]
+spec  = "./virt-manager.appspec"
+entry = "exec virt-manager --no-fork"
+
+# -----------------------------------------------------------------------------
+# Компонент: libvirtd + qemu-system-x86_64
+# -----------------------------------------------------------------------------
+[[components]]
+name    = "libvirtd"
+spec    = "./virt-daemon.appspec"
+mode    = "instance"
+provide = "libvirtd"
+
+# Сокет: codegen создаст его в $BUNDLE_DIR/run/libvirt/libvirt-sock на хосте
+# и bind'нёт в базовый instance по пути /var/run/libvirt.
+socket_dir    = "$BUNDLE_DIR/run/libvirt"
+daemon_socket = "/var/run/libvirt/libvirt-sock"
+daemon        = "/opt/appspec/libvirtd-wrapper.sh"
+
+# contain = false: instance нужен полный /dev и /sys/fs/cgroup
+contain = false
+
+mounts = [
+    "/proc",
+    "/sys/fs/cgroup",
+    "/dev/kvm",                               # device (файл) — bind
+    "/dev/net/tun",                           # device (файл) — bind
+]
+
+[components.env]
+LIBVIRT_DEBUG = "4"
+
+# -----------------------------------------------------------------------------
+# wrapper: mount-fix, cgroup-fix, конфиги libvirt, фоновый libvirtd, wait
+# -----------------------------------------------------------------------------
+[[components.files]]
+to    = "/opt/appspec/libvirtd-wrapper.sh"
+scope = "instance"
+mode  = 0o755
+content = """
+#!/bin/sh
+set -eu
+
+# ---- diagnostics: весь вывод в файл, который виден на хосте через bind ----
+mkdir -p /var/run/libvirt 2>/dev/null || true
+exec > /var/run/libvirt/wrapper.log 2>&1
+set -x
+echo "=== wrapper started: pid=$$, ppid=$PPID, $(date) ==="
+echo "PATH=$PATH"
+echo "user=$(id -u):$(id -g)"
+ls -la /dev/kvm /dev/net/tun 2>&1 || true
+ls -la /opt/appspec/ 2>&1 || true
+
+# ---- 1. mount-fix ----
+mount --make-rshared / 2>/dev/null || mount --make-rslave / 2>/dev/null || true
+
+# ---- 2. mkdir ----
+mkdir -p /var/run/libvirt /var/log/libvirt /var/lib/libvirt/images
+echo "mkdir done"
+
+# ---- 3. qemu.conf ----
+cat > /etc/libvirt/qemu.conf <<'EOF'
+cgroup_controllers = []
+security_driver     = "none"
+user                = "root"
+group               = "root"
+dynamic_ownership   = 0
+remember_owner      = 0
+clear_emulator_capabilities = 0
+namespaces = []
+EOF
+echo "qemu.conf written"
+
+# ---- 4. libvirtd.conf ----
+for kv in \
+    'auth_unix_rw = "none"' \
+    'auth_unix_ro = "none"' \
+    'unix_sock_rw_perms = "0770"' \
+    'unix_sock_ro_perms = "0777"' \
+    'listen_tls = 0' \
+    'listen_tcp = 0'
+do
+    key="$(printf '%s' "$kv" | sed 's/ *=.*//')"
+    if grep -qE "^#?[[:space:]]*${key}[[:space:]]*=" /etc/libvirt/libvirtd.conf; then
+        sed -i -E "s|^#?[[:space:]]*${key}[[:space:]]*=.*|${kv}|" /etc/libvirt/libvirtd.conf
+    else
+        echo "$kv" >> /etc/libvirt/libvirtd.conf
+    fi
+done
+echo "libvirtd.conf written"
+
+# ---- 5. qemu sanity ----
+test -x /usr/bin/qemu-system-x86_64 || {
+    echo "FATAL: /usr/bin/qemu-system-x86_64 отсутствует" >&2
+    exit 127
+}
+echo "qemu: $(/usr/bin/qemu-system-x86_64 --version 2>&1 | head -1)"
+
+# ---- start virtlogd (обязателен для создания VM) ----
+echo "=== starting virtlogd ==="
+/usr/sbin/virtlogd &
+VIRTLOGD_PID=$!
+# Ждём сокет virtlogd (максимум 5 секунд)
+for _ in $(seq 1 10); do
+    [ -S /run/libvirt/virtlogd-sock ] && break
+    sleep 0.5
+done
+if [ ! -S /run/libvirt/virtlogd-sock ]; then
+    echo "FATAL: /run/libvirt/virtlogd-sock не появился" >&2
+    exit 1
+fi
+echo "virtlogd ready, pid=$VIRTLOGD_PID"
+
+# ---- start libvirtd ----
+/usr/sbin/libvirtd --listen &
+
+
+# ---- 6. start libvirtd ----
+echo "=== starting libvirtd ==="
+/usr/sbin/libvirtd --listen --verbose &
+LIBVIRTD_PID=$!
+echo "libvirtd launched, pid=$LIBVIRTD_PID"
+
+ok=0
+for i in $(seq 1 30); do
+    [ -S /var/run/libvirt/libvirt-sock ] && { ok=1; echo "socket up after ${i}00ms"; break; }
+    if ! kill -0 "$LIBVIRTD_PID" 2>/dev/null; then
+        echo "FATAL: libvirtd died before creating socket" >&2
+        wait "$LIBVIRTD_PID"
+        echo "libvirtd exit=$?"
+        exit 1
+    fi
+    sleep 0.5
+done
+
+if [ "$ok" -ne 1 ]; then
+    echo "FATAL: /var/run/libvirt/libvirt-sock не появился за 15s" >&2
+    ls -la /var/run/libvirt/ 2>&1 || true
+    exit 1
+fi
+
+echo "libvirtd ready, pid=$LIBVIRTD_PID"
+echo "=== wrapper ready, entering wait ==="
+wait "$LIBVIRTD_PID"
+echo "=== libvirtd exited with code $?, wrapper done ==="
+
+"""

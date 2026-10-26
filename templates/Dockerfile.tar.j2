@@ -32,6 +32,7 @@ FROM builder AS collector
 RUN apt-get update && apt-get install -y --no-install-recommends \
         coreutils \
         xvfb \
+        xauth \
         dbus \
         dbus-x11 \
     && rm -rf /var/lib/apt/lists/*
@@ -69,7 +70,10 @@ RUN mkdir -p "$HOME" "$XDG_RUNTIME_DIR" /bundle \
     && xvfb-run -a -s "-screen 0 1024x768x24" \
         timeout --signal=TERM --kill-after=10 {{ collect_timeout }} \
         magicpak --dynamic --verbose "$@" \
-            {{ binary | sh_quote }} /bundle \
+{%- for arg in build.collect.target_args %}
+            --dynamic-arg={{ arg | sh_quote() }} \
+{%- endfor %}
+            {{ binary | sh_quote() }} /bundle \
     ; rc=$? ; \
     echo "--- magicpak --dynamic exit=$rc ---" ; \
     ls -la /bundle 2>/dev/null || true ; \
@@ -79,7 +83,10 @@ RUN mkdir -p "$HOME" "$XDG_RUNTIME_DIR" /bundle \
         rm -rf /bundle && mkdir -p /bundle ; \
         timeout --signal=TERM --kill-after=10 {{ collect_timeout }} \
             magicpak --dynamic --verbose "$@" \
-                {{ binary | sh_quote }} /bundle \
+{%- for arg in build.collect.target_args %}
+                --dynamic-arg={{ arg | sh_quote() }} \
+{%- endfor %}
+                {{ binary | sh_quote() }} /bundle \
         ; rc=$? ; \
         echo "--- magicpak --dynamic (no Xvfb) exit=$rc ---" ; \
         ls -la /bundle 2>/dev/null || true ; \
@@ -99,7 +106,8 @@ RUN mkdir -p /bundle/bin \
          id whoami sed awk grep egrep fgrep tr cut head tail \
          sort uniq tee echo printf sleep true false test env \
          printenv date hostname uname basename dirname readlink \
-         realpath find xargs tar gzip gunzip touch stat du df ps kill; do \
+         realpath find xargs tar gzip gunzip touch stat du df ps kill \
+         expr; do \
          [ -e "./$applet" ] || ln -s busybox "./$applet" ; \
        done \
     && ls -la /bundle/bin/ | head -20

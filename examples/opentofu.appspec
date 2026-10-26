@@ -1,0 +1,52 @@
+[package]
+name        = "opentofu"
+version     = "1.13.1"
+description = "OpenTofu — open-source Terraform fork (static Go binary)"
+
+[build]
+base     = "alpine:3.24"
+arch     = "amd64"
+template = "static"
+
+[build.source]
+type       = "tar"
+url        = "https://github.com/opentofu/opentofu/releases/download/v{version}/tofu_{version}_linux_amd64.tar.gz"
+extract_to = "/usr/local/bin"
+
+[build.collect]
+binary   = "/usr/local/bin/tofu"
+includes = []
+
+[build.scratch]
+workdir = "/work"
+cmd     = ["/usr/local/bin/tofu", "version"]
+
+[build.scratch.env]
+LANG          = "C.UTF-8"
+LC_ALL        = "C.UTF-8"
+PATH          = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+SSL_CERT_FILE = "/etc/ssl/certs/ca-certificates.crt"
+
+[runtime]
+mode    = "cli"
+command = "/usr/local/bin/tofu"
+
+sif_file   = "opentofu.sif"
+image_name = "opentofu:latest"
+
+env_passthrough = [
+    "TERM",
+    "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY",
+    "http_proxy", "https_proxy", "no_proxy",
+    "TF_LOG",
+    "TF_LOG_PROVIDER",
+    "TF_IN_AUTOMATION",
+    "TF_CLI_ARGS",
+    "TF_DATA_DIR",
+]
+
+binds       = []
+create_dirs = []
+
+[runtime.vars]
+CONFIG_DIR = "$HOME/.local/share/appspec/opentofu"

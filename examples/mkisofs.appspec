@@ -1,0 +1,70 @@
+# =============================================================================
+# appspec spec: mkisofs — ISO 9660 image builder (для cloud-init ISOs и т.п.)
+#
+# Ставит классический cdrtools (mkisofs) + xorriso (xorrisofs) как fallback.
+# Alpine-шаблон (apk --root), потому что xorriso и cdrtools — динамические,
+# magicpak не нужен, а scratch не даёт shell.
+# =============================================================================
+
+[package]
+name        = "mkisofs"
+version     = "3.02a09"
+description = "mkisofs / genisoimage / xorrisofs — ISO 9660 image builder"
+
+[build]
+base     = "alpine:3.24"
+arch     = "amd64"
+template = "alpine"
+
+[build.source]
+type = ""
+url  = ""
+
+[build.apt]
+extra = [
+    # xorriso предоставляет mkisofs-совместимый интерфейс (xorrisofs)
+    # и является современной заменой устаревшему cdrkit.
+    "xorriso",
+    # libisoburn — библиотека для работы с ISO, не конфликтует.
+    "libisoburn",
+    "ca-certificates",
+]
+
+[build.collect]
+binary = "/usr/bin/mkisofs"
+
+[build.scratch]
+workdir = "/work"
+cmd     = ["/usr/bin/mkisofs", "--version"]
+
+[build.scratch.env]
+LANG   = "C.UTF-8"
+LC_ALL = "C.UTF-8"
+HOME   = "/work"
+
+# -----------------------------------------------------------------------------
+# runtime — CLI mode
+# -----------------------------------------------------------------------------
+[runtime]
+mode    = "cli"
+command = "/usr/bin/mkisofs"
+
+sif_file   = "mkisofs.sif"
+image_name = "mkisofs:latest"
+
+env_passthrough = ["TERM"]
+binds           = []
+create_dirs     = []
+
+[runtime.vars]
+CONFIG_DIR = "$HOME/.local/share/appspec/mkisofs"
+
+# -----------------------------------------------------------------------------
+# install (для `appspec install`, если захочется использовать без bundle)
+# -----------------------------------------------------------------------------
+[install]
+scope         = "user"
+launcher_name = "mkisofs-container"
+desktop       = false
+comment       = "mkisofs / xorrisofs (containerized)"
+extra_files   = []
