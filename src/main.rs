@@ -400,7 +400,8 @@ fn cmd_gen_app(spec_path: &Path) -> Result<()> {
     let df_path = dir.join(format!("Dockerfile.{name}"));
     let rl_path = dir.join(format!("run.{name}.sh"));
 
-    let df = templates::render_dockerfile(&spec, &dir)?;
+    // CHANGED: передаём spec_path для метаданных (SHA-256 + base64 спека)
+    let df = templates::render_dockerfile(&spec, &dir, spec_path)?;
     let rl = templates::render_launcher(&spec, &dir)?;
 
     fs::write(&df_path, df)?;

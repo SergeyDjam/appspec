@@ -36,9 +36,41 @@ impl Spec {
 pub struct Package {
     pub name: String,
     pub version: String,
+
+    // --- RPM-style метаданные ---------------------------------------------
+    /// Release (RPM-style). Например "1", "2.el9".
     #[serde(default)]
-    #[allow(dead_code)]
+    pub release: Option<String>,
+
+    /// Epoch (RPM-style).
+    #[serde(default)]
+    pub epoch: Option<u32>,
+
+    /// Краткое описание (одна строка) — аналог RPM Summary.
+    #[serde(default)]
+    pub summary: Option<String>,
+
+    /// Полное описание (может быть многострочным) — аналог RPM Description.
+    #[serde(default)]
     pub description: Option<String>,
+
+    /// Лицензия (SPDX-выражение рекомендуется).
+    #[serde(default)]
+    pub license: Option<String>,
+
+    /// Домашняя страница проекта.
+    #[serde(default)]
+    pub url: Option<String>,
+
+    /// Vendor/издатель.
+    #[serde(default)]
+    pub vendor: Option<String>,
+
+    /// Packager — тот, кто собрал пакет.
+    #[serde(default)]
+    pub packager: Option<String>,
+
+    /// Имя бинарника внутри контейнера. По умолчанию = name.
     #[serde(default)]
     pub bin: Option<String>,
 }
@@ -172,7 +204,6 @@ pub struct Source {
     pub exclude_deps: Vec<String>,
 
     /// Целевой путь для `type = "binary"` — куда положить скачанный файл.
-    /// По умолчанию `/usr/local/bin/tool` (см. шаблон).
     #[serde(default)]
     pub dest: Option<String>,
 }
@@ -190,9 +221,7 @@ pub struct Collect {
     #[serde(default)]
     pub timeout_secs: Option<u64>,
 
-    /// Аргументы, передаваемые целевому бинарнику во время сборки,
-    /// чтобы он быстро завершился (например `["-v"]` для angie).
-    /// Передаются в magicpak после `binary`.
+    /// Аргументы, передаваемые целевому бинарнику во время сборки.
     #[serde(default)]
     pub target_args: Vec<String>,
 }

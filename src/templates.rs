@@ -9,13 +9,14 @@
 //   5.  $XDG_CONFIG_HOME/appspec/templates/
 //   6.  $XDG_DATA_DIRS/appspec/templates/
 //   7.  вкомпилированный include_str!  — fallback
-#![allow(dead_code)] // reserved: конфиг-файлы appspec (~/.config/appspec/*.toml)
+#![allow(dead_code)]
 
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
 use anyhow::{anyhow, bail, Context, Result};
+use base64::Engine as _;
 use minijinja::{context, Environment};
 
 use crate::spec::{Runtime, Spec};
@@ -39,6 +40,8 @@ const TPL_RUN_DEFAULT: &str = include_str!("../templates/run.sh.j2");
 const TPL_RUN_CLI: &str = include_str!("../templates/run-cli.sh.j2");
 const TPL_INSTALLED_LAUNCHER: &str = include_str!("../templates/launcher.sh.j2");
 const TPL_DESKTOP: &str = include_str!("../templates/app.desktop.j2");
+const TPL_DF_DEB_LDD: &str = include_str!("../templates/Dockerfile.deb-ldd.j2");
+const TPL_DF_QT_STATIC: &str = include_str!("../templates/Dockerfile.qt-static.j2");
 
 fn builtin_dockerfile(name: &str) -> Option<&'static str> {
     Some(match name {
@@ -52,6 +55,8 @@ fn builtin_dockerfile(name: &str) -> Option<&'static str> {
         "full" => TPL_DF_FULL,
         "static" => TPL_DF_STATIC,
         "scratch" => TPL_DF_SCRATCH,
+        "deb-ldd" | "ldd" => TPL_DF_DEB_LDD,
+        "qt-static" | "qt" => TPL_DF_QT_STATIC,
         _ => return None,
     })
 }
@@ -305,6 +310,209 @@ pub fn docker_env(value: &str) -> String {
 }
 
 // ===========================================================================
+// SIF metadata (LABEL)
+// ===========================================================================
+
+/// Экранирование значения для `LABEL key = "value"`.
+///
+/// Docker выполняет подстановку `${VAR}`/`$VAR` в значениях LABEL,
+/// поэтому `$` тоже экранируется. Переводы строк и табы заменяются
+/// пробелами — метаданные должны быть однострочными. Полный исходный
+/// текст `.appspec` доступен в `org.appspec.spec.content.base64`
+/// со всей разметкой.
+fn escape_label(v: &str) -> String {
+    let mut out = String::with_capacity(v.len());
+    for c in v.chars() {
+        match c {
+            '\\' => out.push_str("\\\\"),
+            '"' => out.push_str("\\\""),
+            '$' => out.push_str("\\$"),
+            '\n' | '\r' | '\t' => out.push(' '),
+            _ => out.push(c),
+        }
+    }
+    out
+}
+
+/// Сформировать набор LABEL-метаданных для финального Dockerfile.
+///
+/// Три пространства имён:
+///   * `org.appspec.*` — собственные метаданные + содержимое спека;
+///   * `org.label-schema.*` — стандарт label-schema.org (backward compat);
+///   * `org.opencontainers.image.*` — современный OCI image spec.
+///
+/// Извлечение:
+///   apptainer inspect --json --labels image.sif | jq .
+///   apptainer inspect --json --labels image.sif \
+///     | jq -r '."org.appspec.spec.content.base64"' | base64 -d
+pub fn build_labels(spec: &Spec, spec_path: &Path) -> BTreeMap<String, String> {
+    let pkg = &spec.package;
+    let mut m = BTreeMap::new();
+
+    // --- генератор / формат спека ---
+    m.insert(
+        "org.appspec.generator".into(),
+        format!("appspec {}", env!("CARGO_PKG_VERSION")),
+    );
+    m.insert("org.appspec.spec.format".into(), "1".into());
+
+    // --- RPM-style поля ---
+    m.insert("org.appspec.package.name".into(), pkg.name.clone());
+    m.insert("org.appspec.package.version".into(), pkg.version.clone());
+    m.insert("org.appspec.package.arch".into(), spec.build.arch.clone());
+    if let Some(v) = &pkg.release {
+        m.insert("org.appspec.package.release".into(), v.clone());
+    }
+    if let Some(v) = pkg.epoch {
+        m.insert("org.appspec.package.epoch".into(), v.to_string());
+    }
+    if let Some(v) = &pkg.summary {
+        m.insert("org.appspec.package.summary".into(), v.clone());
+    }
+    if let Some(v) = &pkg.description {
+        // Однострочная версия; оригинал — в spec.content.base64.
+        m.insert(
+            "org.appspec.package.description".into(),
+            v.replace('\n', " ").replace('\r', " "),
+        );
+    }
+    if let Some(v) = &pkg.license {
+        m.insert("org.appspec.package.license".into(), v.clone());
+    }
+    if let Some(v) = &pkg.url {
+        m.insert("org.appspec.package.url".into(), v.clone());
+    }
+    if let Some(v) = &pkg.vendor {
+        m.insert("org.appspec.package.vendor".into(), v.clone());
+    }
+    if let Some(v) = &pkg.packager {
+        m.insert("org.appspec.package.packager".into(), v.clone());
+    }
+
+    // --- label-schema.org (backward compat) ---
+    m.insert("org.label-schema.schema-version".into(), "1.0".into());
+    m.insert("org.label-schema.name".into(), pkg.name.clone());
+    m.insert("org.label-schema.version".into(), pkg.version.clone());
+    if let Some(v) = pkg.summary.as_ref().or(pkg.description.as_ref()) {
+        m.insert(
+            "org.label-schema.description".into(),
+            v.replace('\n', " ").replace('\r', " "),
+        );
+    }
+    if let Some(v) = &pkg.license {
+        m.insert("org.label-schema.license".into(), v.clone());
+    }
+    if let Some(v) = &pkg.url {
+        m.insert("org.label-schema.url".into(), v.clone());
+    }
+    if let Some(v) = &pkg.vendor {
+        m.insert("org.label-schema.vendor".into(), v.clone());
+    }
+
+    // --- OCI image spec (современный стандарт) ---
+    m.insert("org.opencontainers.image.title".into(), pkg.name.clone());
+    m.insert("org.opencontainers.image.version".into(), pkg.version.clone());
+    if let Some(v) = pkg.summary.as_ref().or(pkg.description.as_ref()) {
+        m.insert(
+            "org.opencontainers.image.description".into(),
+            v.replace('\n', " ").replace('\r', " "),
+        );
+    }
+    if let Some(v) = &pkg.license {
+        m.insert("org.opencontainers.image.licenses".into(), v.clone());
+    }
+    if let Some(v) = &pkg.url {
+        m.insert("org.opencontainers.image.url".into(), v.clone());
+    }
+    if let Some(v) = &pkg.vendor {
+        m.insert("org.opencontainers.image.vendor".into(), v.clone());
+    }
+
+    // --- содержимое спека для восстановления ---
+    match std::fs::read(spec_path) {
+        Ok(raw) => {
+            let filename = spec_path
+                .file_name()
+                .map(|s| s.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            m.insert("org.appspec.spec.filename".into(), filename);
+            m.insert("org.appspec.spec.size".into(), raw.len().to_string());
+
+            use sha2::{Digest, Sha256};
+            let mut hasher = Sha256::new();
+            hasher.update(&raw);
+            m.insert(
+                "org.appspec.spec.sha256".into(),
+                format!("{:x}", hasher.finalize()),
+            );
+
+            m.insert(
+                "org.appspec.spec.content.base64".into(),
+                base64::engine::general_purpose::STANDARD.encode(&raw),
+            );
+        }
+        Err(e) => {
+            crate::log(format!(
+                "warning: не могу прочитать {} для метаданных: {}",
+                spec_path.display(),
+                e
+            ));
+        }
+    }
+
+    m
+}
+
+fn render_label_block(labels: &BTreeMap<String, String>) -> String {
+    let mut s = String::with_capacity(1024);
+    s.push_str("# --- appspec metadata (LABEL) ---\n");
+    for (k, v) in labels {
+        // Современный синтаксис `LABEL key="value"`.
+        // Пробелы вокруг `=` НЕДОПУСТИМЫ: Docker/buildah парсит такую строку
+        // как legacy `LABEL key value`, и `= "value"` целиком становится
+        // значением лейбла (отсюда префикс "= " в `apptainer inspect`).
+        s.push_str(&format!("LABEL {}=\"{}\"\n", k, escape_label(v)));
+    }
+    s
+}
+
+/// Найти позицию последней инструкции `FROM `, начинающейся с начала
+/// строки. Возвращает байтовое смещение.
+fn find_last_from(df: &str) -> Option<usize> {
+    let mut pos = 0usize;
+    let mut last: Option<usize> = None;
+    for line in df.split_inclusive('\n') {
+        if line.starts_with("FROM ") {
+            last = Some(pos);
+        }
+        pos += line.len();
+    }
+    last
+}
+
+/// Вставить блок LABEL сразу после последней `FROM ` (то есть в
+/// начало финальной стадии). Если `FROM` не найдено — предупреждение,
+/// Dockerfile остаётся без изменений.
+fn inject_labels(mut df: String, labels: &BTreeMap<String, String>) -> String {
+    let block = render_label_block(labels);
+
+    let Some(pos) = find_last_from(&df) else {
+        crate::log("warning: в Dockerfile нет инструкции `FROM` — метаданные не добавлены");
+        return df;
+    };
+
+    // Смещение сразу после символа '\n', завершающего строку FROM.
+    let after = pos
+        + df[pos..]
+            .find('\n')
+            .map(|i| i + 1)
+            .unwrap_or_else(|| df.len() - pos);
+
+    df.insert_str(after, &block);
+    df
+}
+
+// ===========================================================================
 // Резолвинг и рендер
 // ===========================================================================
 
@@ -421,7 +629,7 @@ fn build_bind_lines(rt: &Runtime) -> Vec<String> {
 // Dockerfile
 // ===========================================================================
 
-pub fn render_dockerfile(spec: &Spec, spec_dir: &Path) -> Result<String> {
+pub fn render_dockerfile(spec: &Spec, spec_dir: &Path, spec_path: &Path) -> Result<String> {
     let b = &spec.build;
 
     let name = b
@@ -467,7 +675,7 @@ pub fn render_dockerfile(spec: &Spec, spec_dir: &Path) -> Result<String> {
         .map(|n| n.to_string())
         .unwrap_or_else(|| "30".into());
 
-    render(
+    let rendered = render(
         &source,
         &origin,
         context! {
@@ -482,7 +690,10 @@ pub fn render_dockerfile(spec: &Spec, spec_dir: &Path) -> Result<String> {
             busybox_url      => busybox_url,
             collect_timeout  => collect_timeout,
         },
-    )
+    )?;
+
+    let labels = build_labels(spec, spec_path);
+    Ok(inject_labels(rendered, &labels))
 }
 
 // ===========================================================================
