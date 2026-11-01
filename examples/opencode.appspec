@@ -1,0 +1,93 @@
+# =============================================================================
+# appspec spec: opencode
+# Минимальный CLI-образ на основе статического musl-бинарника.
+# =============================================================================
+
+[package]
+name    = "opencode"
+version = "2.2.0"
+
+# --- RPM-style метаданные (попадают в LABEL при сборке SIF) -----------------
+release     = "1"
+epoch       = 0
+summary     = "AI coding agent for the terminal (static musl build)"
+description = """
+OpenCode — open-source AI coding agent, работающий прямо в терминале.
+Поддерживает несколько LLM-провайдеров (OpenAI, Anthropic, локальные модели),
+TUI-интерфейс, инструменты редактирования файлов и выполнения команд.
+Собран как статический musl-бинарник, запускается в минимальном SIF без
+системных библиотек.
+"""
+license  = "MIT"
+url      = "https://opencode.ai"
+vendor   = "Anomaly (SST)"
+packager = "appspec <appspec@example.invalid>"
+# Имя бинарника внутри контейнера совпадает с package.name, но задаём явно —
+# это делает спеку самодокументируемой и страхует от переименования.
+bin = "opencode"
+
+# -----------------------------------------------------------------------------
+# build
+# -----------------------------------------------------------------------------
+[build]
+base     = "alpine:3.24"
+# Ассеты релиза используют суффикс "x64", а не "amd64".
+arch     = "x64"
+# Шаблон "scratch" создаёт самый маленький SIF: только бинарник + CA-сертификаты.
+template = "scratch"
+
+[build.source]
+type             = "tar"
+# Макросы %{version} и %{arch} автоматически подставят версию и архитектуру.
+url              = "https://github.com/anomalyco/opencode/releases/download/v%{version}/opencode-linux-%{arch}-musl.tar.gz"
+extract_to       = "/usr/local/bin"
+
+[build.collect]
+# Используем макрос %{_prefix}/... — при смене дистрибутива путь скорректируется.
+binary = "%{_prefix}/local/bin/%{bin}"
+includes = [
+    # musl-интерпретатор (если ещё не добавлен)
+    "/lib/ld-musl-x86_64.so.1",
+    "/lib/libc.musl-x86_64.so.1",
+    # GNU C++ runtime и поддержка GCC
+    "/usr/lib/libstdc++.so.6",
+    "/usr/lib/libstdc++.so.6.0.33",
+    "/usr/lib/libgcc_s.so.1",
+]
+
+
+[build.scratch]
+workdir = "/work"
+# CMD собирается из тех же макросов — единый источник истины для имени бинарника.
+cmd     = ["%{_prefix}/local/bin/%{bin}", "--version"]
+
+[build.scratch.env]
+LANG   = "C.UTF-8"
+LC_ALL = "C.UTF-8"
+
+# -----------------------------------------------------------------------------
+# runtime — CLI mode
+# -----------------------------------------------------------------------------
+[runtime]
+mode    = "cli"
+# Совпадает с build.collect.binary, но задаётся независимо (макрос %{bin}).
+command = "%{_prefix}/local/bin/%{bin}"
+
+sif_file   = "opencode.sif"
+image_name = "opencode:latest"
+
+# Проброс ключей API и терминала.
+env_passthrough = ["TERM", "OPENAI_API_KEY", "ANTHROPIC_API_KEY"]
+
+binds       = []
+create_dirs = []
+
+# -----------------------------------------------------------------------------
+# install (для команды `appspec install`)
+# -----------------------------------------------------------------------------
+[install]
+scope         = "user"
+launcher_name = "opencode-container"
+desktop       = false
+comment       = "OpenCode CLI (containerized, static musl)"
+extra_files   = []

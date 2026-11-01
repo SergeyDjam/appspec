@@ -1,0 +1,102 @@
+# =============================================================================
+# appspec spec: buildah
+# Минимальный CLI-образ на основе Alpine + apk --root.
+# =============================================================================
+
+[package]
+name    = "buildah"
+version = "1.46.0"
+
+# --- RPM-style метаданные (попадают в LABEL при сборке SIF) -----------------
+release     = "1"
+epoch       = 0
+summary     = "A tool that facilitates building OCI container images"
+description = """
+Buildah — утилита для сборки OCI-образов контейнеров без демона.
+Поддерживает rootless-режим, работает с Dockerfile и Containerfile,
+интегрируется с Podman и Kubernetes.
+"""
+license  = "Apache-2.0"
+url      = "https://buildah.io/"
+vendor   = "Containers Organization"
+packager = "appspec <appspec@example.invalid>"
+bin      = "buildah"
+
+# -----------------------------------------------------------------------------
+# build
+# -----------------------------------------------------------------------------
+[build]
+base     = "alpine:3.24"
+# Buildah собирается под linux/amd64 и linux/arm64; используем amd64 по умолчанию.
+arch     = "amd64"
+# Шаблон "alpine" использует apk --root — надёжнее, чем magicpak для Go-бинарников.
+template = "alpine"
+
+[build.source]
+type = ""
+url  = ""
+
+# Зависимости для работы Buildah в rootless-режиме.
+# crun и conmon — реальные runtime-компоненты.
+# fuse-overlayfs — для storage-driver=overlay в rootless.
+# slirp4netns — для сети без root.
+[build.apt]
+extra = [
+    "buildah",
+    "crun",
+    "conmon",
+    "fuse-overlayfs",
+    "slirp4netns",
+    "ca-certificates",
+    "tzdata",
+    # Добавляем сетевой стек для Buildah
+    "netavark",        # основной сетевой бэкенд
+    "aardvark-dns",    # DNS-сервер для netavark
+    "passt",           # предоставляет pasta для rootless-сети (опционально)
+]
+
+[build.collect]
+# Используем макрос %{_bindir} для единообразия путей.
+binary = "%{_bindir}/%{bin}"
+
+[build.scratch]
+workdir = "/work"
+cmd     = ["%{_bindir}/%{bin}", "--version"]
+
+[build.scratch.env]
+LANG            = "C.UTF-8"
+LC_ALL          = "C.UTF-8"
+# Зашиваем фиксированный путь — не зависит от UID.
+BUILDAH_ISOLATION = "chroot"
+
+# -----------------------------------------------------------------------------
+# runtime — CLI mode
+# -----------------------------------------------------------------------------
+[runtime]
+mode    = "cli"
+command = "%{_bindir}/%{bin}"
+
+sif_file   = "buildah.sif"
+image_name = "buildah:latest"
+
+env_passthrough = ["TERM"]
+
+binds = [
+    "/dev/fuse:/dev/fuse",
+    "/sys/fs/cgroup:/sys/fs/cgroup:ro",
+    # Persistence для built images. Опционально: если хотите,
+    # чтобы images жили только в сессии — уберите этот bind.
+    "$HOME/.local/share/buildah-containers:/var/lib/containers",
+]
+
+create_dirs = ["$HOME/.local/share/buildah-containers"]
+
+# -----------------------------------------------------------------------------
+# install (для команды `appspec install`)
+# -----------------------------------------------------------------------------
+[install]
+scope         = "user"
+launcher_name = "buildah-container"
+desktop       = false
+comment       = "Buildah CLI (containerized, Alpine)"
+extra_files   = []

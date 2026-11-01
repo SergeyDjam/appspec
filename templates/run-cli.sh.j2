@@ -39,6 +39,8 @@ X_ENV=""
 # ---   в minimal rootfs их может не быть, Apptainer сыпет warning'ами.
 exec apptainer exec \
     --containall \
+    --fakeroot \
+    --writable-tmpfs \
     --home "$HOST_HOME" \
     --pwd "$HOST_PWD" \
     $BINDS $X_ENV \

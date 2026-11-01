@@ -1,0 +1,98 @@
+# =============================================================================
+# appspec spec: apptainer
+# Rootless-сборка Apptainer (работает без setuid внутри SIF).
+# =============================================================================
+
+[package]
+name    = "apptainer"
+version = "1.4.5"
+
+release     = "1"
+epoch       = 0
+summary     = "Application containers for Linux (rootless, FUSE-based)"
+description = """
+Apptainer (бывший Singularity) — контейнерная платформа для HPC и
+shared-систем. В этом SIF собран rootless-режим (без setuid), который
+использует squashfuse и FUSE для монтирования SIF-образов. Позволяет
+запускать вложенные контейнеры Apptainer внутри Apptainer.
+"""
+license  = "BSD-3-Clause"
+url      = "https://apptainer.org"
+vendor   = "Apptainer project (Linux Foundation)"
+packager = "appspec <appspec@example.invalid>"
+bin      = "apptainer"
+
+# -----------------------------------------------------------------------------
+# build
+# -----------------------------------------------------------------------------
+[build]
+base     = "debian:trixie"
+arch     = "amd64"
+template = "full"
+
+[build.source]
+type = "deb"
+# Официальный deb из Debian pool (версия 1.4.5-2, актуальная на 2026-02-23)
+url  = "http://http.us.debian.org/debian/pool/main/a/apptainer/apptainer_%{version}-2_amd64.deb"
+
+# Зависимости .deb разрешаются автоматически через apt-get satisfy,
+# но для rootless-режима нужны дополнительные пакеты.
+[build.apt]
+extra = [
+    # --- FUSE / squashfs ---
+    "squashfuse",              # монтирование squashfs без root (обязательно)
+    "fuse3",                   # библиотека FUSE 3
+    "squashfs-tools",          # mksquashfs/unsquashfs
+    # --- Вспомогательные плагины ---
+    "containernetworking-plugins",
+    "uidmap",                  # newuidmap/newgidmap
+    "fakeroot",
+    # --- Базовые утилиты ---
+    "ca-certificates",
+    "tzdata",
+    "wget",
+    "curl",
+]
+
+[build.collect]
+# Для шаблона "full" не используется, но фиксируем путь для консистентности.
+binary = "%{_prefix}/bin/%{bin}"
+
+[build.scratch]
+workdir = "/work"
+cmd     = ["%{_prefix}/bin/%{bin}", "--version"]
+
+[build.scratch.env]
+LANG   = "C.UTF-8"
+LC_ALL = "C.UTF-8"
+
+# -----------------------------------------------------------------------------
+# runtime — CLI mode
+# -----------------------------------------------------------------------------
+[runtime]
+mode    = "cli"
+command = "%{_prefix}/bin/%{bin}"
+
+sif_file   = "apptainer.sif"
+image_name = "apptainer:latest"
+
+env_passthrough = ["TERM"]
+
+# /dev/fuse нужен для squashfuse (монтирование SIF в rootless).
+# /sys/fs/cgroup — для работы некоторых runtime-плагинов.
+binds = [
+    "/dev/fuse:/dev/fuse",
+    "/sys/fs/cgroup:/sys/fs/cgroup:ro",
+]
+
+create_dirs = []
+
+# -----------------------------------------------------------------------------
+# install (опционально)
+# -----------------------------------------------------------------------------
+[install]
+scope         = "user"
+launcher_name = "apptainer-container"
+desktop       = false
+comment       = "Apptainer (containerized, rootless)"
+extra_files   = []

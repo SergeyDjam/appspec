@@ -1,6 +1,7 @@
 mod bundle;
 mod install;
 mod macros;
+mod repo;
 mod spec;
 mod templates;
 
@@ -89,10 +90,16 @@ enum Cmd {
         no_pin: bool,
     },
 
-    /// Композитные окружения: base + компоненты (spec|sif|cid|manifest) + extensions
+    /// Композитные окружения: base + компоненты (spec|sif|cid|manifest|repo) + extensions
     Bundle {
         #[command(subcommand)]
         cmd: bundle::BundleCommand,
+    },
+
+    /// Управление локальным репозиторием SIF
+    Repo {
+        #[command(subcommand)]
+        cmd: repo::RepoCommand,
     },
 }
 
@@ -156,6 +163,8 @@ fn main() {
         Cmd::IpfsPublish { spec, no_pin } => cmd_ipfs_publish(&spec, no_pin).map(|_| 0),
 
         Cmd::Bundle { cmd } => bundle::run(cmd),
+
+        Cmd::Repo { cmd } => repo::run(cmd),
     };
 
     match result {
@@ -194,6 +203,12 @@ pub(crate) fn load_spec(path: &Path) -> Result<Spec> {
     let mut spec: Spec = value
         .try_into()
         .with_context(|| format!("converting spec {}", path.display()))?;
+
+    // §8.1/§8.2: валидация [dependencies] и [build].base_digest.
+    // ДОЛЖНА вызываться до qualify_base_image, чтобы невалидный digest
+    // не попал в `base` и не дал невнятную ошибку движка.
+    spec.validate()
+        .with_context(|| format!("validating spec {}", path.display()))?;
 
     spec.build.qualify_base_image();
     Ok(spec)
@@ -419,6 +434,7 @@ fn cmd_gen_bundle(bundle_path: &Path) -> Result<()> {
         spec: bundle_path.display().to_string(),
         output: None,
         no_build: true,
+        no_lock: false,
     };
     let code = bundle::commands::build(args)?;
     if code != 0 {
@@ -602,6 +618,7 @@ fn cmd_build_bundle(bundle_path: &Path) -> Result<()> {
         spec: bundle_path.display().to_string(),
         output: None,
         no_build: false,
+        no_lock: false,
     };
     let code = bundle::commands::build(args)?;
     if code != 0 {
@@ -662,6 +679,7 @@ fn cmd_run_bundle(bundle_path: &Path) -> Result<()> {
         spec: bundle_path.display().to_string(),
         output: None,
         no_build: false,
+        no_lock: false,
     };
     let code = bundle::commands::build(args)?;
     if code != 0 {

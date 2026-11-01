@@ -34,7 +34,7 @@ install   = "$CODIUM --no-sandbox --disable-gpu --user-data-dir \"$HOME/.vscodiu
 [[extensions]]
 name     = "opentofu"
 file     = "./extensions/opentofu-0.6.3.vsix"
-requires = ["opentofu", "tofu-ls"]
+requires = ["opentofu"]
 
 [[extensions]]
 name = "gitlab-workflow"
@@ -101,7 +101,7 @@ expect_contains = "mkisofs"
 
 [[components]]
 name    = "opentofu"
-spec    = "./opentofu.appspec"
+spec    = "./opentofu-libvirt.appspec"
 provide = "opentofu"
 binary  = "/usr/local/bin/tofu"
 target  = "/usr/local/bin/tofu"
@@ -174,22 +174,6 @@ exec /bin/busybox chroot "$SANDBOX" /bin/sh -c '
 [components.selftest]
 cmd             = ["tofu", "--version"]
 expect_contains = "OpenTofu"
-
-
-# --- tofu-ls ---
-
-[[components]]
-name    = "tofu-ls"
-spec    = "./tofu-ls.appspec"
-provide = "tofu-ls"
-binary  = "/usr/local/bin/tofu-ls"
-target  = "/usr/local/bin/tofu-ls"
-mounts  = ["PWD", "HOME", "/proc", "/dev", "/tmp"]
-forward = ["TERM", "LANG", "LC_ALL"]
-
-[components.selftest]
-cmd             = ["tofu-ls", "--version"]
-expect_contains = "tofu-ls"
 
 # --- podman ---
 
@@ -321,3 +305,36 @@ forward = ["TERM", "LANG", "LC_ALL"]
 [components.selftest]
 cmd             = ["podman-compose", "version"]
 expect_contains = "podman-compose"
+
+# -----------------------------------------------------------------------------
+# libvirtd: instance для доступа к стеку виртуализации.
+# Сокет создаётся на хосте в $BUNDLE_DIR/run/libvirt,
+# codegen автоматически биндит его в base instance по /var/run/libvirt.
+# -----------------------------------------------------------------------------
+[[components]]
+name    = "libvirtd"
+spec    = "./virt-daemon.appspec"
+mode    = "instance"
+provide = "libvirtd"
+contain = false
+
+socket_dir    = "$BUNDLE_DIR/run/libvirt"
+daemon_socket = "/var/run/libvirt/libvirt-sock"
+daemon        = "/opt/appspec/libvirtd-wrapper.sh"
+
+mounts = [
+    "/proc",
+    "/sys/fs/cgroup",
+    "/dev/kvm",        # KVM-ускорение
+    "/dev/net/tun",    # сеть для VM
+]
+
+[components.env]
+LIBVIRT_DEBUG = "4"
+
+[[components.files]]
+to   = "/opt/appspec/libvirtd-wrapper.sh"
+from = "./libvirtd-wrapper.sh"    # ← вынесенный файл
+scope = "instance"
+mode  = 0o755
+

@@ -1,6 +1,6 @@
 [package]
 name        = "appspec"
-version     = "0.3.4"
+version     = "dev"
 edition     = "2021"
 rust-version = "1.74"
 description = "Apptainer SIF builder from TOML spec + composable bundles"
@@ -39,6 +39,13 @@ base64 = "0.23"
 
 # --- hashing для метаданных SIF: sha256 содержимого .appspec ---------------
 sha2   = "0.10"
+
+# --- E1 (repo): flock для <root>/.lock -------------------------------------
+libc   = "0.2"
+
+# --- E5: ed25519 подписи index.json ---
+ed25519-dalek = { version = "2", features = ["rand_core"] }
+rand_core     = { version = "0.6", features = ["getrandom"] }
 
 [dev-dependencies]
 # --- тесты -----------------------------------------------------------------

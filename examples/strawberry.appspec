@@ -148,7 +148,7 @@ template        = "default"
 
 state_dirs      = ["home", "log"]
 env_passthrough = ["DISPLAY", "XAUTHORITY", "DBUS_SESSION_BUS_ADDRESS", "XDG_RUNTIME_DIR"]
-xauthority_auto = true
+xauthority_auto = false
 pulse_auto      = true
 
 create_dirs = [
@@ -171,7 +171,6 @@ binds = [
     "$HOME/.local/share/fonts:/config/home/.local/share/fonts:ro",
 
     # --- PulseAudio / PipeWire ---
-    "$XDG_RUNTIME_DIR/pulse/native:/tmp/pulse-native",
     "$CONFIG_DIR/home:/config/home",
     "$CONFIG_DIR/log:/config/log",
     "$MUSIC_DIR:/music:ro",
@@ -179,6 +178,7 @@ binds = [
 ]
 
 optional_binds = [
+    "$XDG_RUNTIME_DIR/bus:$XDG_RUNTIME_DIR/bus",
     "/dev/snd:/dev/snd",
     "/dev/dri:/dev/dri",
 ]

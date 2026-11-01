@@ -208,7 +208,74 @@ pub fn resolve_source(
         });
     }
 
+    if let Some(r) = &src.repo {
+        return resolve_repo_source(r, label);
+    }
+
     unreachable!()
+}
+
+/// Резолв `source = repo`:
+///   `repo = "name:version-release"` → локальный `index.json` →
+///   `sif_sha256` → `blobs/sha256/…`.
+///
+/// Setup берётся из `packages/<name>/<ver>/spec.appspec`, если он есть.
+/// `allow_build` пока не используется: pull из удалённого появится в E2.
+fn resolve_repo_source(pv: &str, label: &str) -> Result<ResolvedSource> {
+    use crate::repo::{default_root, layout::RepoRoot};
+
+    let (name, ver) = pv.split_once(':').ok_or_else(|| {
+        anyhow!(
+            "{label}: repo source must be `NAME:VERSION-RELEASE`, got `{}`",
+            pv
+        )
+    })?;
+    let name = name.to_ascii_lowercase();
+
+    let root = RepoRoot::open(&default_root())
+        .map_err(|e| anyhow!("{label}: repo not available: {e:#}"))?;
+
+    let index_text = std::fs::read_to_string(root.index_path())
+        .with_context(|| format!("reading {}", root.index_path().display()))?;
+    let index: crate::repo::meta::IndexV1 = serde_json::from_str(&index_text)
+        .with_context(|| "parsing repo index.json".to_string())?;
+
+    let pkg = index
+        .packages
+        .get(&name)
+        .ok_or_else(|| anyhow!("{label}: package `{name}` not found in repo index"))?;
+    let v = pkg
+        .versions
+        .get(ver)
+        .ok_or_else(|| anyhow!("{label}: {name}:{ver} not found in repo index"))?;
+
+    let sif = crate::repo::util::blob_path(&root.path, &v.sif_sha256);
+    if !sif.is_file() {
+        bail!(
+            "{label}: SIF blob missing: {} (run `appspec repo add` или `appspec repo pull`)",
+            sif.display()
+        );
+    }
+
+    // setup — из спека в packages/<name>/<ver>/spec.appspec
+    let spec_path = root
+        .packages_dir()
+        .join(&name)
+        .join(ver)
+        .join("spec.appspec");
+    let setup = if spec_path.is_file() {
+        crate::load_spec(&spec_path)
+            .ok()
+            .and_then(|s| s.runtime.setup)
+    } else {
+        None
+    };
+
+    Ok(ResolvedSource {
+        sif,
+        setup,
+        origin: format!("repo:{pv}"),
+    })
 }
 
 pub fn resolve_base(
@@ -718,6 +785,5 @@ pub fn bundle_cache_dir(bundle_name: &str) -> PathBuf {
 }
 
 fn which(name: &str) -> bool {
-    std::env::var_os("PATH")
-        .is_some_and(|paths| std::env::split_paths(&paths).any(|p| p.join(name).is_file()))
+    std::env::var_os("PATH").is_some_and(|paths| std::env::split_paths(&paths).any(|p| p.join(name).is_file()))
 }

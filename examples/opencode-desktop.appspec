@@ -1,0 +1,171 @@
+# =============================================================================
+# appspec spec: opencode-desktop
+# Electron GUI. Собирается из официального .deb-пакета.
+# =============================================================================
+
+[package]
+name    = "opencode-desktop"
+version = "2.2.0"
+
+release     = "1"
+epoch       = 0
+summary     = "AI coding agent with native GUI (Electron)"
+description = """
+OpenCode Desktop — десктопная версия AI-агента для программирования.
+Нативное окно, встроенный редактор с подсветкой синтаксиса, diff-вьюер,
+управление сессиями, поддержка плагинов и нескольких LLM-провайдеров.
+"""
+license  = "MIT"
+url      = "https://opencode.ai"
+vendor   = "Anomaly (SST)"
+packager = "appspec <appspec@example.invalid>"
+bin      = "opencode-desktop"
+
+# -----------------------------------------------------------------------------
+# build
+# -----------------------------------------------------------------------------
+[build]
+base     = "debian:bookworm"
+arch     = "amd64"
+# "full" копирует весь rootfs из builder в scratch — единственный надёжный путь
+# для Electron без magicpak.
+template = "full"
+
+[build.source]
+type = "deb"
+# Имя файла в релизе v2.2.0 для Linux amd64.
+url  = "https://github.com/anomalyco/opencode/releases/download/v%{version}/opencode-desktop-linux-amd64.deb"
+
+# Зависимости .deb разрешаются через apt-get satisfy, но для GUI-сессии
+# нужны дополнительные пакеты, которые не всегда прописаны в Depends.
+[build.apt]
+extra = [
+    # --- X11 / GTK ---
+    "libgtk-3-0",
+    "libnotify4",
+    "libnss3",
+    "libxss1",
+    "libxtst6",
+    "xdg-utils",
+    "libatspi2.0-0",
+    "libuuid1",
+    "libsecret-1-0",
+    # --- Electron / Chromium runtime ---
+    "libasound2",
+    "libdrm2",
+    "libgbm1",
+    "libgl1",
+    "libglx-mesa0",
+    # --- D-Bus и шрифты ---
+    "dbus",
+    "dbus-x11",
+    "fonts-dejavu-core",
+    "fonts-liberation",
+    # --- утилиты для setup (pkill, sleep) ---
+    "procps",
+    "psmisc",
+]
+
+[build.collect]
+# Для "full" не используется, но поле обязательно.
+binary = "/opt/OpenCode/ai.opencode"
+
+[build.scratch]
+workdir = "/config/home"
+# CMD не критичен для instance, но задаём для консистентности.
+cmd = ["/opt/OpenCode/ai.opencode"]
+
+[build.scratch.env]
+LANG   = "C.UTF-8"
+LC_ALL = "C.UTF-8"
+HOME   = "/config/home"
+
+# -----------------------------------------------------------------------------
+# runtime — instance mode (GUI)
+# -----------------------------------------------------------------------------
+[runtime]
+sif_file   = "opencode-desktop.sif"
+image_name = "opencode-desktop:latest"
+template   = "default"
+mode       = "instance"
+# Не persist: закрыли окно — instance остановился.
+persist    = false
+workdir    = "/config/home"
+
+# Проброс X11 и D-Bus.
+env_passthrough = [
+    "DISPLAY",
+    "XAUTHORITY",
+    "DBUS_SESSION_BUS_ADDRESS",
+    "XDG_RUNTIME_DIR",
+]
+xauthority_auto = false
+pulse_auto      = true
+
+# Каталоги на хосте для состояния приложения.
+state_dirs = ["home", "config", "log"]
+
+create_dirs = [
+    "$CONFIG_DIR/home/.config",
+    "$CONFIG_DIR/home/.local/share",
+    "$CONFIG_DIR/home/.cache",
+    "$CONFIG_DIR/home/OpenCode",
+]
+
+binds = [
+    # X11 и D-Bus.
+    "/tmp/.X11-unix:/tmp/.X11-unix",
+    "$XDG_RUNTIME_DIR/bus:$XDG_RUNTIME_DIR/bus",
+
+    # Состояние приложения.
+    "$CONFIG_DIR/home:/config/home",
+    "$CONFIG_DIR/config:/config/home/.config/opencode",
+    "$CONFIG_DIR/log:/config/log",
+
+    # GPU и звук (опционально, но полезно для Electron).
+    "/dev/dri:/dev/dri",
+    "/dev/snd:/dev/snd",
+
+    # Шрифты с хоста.
+    "/usr/share/fonts:/usr/share/fonts:ro",
+    "/usr/local/share/fonts:/usr/local/share/fonts:ro",
+]
+
+optional_binds = []
+
+# Electron под fakeroot требует writable-tmpfs, но /config/home уже на хосте.
+setup = """
+export HOME=/config/home
+mkdir -p "$HOME/.config" "$HOME/.local/share" "$HOME/.cache" 2>/dev/null || true
+mkdir -p /usr/local/bin 2>/dev/null || true
+ln -sf /opt/OpenCode/ai.opencode /usr/local/bin/opencode-desktop 2>/dev/null || true
+
+export ELECTRON_DISABLE_SANDBOX=1
+export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u 2>/dev/null || echo 1000)}"
+mkdir -p "$XDG_RUNTIME_DIR" && chmod 700 "$XDG_RUNTIME_DIR" 2>/dev/null || true
+
+if [ -z "${DBUS_SESSION_BUS_ADDRESS:-}" ]; then
+    export DBUS_SESSION_BUS_ADDRESS="unix:path=$HOME/.config/bus"
+    dbus-daemon --session --address="$DBUS_SESSION_BUS_ADDRESS" --fork 2>/dev/null || true
+fi
+
+export LANG=C.UTF-8
+export LC_ALL=C.UTF-8
+"""
+
+entry = 'exec /opt/OpenCode/ai.opencode --no-sandbox "$@"'
+
+[runtime.vars]
+CONFIG_DIR = "$HOME/opencode-desktop_config"
+
+# -----------------------------------------------------------------------------
+# install (опционально)
+# -----------------------------------------------------------------------------
+[install]
+scope         = "user"
+launcher_name = "opencode-desktop-container"
+desktop       = true
+categories    = ["Development", "IDE", "TextEditor"]
+comment       = "OpenCode Desktop (containerized, Electron)"
+wm_class      = "opencode-desktop"
+extra_files   = []

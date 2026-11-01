@@ -1,6 +1,6 @@
 [package]
 name        = "opentofu"
-version     = "1.13.1"
+version     = "1.13.2"
 description = "OpenTofu — open-source Terraform fork (static Go binary)"
 
 [build]
@@ -32,7 +32,7 @@ mode    = "cli"
 command = "/usr/local/bin/tofu"
 
 sif_file   = "opentofu.sif"
-image_name = "opentofu:latest"
+image_name = "opentofu:%{version}"
 
 env_passthrough = [
     "TERM",

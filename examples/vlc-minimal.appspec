@@ -1,0 +1,126 @@
+# =============================================================================
+# appspec spec: vlc-minimal (tcc для LD_PRELOAD)
+# =============================================================================
+
+[package]
+name    = "vlc-minimal"
+version = "3.0.24"
+
+release     = "1"
+epoch       = 0
+summary     = "VLC media player (minimal Qt GUI, tcc preload)"
+description = "VLC media player with a minimal set of plugins required for desktop playback."
+license     = "GPL-2.0-or-later"
+url         = "https://www.videolan.org/vlc/"
+vendor      = "VideoLAN"
+packager    = "appspec <appspec@example.invalid>"
+bin         = "vlc"
+
+[build]
+base     = "debian:trixie"
+arch     = "amd64"
+template = "full"
+
+[build.source]
+type = ""
+url  = ""
+
+[build.apt]
+extra = [
+    "vlc-bin",
+    "vlc-plugin-base",
+    "vlc-plugin-qt",
+    "vlc-plugin-video-output",
+    "libqt5core5t64",
+    "libqt5gui5t64",
+    "libqt5widgets5t64",
+    "libqt5svg5",
+    "libqt5x11extras5",
+    "libx11-6",
+    "libgl1",
+    "ca-certificates",
+    "fonts-dejavu-core",
+    "tcc",                    # ← Tiny C Compiler
+]
+
+[build.collect]
+binary = "%{_prefix}/bin/%{bin}"
+
+[build.scratch]
+workdir = "/config/home"
+cmd     = ["%{_prefix}/bin/%{bin}"]
+
+[build.scratch.env]
+LANG   = "C.UTF-8"
+LC_ALL = "C.UTF-8"
+HOME   = "/config/home"
+
+[runtime]
+sif_file   = "vlc-minimal.sif"
+image_name = "vlc-minimal:latest"
+template   = "default"
+mode       = "instance"
+persist    = false
+workdir    = "/config/home"
+
+env_passthrough = [
+    "DISPLAY",
+    "XAUTHORITY",
+    "XDG_RUNTIME_DIR",
+]
+
+xauthority_auto = false
+pulse_auto      = true
+
+state_dirs = ["home"]
+
+create_dirs = [
+    "$CONFIG_DIR/home/.config/vlc",
+    "$CONFIG_DIR/home/.local/share/vlc",
+]
+
+binds = [
+    "/tmp/.X11-unix:/tmp/.X11-unix",
+    "$XDG_RUNTIME_DIR/bus:$XDG_RUNTIME_DIR/bus",
+    "$CONFIG_DIR/home:/config/home",
+]
+
+optional_binds = [
+    "/dev/dri:/dev/dri",
+    "/dev/snd:/dev/snd",
+]
+
+setup = """
+export HOME=/config/home
+mkdir -p "$HOME/.config/vlc" "$HOME/.local/share/vlc" \
+         "$HOME/.cache/vlc" 2>/dev/null || true
+
+export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u 2>/dev/null || echo 1000)}"
+mkdir -p "$XDG_RUNTIME_DIR" && chmod 700 "$XDG_RUNTIME_DIR" 2>/dev/null || true
+
+export LANG=C.UTF-8
+export LC_ALL=C.UTF-8
+
+# --- Обход проверки root через LD_PRELOAD (tcc) ---
+if [ "$(id -u)" = "0" ]; then
+    cat > /tmp/fake-root.c <<'EOF'
+unsigned int getuid(void)  { return 1000; }
+unsigned int geteuid(void) { return 1000; }
+EOF
+    if command -v tcc >/dev/null 2>&1; then
+        if tcc -shared -nostdlib -o /tmp/fake-root.so /tmp/fake-root.c 2>/dev/null \
+           && [ -s /tmp/fake-root.so ]; then
+            export LD_PRELOAD="/tmp/fake-root.so${LD_PRELOAD:+:$LD_PRELOAD}"
+            echo "LD_PRELOAD set via tcc" >&2
+        else
+            echo "tcc failed to build /tmp/fake-root.so" >&2
+        fi
+    else
+        echo "tcc not found" >&2
+    fi
+fi
+"""
+entry = 'exec %{_prefix}/bin/%{bin} "$@"'
+
+[runtime.vars]
+CONFIG_DIR = "$HOME/vlc_minimal_config"

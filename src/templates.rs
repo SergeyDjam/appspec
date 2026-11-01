@@ -428,6 +428,32 @@ pub fn build_labels(spec: &Spec, spec_path: &Path) -> BTreeMap<String, String> {
         m.insert("org.opencontainers.image.vendor".into(), v.clone());
     }
 
+    // --- [dependencies] (§8.3) ---
+    // Значения — JSON-массивы строк. Пустые массивы не пишутся,
+    // чтобы старые SIF без [dependencies] оставались обратносовместимыми
+    // (repo add заполняет meta.json пустыми массивами).
+    let json_array = |v: &[String]| -> Option<String> {
+        if v.is_empty() {
+            None
+        } else {
+            serde_json::to_string(v).ok()
+        }
+    };
+    if let Some(s) = json_array(&spec.dependencies.requires) {
+        m.insert("org.appspec.dependencies.requires".into(), s);
+    }
+    if let Some(s) = json_array(&spec.dependencies.provides) {
+        m.insert("org.appspec.dependencies.provides".into(), s);
+    }
+    if let Some(s) = json_array(&spec.dependencies.conflicts) {
+        m.insert("org.appspec.dependencies.conflicts".into(), s);
+    }
+
+    // --- [build].base_digest (§8.2) ---
+    if let Some(d) = &spec.build.base_digest {
+        m.insert("org.appspec.build.base.digest".into(), d.clone());
+    }
+
     // --- содержимое спека для восстановления ---
     match std::fs::read(spec_path) {
         Ok(raw) => {
