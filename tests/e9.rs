@@ -43,7 +43,7 @@ impl OrasMock {
     fn new() -> Self {
         let tmp = TempDir::new().unwrap();
         let bin = tmp.path().join("oras");
-        let map = tmp.path().join("map.txt");   // <ref> <path>, по строке
+        let map = tmp.path().join("map.txt"); // <ref> <path>, по строке
 
         // Чистый POSIX sh. Без python3, без jq, без bash-специфики.
         // Пути в тестах TempDir не содержат пробелов; `read -r r p`
@@ -95,8 +95,12 @@ cp "$match" "$out/$(basename "$match")"
             m.set_mode(0o755);
             fs::set_permissions(&bin, m).unwrap();
         }
-        fs::write(&map, b"").unwrap();  // пустая карта
-        OrasMock { _tmp: tmp, bin, map }
+        fs::write(&map, b"").unwrap(); // пустая карта
+        OrasMock {
+            _tmp: tmp,
+            bin,
+            map,
+        }
     }
 
     fn set_env(&self) {
@@ -117,7 +121,6 @@ cp "$match" "$out/$(basename "$match")"
         writeln!(f, "{} {}", ref_str, path.display()).unwrap();
     }
 }
-
 
 // ============================================================================
 // helpers
