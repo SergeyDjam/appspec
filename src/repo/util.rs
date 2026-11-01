@@ -94,7 +94,8 @@ impl FileLock {
             fs::create_dir_all(p)?;
         }
         let file = OpenOptions::new()
-            .truncate(false).create(true)
+            .truncate(false)
+            .create(true)
             .write(true)
             .read(true)
             .open(path)
