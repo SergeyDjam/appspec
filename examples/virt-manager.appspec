@@ -1,0 +1,122 @@
+[package]
+name        = "virt-manager"
+version     = "4.1.0"
+description = "Virtual Machine Manager (containerized GUI client)"
+
+[build]
+base     = "debian:bookworm"
+arch     = "amd64"
+template = "full"
+tools    = ["ca-certificates", "wget"]
+
+[build.source]
+type = ""
+url  = ""
+
+[build.apt]
+extra = [
+    "virt-manager",
+    "virtinst",                        # virt-install / virt-xml
+    "virt-viewer",
+    "libvirt-clients",                 # virsh
+    "libvirt-glib-1.0-0",
+    "python3-libvirt",
+    "gir1.2-libvirt-glib-1.0",         # НЕ python3-libvirt-glib — его нет в Debian
+    "python3-gi",
+    "python3-gi-cairo",
+    "gir1.2-gtk-3.0",
+    "gir1.2-gtksource-4",
+    "gir1.2-vte-2.91",
+    "gir1.2-libosinfo-1.0",
+    "libosinfo-bin",
+    "osinfo-db",
+    "spice-client-gtk",
+    "gir1.2-spiceclientgtk-3.0",
+    "libgtk-vnc-2.0-0",
+    "gir1.2-gtk-vnc-2.0",
+    "libgl1", "libglx-mesa0", "libgl1-mesa-dri",
+    "dbus", "dbus-x11",
+    "libcanberra-gtk3-module",
+    "openssh-client",
+    "fonts-dejavu-core",
+    "fonts-liberation",
+    "procps", "psmisc",
+]
+
+[build.collect]
+binary   = "/usr/bin/virt-manager"
+includes = []
+
+[build.scratch]
+workdir = "/config/home"
+cmd     = ["/usr/bin/virt-manager"]
+
+[build.scratch.env]
+LANG              = "C.UTF-8"
+LC_ALL            = "C.UTF-8"
+HOME              = "/config/home"
+GSETTINGS_BACKEND = "memory"
+
+[runtime]
+sif_file   = "virt-manager.sif"
+image_name = "virt-manager:latest"
+template   = "default"
+
+state_dirs      = ["home", "log"]
+env_passthrough = ["DISPLAY", "XAUTHORITY", "DBUS_SESSION_BUS_ADDRESS",
+                   "XDG_RUNTIME_DIR", "LIBVIRT_DEFAULT_URI"]
+xauthority_auto = true
+pulse_auto      = false
+
+create_dirs = []
+
+binds = [
+    "/tmp/.X11-unix:/tmp/.X11-unix",
+    # Сокет libvirtd: в bundle прилетит bind'ом из instance_socket_binds_for_base.
+    # Здесь — на случай обычного (не-bundle) запуска с хостовым libvirtd.
+    "/var/run/libvirt/libvirt-sock:/var/run/libvirt/libvirt-sock",
+]
+
+# КРИТИЧНО: пробросить в base instance, иначе codegen для component
+# libvirtd не увидит `[ -e /dev/kvm ]` и bind не сработает.
+optional_binds = [
+    "/dev/kvm:/dev/kvm",
+    "/dev/net/tun:/dev/net/tun",
+    "/dev/dri:/dev/dri",
+    "/sys/fs/cgroup:/sys/fs/cgroup:ro",
+]
+
+setup = """
+export HOME=/config/home
+mkdir -p "$HOME/.config" "$HOME/.local/share" "$HOME/.cache" \
+         "$HOME/.config/libvirt" "$HOME/.local/share/libvirt" 2>/dev/null || true
+
+# Если D-Bus шины нет — поднимаем локальную (для GTK, не для polkit).
+if [ -z "${DBUS_SESSION_BUS_ADDRESS:-}" ]; then
+    export DBUS_SESSION_BUS_ADDRESS="unix:path=$HOME/.config/bus"
+    dbus-daemon --session --address="$DBUS_SESSION_BUS_ADDRESS" --fork 2>/dev/null || true
+fi
+
+# Подавляем шумные GTK-варнинги, не влияющие на работу.
+export NO_AT_BRIDGE=1
+export GTK_A11Y=none
+export GTK_MODULES=""
+
+export LIBVIRT_DEFAULT_URI="${LIBVIRT_DEFAULT_URI:-qemu:///system}"
+export LANG=C.UTF-8
+export LC_ALL=C.UTF-8
+"""
+
+entry = 'exec virt-manager --no-fork "$@"'
+
+[runtime.vars]
+CONFIG_DIR = "$HOME/virt-manager_config"
+
+[install]
+scope         = "user"
+launcher_name = "virt-manager-container"
+desktop       = true
+categories    = ["System", "Emulator"]
+comment       = "Virtual Machine Manager (containerized)"
+wm_class      = "virt-manager"
+extra_files   = []

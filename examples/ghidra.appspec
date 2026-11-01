@@ -1,0 +1,130 @@
+[package]
+name        = "ghidra"
+version     = "12.1.4"
+description = "Ghidra SRE framework (NSA) via Liberica JDK 21 on Debian"
+
+[build]
+base     = "debian:bookworm"
+arch     = "amd64"
+template = "full"
+
+[build.source]
+type             = "tar"
+url              = "https://github.com/bell-sw/Liberica/releases/download/21.0.4%2B9/bellsoft-jdk21.0.4%2B9-linux-amd64.tar.gz"
+extract_to       = "/opt/liberica"
+strip_components = 1
+
+[build.apt]
+extra = [
+    # --- GTK3 / X11 / AWT для Swing GUI ---
+    "libx11-6", "libxext6", "libxrender1", "libxtst6", "libxi6",
+    "libxrandr2", "libxinerama1", "libxcursor1",
+    "libxcomposite1", "libxdamage1", "libxfixes3",
+    "libgtk-3-0", "libgdk-pixbuf-2.0-0",
+    "libatk1.0-0", "libatk-bridge2.0-0",
+    "libpango-1.0-0", "libcairo2",
+    "libasound2", "libcups2", "libdrm2", "libgbm1",
+    "libnspr4", "libnss3",
+    # --- OpenGL ---
+    "libgl1", "libglx-mesa0", "libgl1-mesa-dri",
+    # --- Python ---
+    "python3", "python3-pip",
+    # --- Утилиты / шрифты ---
+    "unzip", "fontconfig", "fonts-dejavu-core", "fonts-liberation",
+]
+
+# --- [build.collect] для full не используется, оставлено для единообразия.
+[build.collect]
+binary   = "/opt/liberica/bin/java"
+includes = []
+
+[build.scratch]
+workdir = "/work"
+cmd     = ["/opt/liberica/bin/java", "-version"]
+
+[build.scratch.env]
+LANG                        = "C.UTF-8"
+LC_ALL                      = "C.UTF-8"
+JAVA_HOME                   = "/opt/liberica"
+PATH                        = "/opt/liberica/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+_JAVA_AWT_WM_NONREPARENTING = "1"
+
+[runtime]
+mode    = "instance"
+persist = false
+workdir = "/work"
+
+sif_file   = "ghidra.sif"
+image_name = "ghidra:latest"
+
+env_passthrough = [
+    "TERM",
+    "DISPLAY",
+    "XAUTHORITY",
+    "JAVA_OPTS",
+    "JAVA_TOOL_OPTIONS",
+    "_JAVA_AWT_WM_NONREPARENTING",
+]
+
+binds = [
+    "/tmp/.X11-unix:/tmp/.X11-unix",
+    "$HOME/.local/share/ghidra:/root/.local/share/ghidra",
+    "$HOME/.config/ghidra:/root/.config/ghidra",
+    "$HOME/.ghidra:/root/.ghidra",
+    "$HOME/ghidra_projects:/root/ghidra_projects",
+]
+
+optional_binds = [
+    "/dev/dri:/dev/dri",
+]
+
+create_dirs = [
+    "$HOME/.local/share/ghidra",
+    "$HOME/.config/ghidra",
+    "$HOME/.ghidra",
+    "$HOME/ghidra_projects",
+]
+
+setup = """
+export HOME=/root
+export JAVA_HOME=/opt/liberica
+export PATH=$JAVA_HOME/bin:$PATH
+export _JAVA_AWT_WM_NONREPARENTING="${_JAVA_AWT_WM_NONREPARENTING:-1}"
+
+if command -v fc-cache >/dev/null 2>&1; then
+    fc-cache -f 2>/dev/null || true
+fi
+
+GHIDRA_HOME="$HOME/.local/share/ghidra"
+GHIDRA_INSTALL="$GHIDRA_HOME/ghidra_12.1.4_PUBLIC"
+GHIDRA_URL="https://github.com/NationalSecurityAgency/ghidra/releases/download/Ghidra_12.1.4_build/ghidra_12.1.4_PUBLIC_20260921.zip"
+
+if [ ! -d "$GHIDRA_INSTALL" ]; then
+    echo "=== Первый запуск: скачивание Ghidra (~540 МБ) ==="
+    mkdir -p "$GHIDRA_HOME"
+    if ! wget -O "$GHIDRA_HOME/ghidra.zip" "$GHIDRA_URL"; then
+        rm -f "$GHIDRA_HOME/ghidra.zip"
+        echo "FATAL: не удалось скачать Ghidra" >&2
+        exit 1
+    fi
+    echo "=== Распаковка ==="
+    unzip -q "$GHIDRA_HOME/ghidra.zip" -d "$GHIDRA_HOME"
+    rm -f "$GHIDRA_HOME/ghidra.zip"
+fi
+
+if [ ! -x "$GHIDRA_INSTALL/ghidraRun" ]; then
+    echo "FATAL: $GHIDRA_INSTALL/ghidraRun не найден после распаковки" >&2
+    ls -la "$GHIDRA_HOME/" >&2
+    exit 1
+fi
+"""
+
+entry = """
+cd /root/.local/share/ghidra/ghidra_12.1.4_PUBLIC
+echo "=== Запуск Ghidra из $(pwd) ==="
+exec /bin/bash support/launch.sh fg jdk Ghidra "" "" ghidra.GhidraRun
+"""
+
+
+[runtime.vars]
+CONFIG_DIR = "$HOME/.local/share/appspec/ghidra"

@@ -189,6 +189,61 @@ fn check_source(
                 format!("manifest.json не найден: {}", d.display()),
             ));
         }
+    } else if let Some(r) = &src.repo {
+        check_repo_source(scope, r, out);
+    }
+}
+
+fn check_repo_source(scope: &str, pv: &str, out: &mut Vec<Issue>) {
+    use crate::repo::{default_root, layout::RepoRoot};
+
+    let Some((name, ver)) = pv.split_once(':') else {
+        out.push(Issue::error(
+            scope,
+            format!("repo source must be `NAME:VERSION-RELEASE`, got `{pv}`"),
+        ));
+        return;
+    };
+    let name = name.to_ascii_lowercase();
+
+    let Ok(root) = RepoRoot::open(&default_root()) else {
+        out.push(Issue::error(
+            scope,
+            "repo not initialized (run `appspec repo init`)".to_string(),
+        ));
+        return;
+    };
+    let Ok(text) = std::fs::read_to_string(root.index_path()) else {
+        out.push(Issue::error(scope, "index.json not readable".to_string()));
+        return;
+    };
+    let Ok(index) = serde_json::from_str::<crate::repo::meta::IndexV1>(&text) else {
+        out.push(Issue::error(scope, "index.json not parseable".to_string()));
+        return;
+    };
+    let Some(pkg) = index.packages.get(&name) else {
+        out.push(Issue::error(
+            scope,
+            format!("package `{name}` not in repo index"),
+        ));
+        return;
+    };
+    let Some(v) = pkg.versions.get(ver) else {
+        out.push(Issue::error(
+            scope,
+            format!("{name}:{ver} not in repo index"),
+        ));
+        return;
+    };
+    let blob = crate::repo::util::blob_path(&root.path, &v.sif_sha256);
+    if !blob.is_file() {
+        out.push(Issue::warn(
+            scope,
+            format!(
+                "blob {} missing (run `appspec repo add` или `appspec repo pull`)",
+                blob.display()
+            ),
+        ));
     }
 }
 

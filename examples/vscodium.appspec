@@ -70,7 +70,7 @@ image_name = "vscodium:latest"
 template   = "default"
 
 state_dirs      = ["home", "log"]
-env_passthrough = ["DISPLAY", "XAUTHORITY"]
+env_passthrough = ["DISPLAY", "XAUTHORITY","LIBVIRT_DEFAULT_URI"]
 xauthority_auto = true
 pulse_auto      = true
 
@@ -90,6 +90,7 @@ optional_binds = [
 setup = """
 export HOME=/config/home
 export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u 2>/dev/null || echo 1000)}"
+export LIBVIRT_DEFAULT_URI="${LIBVIRT_DEFAULT_URI:-qemu:///system}"
 mkdir -p "$HOME" "$HOME/.config" "$HOME/.local/share" "$HOME/.cache" \
          "$HOME/.vscodium" 2>/dev/null || true
 mkdir -p "$XDG_RUNTIME_DIR" && chmod 700 "$XDG_RUNTIME_DIR" 2>/dev/null || true

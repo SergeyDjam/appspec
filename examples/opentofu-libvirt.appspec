@@ -1,0 +1,50 @@
+[package]
+name    = "opentofu-libvirt"
+version = "1.13.1"
+
+[build]
+base     = "alpine:3.24"
+arch     = "amd64"
+template = "static"          # static умеет tar + копирует includes
+
+[build.source]
+type       = "tar"
+url        = "https://github.com/opentofu/opentofu/releases/download/v%{version}/tofu_%{version}_linux_amd64.tar.gz"
+extract_to = "/usr/local/bin"
+
+[build.collect]
+binary = "/usr/local/bin/tofu"
+includes = [
+    # --- сам libvirt ---
+    "/usr/lib/libvirt.so.6",
+    "/usr/lib/libvirt.so.6.0.0",
+    # --- прямые зависимости libvirt.so.6 (Alpine 3.24) ---
+    "/usr/lib/libacl.so.1",
+    "/usr/lib/libcap-ng.so.0",
+    "/usr/lib/libcurl.so.4",
+    "/usr/lib/libgcc_s.so.1",
+    "/usr/lib/libgnutls.so.30",
+    "/usr/lib/libxml2.so.2",
+    "/usr/lib/libssh.so.4",
+    "/usr/lib/libtirpc.so.3",
+    "/usr/lib/libyajl.so.2",
+    "/usr/lib/libselinux.so.1",
+    "/usr/lib/libpcre2-8.so.0",
+    # --- musl-интерпретатор (на случай, если tofu не static-pie) ---
+    "/lib/ld-musl-x86_64.so.1",
+]
+
+[build.scratch]
+workdir = "/work"
+cmd     = ["/usr/local/bin/tofu", "version"]
+
+[runtime]
+mode    = "cli"
+command = "/usr/local/bin/tofu"
+
+sif_file   = "opentofu-libvirt.sif"
+image_name = "opentofu-libvirt:latest"
+
+env_passthrough = ["TERM", "LIBVIRT_DEFAULT_URI"]
+binds           = []
+create_dirs     = []

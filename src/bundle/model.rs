@@ -13,6 +13,8 @@ pub struct SourceSpec {
     pub cid: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub manifest: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repo: Option<String>,
 }
 
 impl SourceSpec {
@@ -22,6 +24,7 @@ impl SourceSpec {
             self.sif.is_some(),
             self.cid.is_some(),
             self.manifest.is_some(),
+            self.repo.is_some(),
         ]
         .into_iter()
         .filter(|b| *b)
@@ -32,24 +35,17 @@ impl SourceSpec {
         if n != 1 {
             anyhow::bail!(
                 "{ctx}: source должен содержать ровно одно из \
-                `spec` | `sif` | `cid` | `manifest` (найдено {n})"
+                `spec` | `sif` | `cid` | `manifest` | `repo` (найдено {n})"
             );
         }
         Ok(())
     }
     pub fn origin(&self) -> String {
-        if let Some(s) = &self.spec {
-            return format!("spec:{s}");
-        }
-        if let Some(s) = &self.sif {
-            return format!("sif:{s}");
-        }
-        if let Some(s) = &self.cid {
-            return format!("cid:{s}");
-        }
-        if let Some(s) = &self.manifest {
-            return format!("manifest:{s}");
-        }
+        if let Some(s) = &self.spec     { return format!("spec:{s}"); }
+        if let Some(s) = &self.sif      { return format!("sif:{s}"); }
+        if let Some(s) = &self.cid      { return format!("cid:{s}"); }
+        if let Some(s) = &self.manifest { return format!("manifest:{s}"); }
+        if let Some(s) = &self.repo     { return format!("repo:{s}"); }
         "?".into()
     }
 }

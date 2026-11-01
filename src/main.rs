@@ -1,6 +1,7 @@
 mod bundle;
 mod install;
 mod macros;
+mod repo;
 mod spec;
 mod templates;
 
@@ -21,7 +22,7 @@ use crate::spec::Spec;
 #[command(
     name = "appspec",
     version,
-    about = "Apptainer SIF builder from TOML spec"
+    about = "Apptainer SIF builder from TOML spec",
 )]
 struct Cli {
     #[command(subcommand)]
@@ -89,10 +90,16 @@ enum Cmd {
         no_pin: bool,
     },
 
-    /// Композитные окружения: base + компоненты (spec|sif|cid|manifest) + extensions
+    /// Композитные окружения: base + компоненты (spec|sif|cid|manifest|repo) + extensions
     Bundle {
         #[command(subcommand)]
         cmd: bundle::BundleCommand,
+    },
+
+    /// Управление локальным репозиторием SIF
+    Repo {
+        #[command(subcommand)]
+        cmd: repo::RepoCommand,
     },
 }
 
@@ -156,6 +163,8 @@ fn main() {
         Cmd::IpfsPublish { spec, no_pin } => cmd_ipfs_publish(&spec, no_pin).map(|_| 0),
 
         Cmd::Bundle { cmd } => bundle::run(cmd),
+
+        Cmd::Repo { cmd } => repo::run(cmd),
     };
 
     match result {
@@ -195,7 +204,13 @@ pub(crate) fn load_spec(path: &Path) -> Result<Spec> {
         .try_into()
         .with_context(|| format!("converting spec {}", path.display()))?;
 
-    spec.build.qualify_base_image(); // ← эта строка обязательна
+    // §8.1/§8.2: валидация [dependencies] и [build].base_digest.
+    // ДОЛЖНА вызываться до qualify_base_image, чтобы невалидный digest
+    // не попал в `base` и не дал невнятную ошибку движка.
+    spec.validate()
+        .with_context(|| format!("validating spec {}", path.display()))?;
+
+    spec.build.qualify_base_image();
     Ok(spec)
 }
 
@@ -400,7 +415,8 @@ fn cmd_gen_app(spec_path: &Path) -> Result<()> {
     let df_path = dir.join(format!("Dockerfile.{name}"));
     let rl_path = dir.join(format!("run.{name}.sh"));
 
-    let df = templates::render_dockerfile(&spec, &dir)?;
+    // CHANGED: передаём spec_path для метаданных (SHA-256 + base64 спека)
+    let df = templates::render_dockerfile(&spec, &dir, spec_path)?;
     let rl = templates::render_launcher(&spec, &dir)?;
 
     fs::write(&df_path, df)?;
@@ -418,6 +434,7 @@ fn cmd_gen_bundle(bundle_path: &Path) -> Result<()> {
         spec: bundle_path.display().to_string(),
         output: None,
         no_build: true,
+        no_lock: false,
     };
     let code = bundle::commands::build(args)?;
     if code != 0 {
@@ -465,13 +482,12 @@ fn cmd_build_app(spec_path: &Path, force: bool) -> Result<()> {
     // Пишем временный файл и передаём его через --startscript.
     // Apptainer ставит свой дефолтный startscript при сборке из OCI/tar
     // и игнорирует /.singularity.d/startscript из образа. В версиях,
-    // где есть `--startscript`, — передаём его флагом. В остальных —
-    // собираем SIF, распаковываем в sandbox, патчим, пакуем обратно.
+    // где есть флаг `--startscript` — передаём его флагом. В остальных
+    // (Apptainer ≥ 1.x, где startscript задаётся только через .def-секцию
+    // `%startscript`) — применяем fallback через sandbox.
     let ss_body = "#!/bin/sh\n\
                    if [ \"$#\" -gt 0 ]; then exec \"$@\"; fi\n\
                    while true; do sleep 3600; done\n";
-
-    log(format!("Building Apptainer SIF {}…", sif.display()));
 
     let startscript_path = dir.join(format!(".{name}.startscript"));
     fs::write(&startscript_path, ss_body)
@@ -481,6 +497,7 @@ fn cmd_build_app(spec_path: &Path, force: bool) -> Result<()> {
     let has_startscript_flag = apptainer_supports_startscript();
 
     if has_startscript_flag {
+        log(format!("Building Apptainer SIF {}…", sif.display()));
         let result = run(&[
             "apptainer",
             "build",
@@ -495,8 +512,27 @@ fn cmd_build_app(spec_path: &Path, force: bool) -> Result<()> {
         let _ = fs::remove_file(&startscript_path);
         result?;
     } else {
-        // Fallback: собрать SIF, распаковать, патчить, упаковать.
+        // Fallback: Apptainer не поддерживает --startscript как флаг,
+        // startscript задаётся только через .def-секцию `%startscript`.
+        // Последовательность:
+        //   1. Собрать SIF из OCI/tar обычным способом.
+        //   2. Распаковать SIF в sandbox.
+        //   3. Переписать /.singularity.d/startscript и runscript.
+        //   4. Упаковать sandbox обратно в SIF.
         let _ = fs::remove_file(&startscript_path);
+
+        log(format!(
+            "Building Apptainer SIF {} (pass 1: from OCI)…",
+            sif.display()
+        ));
+        run(&[
+            "apptainer",
+            "build",
+            "--force",
+            sif.to_str().context("non-UTF-8 SIF path")?,
+            &source_uri,
+        ])?;
+
         patch_startscript_via_sandbox(&sif, ss_body, name, &dir)?;
     }
 
@@ -506,28 +542,34 @@ fn cmd_build_app(spec_path: &Path, force: bool) -> Result<()> {
 }
 
 /// Проверить, поддерживает ли `apptainer build` флаг `--startscript`.
+///
+/// На Apptainer 1.x такого флага нет — startscript задаётся только
+/// через секцию `%startscript` в `.def`-файле. Функция ищет точное
+/// совпадение с `--startscript` (с двумя дефисами). `%startscript`
+/// (с процентом) не подходит — значит fallback.
 fn apptainer_supports_startscript() -> bool {
     Command::new("apptainer")
         .args(["build", "--help"])
         .output()
         .ok()
         .map(|o| {
-            let s = String::from_utf8_lossy(&o.stdout);
-            s.contains("--startscript")
+            let stdout = String::from_utf8_lossy(&o.stdout);
+            let stderr = String::from_utf8_lossy(&o.stderr);
+            stdout.contains("--startscript") || stderr.contains("--startscript")
         })
         .unwrap_or(false)
 }
 
 /// Fallback для Apptainer без `--startscript`: собрать SIF как sandbox,
 /// переписать `/.singularity.d/startscript`, упаковать обратно в SIF.
+///
+/// Требует, чтобы `sif` уже существовал. Вызывающий обязан сначала
+/// собрать SIF из OCI/tar обычным `apptainer build`.
 fn patch_startscript_via_sandbox(sif: &Path, ss_body: &str, name: &str, dir: &Path) -> Result<()> {
     let sandbox = dir.join(format!(".{name}.sandbox.tmp"));
     let _ = fs::remove_dir_all(&sandbox);
 
-    // 1) Разбираем SIF в sandbox. --force перезапишет, если есть.
-    //    Сначала соберём SIF штатно, потом `apptainer build --sandbox` из него.
-    //    Напрямую `build --sandbox` из oci-archive тоже работает,
-    //    но оставляем двухшаговую схему для предсказуемости.
+    // 1) Разбираем SIF в sandbox.
     log(format!(
         "  [startscript] extracting {} → sandbox",
         sif.display()
@@ -576,6 +618,7 @@ fn cmd_build_bundle(bundle_path: &Path) -> Result<()> {
         spec: bundle_path.display().to_string(),
         output: None,
         no_build: false,
+        no_lock: false,
     };
     let code = bundle::commands::build(args)?;
     if code != 0 {
@@ -636,6 +679,7 @@ fn cmd_run_bundle(bundle_path: &Path) -> Result<()> {
         spec: bundle_path.display().to_string(),
         output: None,
         no_build: false,
+        no_lock: false,
     };
     let code = bundle::commands::build(args)?;
     if code != 0 {
@@ -674,10 +718,10 @@ fn cmd_stop(spec_path: &Path) -> Result<()> {
             let spec = load_spec(spec_path)?;
             let name = &spec.package.name;
 
-            // Проверим, что instance действительно существует —
-            // иначе `apptainer instance stop` вернёт ошибку, и это
-            // выглядит пугающе для пользователя, который просто
-            // «запустил stop на всякий случай».
+            // Проверим, что instance действительно существует — иначе
+            // `apptainer instance stop` вернёт ошибку, и это выглядит
+            // пугающе для пользователя, который просто «запустил stop
+            // на всякий случай».
             let list = Command::new("apptainer")
                 .args(["instance", "list"])
                 .output()
@@ -762,8 +806,7 @@ fn cmd_clean_bundle(bundle_path: &Path) -> Result<()> {
 
     let cache = bundle::loader::bundle_cache_dir(&name);
     if cache.exists() {
-        fs::remove_dir_all(&cache)
-            .with_context(|| format!("removing cache {}", cache.display()))?;
+        fs::remove_dir_all(&cache).with_context(|| format!("removing cache {}", cache.display()))?;
         log(format!("Removed {}", cache.display()));
     }
     Ok(())

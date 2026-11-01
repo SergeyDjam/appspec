@@ -90,7 +90,7 @@ RUN mkdir -p "$HOME" "$XDG_RUNTIME_DIR" /bundle \
     && echo "=== pass 1: magicpak --dynamic under Xvfb ===" \
     && xvfb-run -a -s "-screen 0 1024x768x24" \
         timeout --signal=TERM --kill-after=10 {{ collect_timeout }} \
-        magicpak --dynamic --verbose "$@" \
+        magicpak --experimental-noload-resolver --dynamic --verbose "$@" \
             {{ binary | sh_quote }} /bundle \
     ; rc=$? ; \
     echo "--- magicpak --dynamic exit=$rc ---" ; \

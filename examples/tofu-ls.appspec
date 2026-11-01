@@ -1,0 +1,51 @@
+[package]
+name        = "tofu-ls"
+version     = "0.5.3"
+description = "OpenTofu Language Server"
+
+[build]
+base     = "alpine:3.24"
+arch     = "amd64"
+template = "static"
+
+[build.source]
+type       = "tar"
+url        = "https://github.com/opentofu/tofu-ls/releases/download/v{version}/%{name}_Linux_x86_64.tar.gz"
+extract_to = "/usr/local/bin"
+
+[build.collect]
+binary   = "/usr/local/bin/tofu-ls"
+includes = []
+
+[build.scratch]
+workdir = "/work"
+cmd     = ["/usr/local/bin/tofu-ls", "version"]
+
+[build.scratch.env]
+LANG          = "C.UTF-8"
+LC_ALL        = "C.UTF-8"
+SSL_CERT_FILE = "/etc/ssl/certs/ca-certificates.crt"
+
+[runtime]
+mode    = "cli"
+command = "/usr/local/bin/tofu"
+
+sif_file   = "tofu-ls.sif"
+image_name = "tofu-ls:latest"
+
+env_passthrough = [
+    "TERM",
+    "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY",
+    "http_proxy", "https_proxy", "no_proxy",
+    "TF_LOG",
+    "TF_LOG_PROVIDER",
+    "TF_IN_AUTOMATION",
+    "TF_CLI_ARGS",
+    "TF_DATA_DIR",
+]
+
+binds       = []
+create_dirs = []
+
+[runtime.vars]
+CONFIG_DIR = "$HOME/.local/share/appspec/tofu-ls"

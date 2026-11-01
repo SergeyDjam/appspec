@@ -1,6 +1,6 @@
 [package]
 name        = "appspec"
-version     = "0.3.4"
+version     = "dev"
 edition     = "2021"
 rust-version = "1.74"
 description = "Apptainer SIF builder from TOML spec + composable bundles"
@@ -35,11 +35,17 @@ minijinja   = { version = "2", features = ["loader", "json"] }
 toml_edit   = "0.22"
 
 # --- misc ------------------------------------------------------------------
-# Понадобится, если добавим работу с mtime в коде (сейчас — только shell).
-# filetime    = "0.2"
-
 base64 = "0.23"
 
+# --- hashing для метаданных SIF: sha256 содержимого .appspec ---------------
+sha2   = "0.10"
+
+# --- E1 (repo): flock для <root>/.lock -------------------------------------
+libc   = "0.2"
+
+# --- E5: ed25519 подписи index.json ---
+ed25519-dalek = { version = "2", features = ["rand_core"] }
+rand_core     = { version = "0.6", features = ["getrandom"] }
 
 [dev-dependencies]
 # --- тесты -----------------------------------------------------------------
@@ -58,23 +64,14 @@ strip         = true
 codegen-units = 1
 panic         = "abort"
 
-# Профиль для `cargo test --release`, если понадобится.
 [profile.bench]
 inherits = "release"
 
-# Быстрая сборка dev-режима (magicpak-шаблоны тяжёлые по include_str!).
 [profile.dev]
 opt-level = 1
 
 [profile.dev.package."*"]
 opt-level = 2
 
-# ---------------------------------------------------------------------------
-# Особенности сборки
-# ---------------------------------------------------------------------------
-
-# Шаблоны вкомпилированы через include_str!("../templates/..."). Чтобы
-# `cargo build` пересобирался при их правке без `cargo clean`, добавляем
-# явную отслеживаемую зависимость от каталога.
 [package.metadata.rebuild-on-change]
 paths = ["templates/**", "config/**"]

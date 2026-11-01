@@ -7,9 +7,9 @@ builder
 target
 config.toml
 *.log
-tests/*
 examples/*.sif
 examples/*.sh
 examples/Dockerfile*
 examples/*.img
+examples/repo/*
 project.txt

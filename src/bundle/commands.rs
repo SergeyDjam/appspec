@@ -13,6 +13,9 @@ pub struct BuildArgs {
     pub output: Option<String>,
     #[arg(long)]
     pub no_build: bool,
+    /// Игнорировать bundle.lock.toml (даже если он есть)
+    #[arg(long)]
+    pub no_lock: bool,
 }
 #[derive(Debug, Args)]
 pub struct LsArgs {
@@ -39,6 +42,12 @@ pub struct AddArgs {
 pub struct RemoveArgs {
     pub spec: String,
     pub name: String,
+}
+#[derive(Debug, Args)]
+pub struct LockArgs {
+    pub spec: String,
+    #[arg(long, short)]
+    pub output: Option<PathBuf>,
 }
 
 fn print_issues(issues: &[validate::Issue]) {
@@ -78,7 +87,7 @@ struct Resolved {
     comps: Vec<(model::Component, PathBuf)>,
     exts: Vec<PreparedExtension>,
     files: Vec<ResolvedFile>,
-    #[allow(dead_code)] // reserved: отчёт об автодобавленных расширениях
+    #[allow(dead_code)]
     auto_added: HashSet<String>,
 }
 
@@ -172,15 +181,10 @@ fn resolve_all(
 
 fn entry_hint(file: &model::BundleFile) -> Option<&str> {
     let b = &file.bundle.base;
-    if b.entry.is_some() {
-        return Some("");
-    }
-    if b.setup.is_some() {
-        return Some("");
-    }
-    if b.source.spec.is_some() {
-        return Some("");
-    }
+    if b.entry.is_some() { return Some(""); }
+    if b.setup.is_some() { return Some(""); }
+    if b.source.spec.is_some() { return Some(""); }
+    if b.source.repo.is_some() { return Some(""); }
     None
 }
 
@@ -202,6 +206,26 @@ pub fn build(a: BuildArgs) -> Result<i32> {
     print_issues(&preflight_issues);
     if validate::has_errors(&static_issues) || validate::has_errors(&preflight_issues) {
         return Ok(2);
+    }
+
+    // bundle.lock.toml: если есть — сверяем, но идём по индексу (§9.2).
+    let lock_path = super::lock::default_path(&spec_path);
+    if !a.no_lock && lock_path.is_file() {
+        match super::lock::LockFile::load(&lock_path) {
+            Ok(lk) => match super::lock::check_drift(&lk) {
+                Ok(warns) => {
+                    for w in warns {
+                        eprintln!("warning: {w}");
+                    }
+                }
+                Err(e) => eprintln!(
+                    "warning: не могу сверить lock: {e:#}"
+                ),
+            },
+            Err(e) => eprintln!(
+                "warning: не читается {}: {e:#}", lock_path.display()
+            ),
+        }
     }
 
     let r = resolve_all(&file, &base_dir, &cache, allow_fetch)?;
@@ -255,6 +279,25 @@ pub fn build(a: BuildArgs) -> Result<i32> {
         }
     );
     println!("    extensions = {}", r.exts.len());
+    Ok(0)
+}
+
+pub fn lock(a: LockArgs) -> Result<i32> {
+    let spec_path = PathBuf::from(&a.spec);
+    if !spec_path.is_file() {
+        anyhow::bail!("bundle spec не найден: {}", spec_path.display());
+    }
+    let file = loader::load_bundle(&spec_path)?;
+    let lk = super::lock::generate(&file, &spec_path)?;
+    let out = a
+        .output
+        .unwrap_or_else(|| super::lock::default_path(&spec_path));
+    lk.save(&out)?;
+    println!(
+        "wrote {} ({} repo components)",
+        out.display(),
+        lk.components.len()
+    );
     Ok(0)
 }
 
