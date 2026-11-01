@@ -1,4 +1,4 @@
-//! `repo export-oci`: экспорт index.json и SIF'ов в OCI-совместимый registry
+//! `repo export-oci` (E8) и `repo pull --from oci://` (E9)
 //! через `oras` CLI.
 //!
 //! Схема (§6.13 ТЗ):
@@ -8,19 +8,20 @@
 //!     `artifactType = application/vnd.appspec.sif.v1+json`, единственный
 //!     blob — SIF.
 //!
-//! Где `<base>` — `--registry` (если задан) или `TARGET`. Если `--registry`
-//! не задан, `TARGET` трактуется как registry-префикс, а индекс
-//! публикуется как `<TARGET>/appspec-index:latest`.
+//! Pull (E9):
+//!   * `oci://<registry>/<index-repo>:<tag>` — резолвит index.json через
+//!     `<registry>/<index-repo>:<tag>`, затем SIF через
+//!     `<registry>/<name>:<ver>`.
 //!
 //! Бинарь: `$APPSPEC_ORAS` (для тестов) или `oras`.
 
 use anyhow::{bail, Context, Result};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use super::layout::RepoRoot;
 use super::meta::IndexV1;
-use super::util::{blob_path, sha256_file};
+use super::util::{blob_path, sha256_file, sha256_hex};
 
 pub const INDEX_ARTIFACT_TYPE: &str = "application/vnd.appspec.index.v1+json";
 pub const SIF_ARTIFACT_TYPE: &str = "application/vnd.appspec.sif.v1+json";
@@ -39,6 +40,10 @@ pub fn which_oras() -> bool {
     std::env::var_os("PATH")
         .is_some_and(|p| std::env::split_paths(&p).any(|d| d.join(&bin).is_file()))
 }
+
+// ===========================================================================
+// export_oci (E8)
+// ===========================================================================
 
 pub struct OciExportOpts {
     pub target: String,
@@ -74,11 +79,7 @@ pub fn export_oci(root: &RepoRoot, opts: OciExportOpts) -> Result<OciExportOutco
             let b = r.trim_end_matches('/').to_string();
             (b.clone(), format!("{}/{}", b, target))
         }
-        None => {
-            // TARGET трактуется как registry-префикс, индекс публикуется
-            // под `<TARGET>/appspec-index:latest`.
-            (target.clone(), format!("{}/appspec-index", target))
-        }
+        None => (target.clone(), format!("{}/appspec-index", target)),
     };
     let index_ref = format!("{}:latest", index_repo);
 
@@ -133,9 +134,7 @@ pub fn export_oci(root: &RepoRoot, opts: OciExportOpts) -> Result<OciExportOutco
                 continue;
             }
 
-            // Проверка целостности перед push: экспортируем только то,
-            // что сами можем прочитать без ошибок. Это ловит битые
-            // локальные репозитории до того, как oras зальёт мусор.
+            // Проверка целостности перед push: не публикуем битое.
             let actual = sha256_file(&blob)?;
             if actual != v.sif_sha256 {
                 bail!(
@@ -201,4 +200,146 @@ fn run_oras(args: &[String], dry_run: bool) -> Result<()> {
         bail!("{} push failed (exit {})", bin, st);
     }
     Ok(())
+}
+
+// ===========================================================================
+// pull_from_oci (E9)
+// ===========================================================================
+
+/// `oci://<repo>[:<tag>]` → `(repo, tag)`. Тег по умолчанию — `latest`.
+/// Порт в registry (`registry.local:5000/x`) не путается с тегом:
+/// `:` внутри `repo` означает порт, если после него идёт `/`.
+pub fn parse_oci_ref(url: &str) -> Result<(String, String)> {
+    let rest = url
+        .strip_prefix("oci://")
+        .ok_or_else(|| anyhow::anyhow!("not an oci:// URL: {}", url))?;
+    let (repo, tag) = match rest.rfind(':') {
+        Some(i) if !rest[i + 1..].contains('/') => (&rest[..i], &rest[i + 1..]),
+        _ => (rest, "latest"),
+    };
+    if repo.is_empty() {
+        bail!("oci:// URL: empty repository in `{}`", url);
+    }
+    Ok((repo.to_string(), tag.to_string()))
+}
+
+/// Разделить `oci://<registry_base>/<index-repo>:<tag>` на `registry_base`
+/// и `index-repo`. `registry_base` может содержать `/` (ghcr.io/user),
+/// `index-repo` — последний сегмент до `:`.
+pub fn split_oci_index_ref(url: &str) -> Result<(String, String)> {
+    let (repo, _tag) = parse_oci_ref(url)?;
+    let (base, index_name) = repo.rsplit_once('/').ok_or_else(|| {
+        anyhow::anyhow!(
+            "oci:// URL must be `oci://<registry>/<index-repo>:<tag>`, got `{}`",
+            url
+        )
+    })?;
+    Ok((base.to_string(), index_name.to_string()))
+}
+
+pub struct OciFetchIndexOpts {
+    pub url: String,
+    pub trusted_key: Option<PathBuf>,
+    pub allow_unsigned: bool,
+}
+
+/// `oras pull <ref> -o <dir>` → содержимое блоба (самый большой файл
+/// в `<dir>`; artifact-config `{}` = 2 байта отбрасывается).
+/// sha256-проверка — в вызывающем коде: только там известно ожидаемое
+/// значение, и можно дать осмысленное сообщение об ошибке.
+fn oras_pull_blob(ref_str: &str, workdir: &Path) -> Result<Vec<u8>> {
+    let bin = oras_bin();
+    if !which_oras() {
+        bail!("`{}` not found in PATH; required for oci:// pulls", bin);
+    }
+    std::fs::create_dir_all(workdir)?;
+    let st = Command::new(&bin)
+        .args(["pull", ref_str, "-o"])
+        .arg(workdir)
+        .status()
+        .with_context(|| format!("{} pull {}", bin, ref_str))?;
+    if !st.success() {
+        bail!("{} pull {} failed (exit {})", bin, ref_str, st);
+    }
+    let mut best: Option<(u64, PathBuf)> = None;
+    for entry in std::fs::read_dir(workdir)? {
+        let entry = entry?;
+        if !entry.file_type()?.is_file() {
+            continue;
+        }
+        let size = entry.metadata()?.len();
+        if size <= 2 {
+            continue;
+        } // artifact-config `{}`
+        match &best {
+            Some((n, _)) if size <= *n => continue,
+            _ => best = Some((size, entry.path())),
+        }
+    }
+    let (_, path) = best.ok_or_else(|| {
+        anyhow::anyhow!(
+            "oras pull {} produced no blob in {}",
+            ref_str,
+            workdir.display()
+        )
+    })?;
+    Ok(std::fs::read(path)?)
+}
+
+/// Скачать index.json из OCI registry и проверить подпись (если есть
+/// trusted keys в allowlist). Fail-closed по §10.2.
+pub fn fetch_index_from_oci(opts: OciFetchIndexOpts) -> Result<(Vec<u8>, IndexV1)> {
+    let (repo, tag) = parse_oci_ref(&opts.url)?;
+    let ref_str = format!("{}:{}", repo, tag);
+    let workdir = std::env::temp_dir().join(format!(
+        "appspec-oci-pull-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0)
+    ));
+    let result = (|| -> Result<(Vec<u8>, IndexV1)> {
+        let bytes = oras_pull_blob(&ref_str, &workdir)?;
+        let text = std::str::from_utf8(&bytes).context("OCI index.json is not valid UTF-8")?;
+        let trusted = super::sign::load_trusted_keys(opts.trusted_key.as_deref())?;
+        super::sign::verify_remote_index(text, &trusted, opts.allow_unsigned)?;
+        let index: IndexV1 = serde_json::from_str(text).context("parsing OCI index.json")?;
+        Ok((bytes, index))
+    })();
+    let _ = std::fs::remove_dir_all(&workdir);
+    result
+}
+
+/// Скачать SIF-пакет из OCI registry. Проверяет sha256 и падает с
+/// `sha256 mismatch from OCI: expected …, got …` при расхождении.
+pub fn fetch_sif_from_oci(
+    registry_base: &str,
+    name: &str,
+    ver: &str,
+    expected_sha: &str,
+) -> Result<Vec<u8>> {
+    let ref_str = format!("{}/{}:{}", registry_base.trim_end_matches('/'), name, ver);
+    let workdir = std::env::temp_dir().join(format!(
+        "appspec-oci-sif-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0)
+    ));
+    let result = (|| -> Result<Vec<u8>> {
+        let bytes = oras_pull_blob(&ref_str, &workdir)?;
+        let actual = sha256_hex(&bytes);
+        if actual != expected_sha {
+            bail!(
+                "sha256 mismatch from OCI: expected {}, got {}",
+                expected_sha,
+                actual
+            );
+        }
+        Ok(bytes)
+    })();
+    let _ = std::fs::remove_dir_all(&workdir);
+    result
 }

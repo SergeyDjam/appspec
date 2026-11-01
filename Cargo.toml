@@ -1,6 +1,6 @@
 [package]
 name        = "appspec"
-version     = "0.3.5"
+version     = "0.3.6"
 edition     = "2021"
 rust-version = "1.74"
 description = "Apptainer SIF builder from TOML spec + composable bundles"
@@ -15,6 +15,9 @@ name = "appspec"
 path = "src/main.rs"
 
 [dependencies]
+# --- E10: TLS для repo serve ---
+rustls        = { version = "0.23", default-features = false, features = ["std", "ring", "tls12"] }
+rustls-pemfile = "2"
 # --- CLI -------------------------------------------------------------------
 clap        = { version = "4", features = ["derive", "env", "wrap_help"] }
 
@@ -48,6 +51,8 @@ ed25519-dalek = { version = "2", features = ["rand_core"] }
 rand_core     = { version = "0.6", features = ["getrandom"] }
 
 [dev-dependencies]
+# --- E10: генерация self-signed для тестов ---
+rcgen = "0.13"
 # --- тесты -----------------------------------------------------------------
 tempfile    = "3"
 assert_cmd  = "2"

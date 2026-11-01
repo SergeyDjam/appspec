@@ -27,6 +27,10 @@ pub fn pull(local_root: &RepoRoot, name_ver: &str, opts: PullOpts) -> Result<()>
     }
 
     if let Some(from) = opts.from.as_deref() {
+        if let Some(url) = from.strip_prefix("oci://") {
+            let full = format!("oci://{}", url);
+            return pull_from_oci(local_root, &name, ver, &full, &opts);
+        }
         if from.starts_with("https://") {
             bail!("https:// not supported in v1 (use http:// or reverse proxy)");
         }
@@ -391,4 +395,80 @@ fn build_meta(name: &str, v: &IndexVersion) -> MetaV1 {
         ipfs_cid: v.ipfs_cid.clone(),
         raw_labels: Default::default(),
     }
+}
+
+// ===========================================================================
+// OCI (E9)
+// ===========================================================================
+
+fn pull_from_oci(
+    local_root: &RepoRoot,
+    name: &str,
+    ver: &str,
+    url: &str, // oci://<registry>/<index-repo>:<tag>
+    opts: &PullOpts,
+) -> Result<()> {
+    if !super::oci::which_oras() {
+        bail!(
+            "`{}` not found in PATH; required for oci:// pulls",
+            super::oci::oras_bin()
+        );
+    }
+
+    let (registry_base, _index_name) = super::oci::split_oci_index_ref(url)?;
+
+    // 1. index.json
+    let (_index_bytes, index) = super::oci::fetch_index_from_oci(super::oci::OciFetchIndexOpts {
+        url: url.to_string(),
+        trusted_key: opts.trusted_key.clone(),
+        allow_unsigned: opts.allow_unsigned,
+    })?;
+
+    let pkg = index
+        .packages
+        .get(name)
+        .ok_or_else(|| anyhow!("package `{}` not in OCI index", name))?;
+    let v = pkg
+        .versions
+        .get(ver)
+        .ok_or_else(|| anyhow!("{}:{} not in OCI index", name, ver))?;
+
+    let meta = build_meta(name, v);
+
+    if opts.spec_only {
+        bail!("--spec-only с oci:// не реализовано: spec.appspec не публикуется как artifact в v1");
+    }
+
+    // 2. SIF
+    let blob_bytes = super::oci::fetch_sif_from_oci(&registry_base, name, ver, &v.sif_sha256)?;
+
+    if let Some(out) = &opts.sif_out {
+        if let Some(p) = out.parent() {
+            std::fs::create_dir_all(p)?;
+        }
+        atomic_write(out, &blob_bytes)?;
+        println!("pulled: {}:{} → {} (oci {})", name, ver, out.display(), url);
+        return Ok(());
+    }
+
+    // spec.appspec недоступен из OCI (только index.json + SIF).
+    // Кладём meta.json и SIF, spec.appspec остаётся пустым.
+    // Пользователь может восстановить spec из SIF через `apptainer inspect`.
+    write_version(local_root, name, ver, b"", &meta, Some(&blob_bytes))?;
+    let spec_path = local_root
+        .packages_dir()
+        .join(name)
+        .join(ver)
+        .join("spec.appspec");
+    let _ = std::fs::remove_file(&spec_path);
+
+    let _ = super::index_build::rebuild_all(local_root);
+    println!("pulled: {}:{} (oci {})", name, ver, url);
+    eprintln!(
+        "warning: spec.appspec для {}:{} не публикуется в OCI; \
+         восстановить: apptainer inspect --json --labels <blob> | jq -r \
+         '.\"org.appspec.spec.content.base64\"' | base64 -d",
+        name, ver
+    );
+    Ok(())
 }
