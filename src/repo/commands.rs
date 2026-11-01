@@ -11,11 +11,14 @@ fn open_root(a: Option<PathBuf>) -> Result<layout::RepoRoot> {
 }
 
 fn read_index(root: &layout::RepoRoot) -> Result<meta::IndexV1> {
-    Ok(serde_json::from_str(&std::fs::read_to_string(root.index_path())?)?)
+    Ok(serde_json::from_str(&std::fs::read_to_string(
+        root.index_path(),
+    )?)?)
 }
 
 fn split_pv(s: &str) -> Result<(String, String)> {
-    let (n, v) = s.split_once(':')
+    let (n, v) = s
+        .split_once(':')
         .ok_or_else(|| anyhow!("expected NAME:VERSION-RELEASE, got `{}`", s))?;
     Ok((n.to_ascii_lowercase(), v.to_string()))
 }
@@ -25,11 +28,14 @@ fn split_pv(s: &str) -> Result<(String, String)> {
 #[derive(Debug, Args)]
 pub struct InitArgs {
     pub path: Option<PathBuf>,
-    #[arg(long)] pub name: Option<String>,
-    #[arg(long)] pub description: Option<String>,
+    #[arg(long)]
+    pub name: Option<String>,
+    #[arg(long)]
+    pub description: Option<String>,
     /// Сгенерировать серверный токен и сохранить его sha256 в config.toml.
     /// Токен печатается в stdout один раз.
-    #[arg(long)] pub token: Option<String>,
+    #[arg(long)]
+    pub token: Option<String>,
 }
 
 pub fn init(a: InitArgs) -> Result<i32> {
@@ -41,7 +47,9 @@ pub fn init(a: InitArgs) -> Result<i32> {
         if cfg.config.repo.name != name {
             bail!(
                 "repository at {} already initialized as `{}` (requested `{}`)",
-                root.display(), cfg.config.repo.name, name
+                root.display(),
+                cfg.config.repo.name,
+                name
             );
         }
         println!("already initialized: {}", root.display());
@@ -59,7 +67,10 @@ pub fn init(a: InitArgs) -> Result<i32> {
     if let Some(tname) = &a.token {
         let raw = util::hex_encode(&util::random_bytes(32)?);
         let hash = format!("sha256:{}", util::sha256_hex(raw.as_bytes()));
-        tokens.push(layout::ServerToken { name: tname.clone(), hash });
+        tokens.push(layout::ServerToken {
+            name: tname.clone(),
+            hash,
+        });
         generated_token = Some((tname.clone(), raw));
     }
 
@@ -102,16 +113,24 @@ pub fn init(a: InitArgs) -> Result<i32> {
 #[derive(Debug, Args)]
 pub struct AddArgs {
     pub sif: Vec<PathBuf>,
-    #[arg(long)] pub arch: Option<String>,
-    #[arg(long)] pub force: bool,
-    #[arg(long)] pub release_suffix: Option<String>,
-    #[arg(long)] pub pin_ipfs: bool,
-    #[arg(long)] pub tag: Option<String>,
-    #[arg(long)] pub root: Option<PathBuf>,
+    #[arg(long)]
+    pub arch: Option<String>,
+    #[arg(long)]
+    pub force: bool,
+    #[arg(long)]
+    pub release_suffix: Option<String>,
+    #[arg(long)]
+    pub pin_ipfs: bool,
+    #[arg(long)]
+    pub tag: Option<String>,
+    #[arg(long)]
+    pub root: Option<PathBuf>,
 }
 
 pub fn add(a: AddArgs) -> Result<i32> {
-    if a.sif.is_empty() { bail!("no SIF arguments"); }
+    if a.sif.is_empty() {
+        bail!("no SIF arguments");
+    }
     let root = open_root(a.root)?;
     let _lock = util::FileLock::acquire(&root.lock_path())?;
 
@@ -124,25 +143,40 @@ pub fn add(a: AddArgs) -> Result<i32> {
 
     let mut changed = false;
     for sif in &a.sif {
-        let out = add::add_one(&root, add::AddParams {
-            sif,
-            arch: a.arch.as_deref(),
-            release_suffix: a.release_suffix.as_deref(),
-            force: a.force,
-            pin_ipfs: a.pin_ipfs,
-            tag: a.tag.as_deref(),
-        })?;
+        let out = add::add_one(
+            &root,
+            add::AddParams {
+                sif,
+                arch: a.arch.as_deref(),
+                release_suffix: a.release_suffix.as_deref(),
+                force: a.force,
+                pin_ipfs: a.pin_ipfs,
+                tag: a.tag.as_deref(),
+            },
+        )?;
         if out.already_present {
-            println!("no-op: {}:{}-{} (epoch {}, arch {}) (sha {})",
-                out.name, out.version, out.release,
-                out.epoch, out.arch, &out.sif_sha256[..12]);
+            println!(
+                "no-op: {}:{}-{} (epoch {}, arch {}) (sha {})",
+                out.name,
+                out.version,
+                out.release,
+                out.epoch,
+                out.arch,
+                &out.sif_sha256[..12]
+            );
             if let Some(cid) = &out.ipfs_cid {
                 println!("  ipfs: {}", cid);
             }
         } else {
-            println!("added: {}:{}-{} (epoch {}, arch {}) (sha {})",
-                out.name, out.version, out.release,
-                out.epoch, out.arch, &out.sif_sha256[..12]);
+            println!(
+                "added: {}:{}-{} (epoch {}, arch {}) (sha {})",
+                out.name,
+                out.version,
+                out.release,
+                out.epoch,
+                out.arch,
+                &out.sif_sha256[..12]
+            );
             if let Some(cid) = &out.ipfs_cid {
                 println!("  ipfs: {}", cid);
             }
@@ -160,8 +194,10 @@ pub fn add(a: AddArgs) -> Result<i32> {
 #[derive(Debug, Args)]
 pub struct LsArgs {
     pub package: Option<String>,
-    #[arg(long)] pub json: bool,
-    #[arg(long)] pub root: Option<PathBuf>,
+    #[arg(long)]
+    pub json: bool,
+    #[arg(long)]
+    pub root: Option<PathBuf>,
 }
 
 pub fn ls(a: LsArgs) -> Result<i32> {
@@ -170,14 +206,22 @@ pub fn ls(a: LsArgs) -> Result<i32> {
     match a.package {
         Some(p) => {
             let key = p.to_ascii_lowercase();
-            let pkg = index.packages.get(&key)
+            let pkg = index
+                .packages
+                .get(&key)
                 .ok_or_else(|| anyhow!("package not found: {}", p))?;
             if a.json {
                 println!("{}", serde_json::to_string_pretty(&pkg.versions)?);
             } else {
                 for (k, v) in &pkg.versions {
-                    println!("{:<24}  {:>12}  tags=[{}]  arch={}  sha={}",
-                        k, v.sif_size, v.tags.join(","), v.arch, &v.sif_sha256[..12]);
+                    println!(
+                        "{:<24}  {:>12}  tags=[{}]  arch={}  sha={}",
+                        k,
+                        v.sif_size,
+                        v.tags.join(","),
+                        v.arch,
+                        &v.sif_sha256[..12]
+                    );
                 }
             }
         }
@@ -186,8 +230,18 @@ pub fn ls(a: LsArgs) -> Result<i32> {
                 println!("{}", serde_json::to_string_pretty(&index.packages)?);
             } else {
                 for (name, pkg) in &index.packages {
-                    let latest = pkg.versions.keys().next().map(String::as_str).unwrap_or("-");
-                    println!("{:<24}  {} versions  latest={}", name, pkg.versions.len(), latest);
+                    let latest = pkg
+                        .versions
+                        .keys()
+                        .next()
+                        .map(String::as_str)
+                        .unwrap_or("-");
+                    println!(
+                        "{:<24}  {} versions  latest={}",
+                        name,
+                        pkg.versions.len(),
+                        latest
+                    );
                 }
             }
         }
@@ -200,18 +254,25 @@ pub fn ls(a: LsArgs) -> Result<i32> {
 #[derive(Debug, Args)]
 pub struct ShowArgs {
     pub package_version: String,
-    #[arg(long)] pub json: bool,
-    #[arg(long)] pub spec: bool,
-    #[arg(long)] pub sif: Option<PathBuf>,
-    #[arg(long)] pub no_verify: bool,
-    #[arg(long)] pub root: Option<PathBuf>,
+    #[arg(long)]
+    pub json: bool,
+    #[arg(long)]
+    pub spec: bool,
+    #[arg(long)]
+    pub sif: Option<PathBuf>,
+    #[arg(long)]
+    pub no_verify: bool,
+    #[arg(long)]
+    pub root: Option<PathBuf>,
 }
 
 pub fn show(a: ShowArgs) -> Result<i32> {
     let root = open_root(a.root)?;
     let (pkg, ver) = split_pv(&a.package_version)?;
     let meta_path = root.packages_dir().join(&pkg).join(&ver).join("meta.json");
-    if !meta_path.is_file() { bail!("not found: {}:{}", pkg, ver); }
+    if !meta_path.is_file() {
+        bail!("not found: {}:{}", pkg, ver);
+    }
 
     if a.spec {
         let spec = meta_path.parent().unwrap().join("spec.appspec");
@@ -240,33 +301,59 @@ pub fn show(a: ShowArgs) -> Result<i32> {
         return Ok(0);
     }
     println!("Name:        {}", m.name);
-    println!("Version:     {}-{} (epoch {})", m.version, m.release, m.epoch);
+    println!(
+        "Version:     {}-{} (epoch {})",
+        m.version, m.release, m.epoch
+    );
     println!("Arch:        {}", m.arch);
-    if let Some(s) = &m.summary   { println!("Summary:     {}", s); }
-    if let Some(s) = &m.license   { println!("License:     {}", s); }
-    if let Some(s) = &m.url       { println!("URL:         {}", s); }
-    if let Some(s) = &m.vendor    { println!("Vendor:      {}", s); }
-    if let Some(s) = &m.base_digest { println!("Base digest: {}", s); }
+    if let Some(s) = &m.summary {
+        println!("Summary:     {}", s);
+    }
+    if let Some(s) = &m.license {
+        println!("License:     {}", s);
+    }
+    if let Some(s) = &m.url {
+        println!("URL:         {}", s);
+    }
+    if let Some(s) = &m.vendor {
+        println!("Vendor:      {}", s);
+    }
+    if let Some(s) = &m.base_digest {
+        println!("Base digest: {}", s);
+    }
     println!("SIF sha256:  {}", m.sif_sha256);
     println!("SIF size:    {}", m.sif_size);
     println!("Spec sha256: {}", m.spec_sha256);
     println!("Built at:    {}", m.built_at);
-    if !m.requires.is_empty()  { println!("Requires:    {}", m.requires.join(", ")); }
-    if !m.provides.is_empty()  { println!("Provides:    {}", m.provides.join(", ")); }
-    if !m.conflicts.is_empty() { println!("Conflicts:   {}", m.conflicts.join(", ")); }
+    if !m.requires.is_empty() {
+        println!("Requires:    {}", m.requires.join(", "));
+    }
+    if !m.provides.is_empty() {
+        println!("Provides:    {}", m.provides.join(", "));
+    }
+    if !m.conflicts.is_empty() {
+        println!("Conflicts:   {}", m.conflicts.join(", "));
+    }
     Ok(0)
 }
 
 // ---- reindex ---------------------------------------------------------------
 
 #[derive(Debug, Args)]
-pub struct ReindexArgs { #[arg(long)] pub root: Option<PathBuf> }
+pub struct ReindexArgs {
+    #[arg(long)]
+    pub root: Option<PathBuf>,
+}
 
 pub fn reindex(a: ReindexArgs) -> Result<i32> {
     let root = open_root(a.root)?;
     let _lock = util::FileLock::acquire(&root.lock_path())?;
     let idx = index_build::rebuild_all(&root)?;
-    println!("reindexed: {} packages, updated={}", idx.packages.len(), idx.updated);
+    println!(
+        "reindexed: {} packages, updated={}",
+        idx.packages.len(),
+        idx.updated
+    );
     Ok(0)
 }
 
@@ -274,15 +361,20 @@ pub fn reindex(a: ReindexArgs) -> Result<i32> {
 
 #[derive(Debug, Args)]
 pub struct CheckArgs {
-    #[arg(long)] pub deep: bool,
-    #[arg(long)] pub root: Option<PathBuf>,
+    #[arg(long)]
+    pub deep: bool,
+    #[arg(long)]
+    pub root: Option<PathBuf>,
 }
 
 pub fn check(a: CheckArgs) -> Result<i32> {
     let root = open_root(a.root)?;
     let out = check_mod::run(&root, a.deep)?;
     if out.errors > 0 {
-        eprintln!("check: FAILED ({} errors, {} warnings)", out.errors, out.warnings);
+        eprintln!(
+            "check: FAILED ({} errors, {} warnings)",
+            out.errors, out.warnings
+        );
         Ok(2)
     } else {
         println!("check: ok ({} warnings)", out.warnings);
@@ -294,9 +386,12 @@ pub fn check(a: CheckArgs) -> Result<i32> {
 
 #[derive(Debug, Args)]
 pub struct GcArgs {
-    #[arg(long)] pub dry_run: bool,
-    #[arg(long)] pub keep: Option<usize>,
-    #[arg(long)] pub root: Option<PathBuf>,
+    #[arg(long)]
+    pub dry_run: bool,
+    #[arg(long)]
+    pub keep: Option<usize>,
+    #[arg(long)]
+    pub root: Option<PathBuf>,
 }
 
 pub fn gc(a: GcArgs) -> Result<i32> {
@@ -304,10 +399,17 @@ pub fn gc(a: GcArgs) -> Result<i32> {
     let _lock = util::FileLock::acquire(&root.lock_path())?;
     let out = gc_mod::run(&root, a.dry_run, a.keep)?;
     let verb = if a.dry_run { "would remove" } else { "removed" };
-    println!("{}: {} blobs, {} referenced, {} bytes",
-        verb, out.removed.len(), out.referenced, out.bytes_reclaimed);
+    println!(
+        "{}: {} blobs, {} referenced, {} bytes",
+        verb,
+        out.removed.len(),
+        out.referenced,
+        out.bytes_reclaimed
+    );
     if a.dry_run {
-        for p in &out.removed { println!("  {}", p.display()); }
+        for p in &out.removed {
+            println!("  {}", p.display());
+        }
     }
     Ok(0)
 }
@@ -317,14 +419,22 @@ pub fn gc(a: GcArgs) -> Result<i32> {
 #[derive(Debug, Args)]
 pub struct SearchArgs {
     pub query: Option<String>,
-    #[arg(long)] pub license: Option<String>,
-    #[arg(long)] pub arch: Option<String>,
-    #[arg(long)] pub vendor: Option<String>,
-    #[arg(long)] pub spec_sha256: Option<String>,
-    #[arg(long)] pub requires: Option<String>,
-    #[arg(long)] pub json: bool,
-    #[arg(long)] pub limit: Option<usize>,
-    #[arg(long)] pub root: Option<PathBuf>,
+    #[arg(long)]
+    pub license: Option<String>,
+    #[arg(long)]
+    pub arch: Option<String>,
+    #[arg(long)]
+    pub vendor: Option<String>,
+    #[arg(long)]
+    pub spec_sha256: Option<String>,
+    #[arg(long)]
+    pub requires: Option<String>,
+    #[arg(long)]
+    pub json: bool,
+    #[arg(long)]
+    pub limit: Option<usize>,
+    #[arg(long)]
+    pub root: Option<PathBuf>,
 }
 
 pub fn search(a: SearchArgs) -> Result<i32> {
@@ -337,55 +447,86 @@ pub fn search(a: SearchArgs) -> Result<i32> {
     for (name, pkg) in &index.packages {
         if let Some(q) = &q {
             let in_name = name.to_lowercase().contains(q);
-            let in_summary = pkg.summary.as_deref()
-                .map(|s| s.to_lowercase().contains(q)).unwrap_or(false);
-            if !(in_name || in_summary) { continue; }
+            let in_summary = pkg
+                .summary
+                .as_deref()
+                .map(|s| s.to_lowercase().contains(q))
+                .unwrap_or(false);
+            if !(in_name || in_summary) {
+                continue;
+            }
         }
         if let Some(l) = &a.license {
-            if pkg.license.as_deref() != Some(l.as_str()) { continue; }
+            if pkg.license.as_deref() != Some(l.as_str()) {
+                continue;
+            }
         }
         if let Some(v) = &a.vendor {
-            if pkg.vendor.as_deref() != Some(v.as_str()) { continue; }
+            if pkg.vendor.as_deref() != Some(v.as_str()) {
+                continue;
+            }
         }
         let mut versions: Vec<&meta::IndexVersion> = Vec::new();
         for v in pkg.versions.values() {
-            if let Some(ar) = &a.arch { if v.arch != *ar { continue; } }
+            if let Some(ar) = &a.arch {
+                if v.arch != *ar {
+                    continue;
+                }
+            }
             if let Some(p) = &a.requires {
-                if !v.provides.iter().any(|x| x == p) { continue; }
+                if !v.provides.iter().any(|x| x == p) {
+                    continue;
+                }
             }
             if let Some(s) = &a.spec_sha256 {
-                if !v.spec_sha256.starts_with(s) { continue; }
+                if !v.spec_sha256.starts_with(s) {
+                    continue;
+                }
             }
             versions.push(v);
         }
-        if versions.is_empty() { continue; }
+        if versions.is_empty() {
+            continue;
+        }
         results.push((name, pkg, versions));
-        if results.len() >= limit { break; }
+        if results.len() >= limit {
+            break;
+        }
     }
 
     if a.json {
-        let json: Vec<serde_json::Value> = results.iter().map(|(n, p, vs)| {
-            serde_json::json!({
-                "name": n,
-                "summary": p.summary,
-                "license": p.license,
-                "vendor": p.vendor,
-                "versions": vs.iter().map(|v| serde_json::json!({
-                    "version": v.version,
-                    "release": v.release,
-                    "arch": v.arch,
-                    "sif_sha256": v.sif_sha256,
-                })).collect::<Vec<_>>(),
+        let json: Vec<serde_json::Value> = results
+            .iter()
+            .map(|(n, p, vs)| {
+                serde_json::json!({
+                    "name": n,
+                    "summary": p.summary,
+                    "license": p.license,
+                    "vendor": p.vendor,
+                    "versions": vs.iter().map(|v| serde_json::json!({
+                        "version": v.version,
+                        "release": v.release,
+                        "arch": v.arch,
+                        "sif_sha256": v.sif_sha256,
+                    })).collect::<Vec<_>>(),
+                })
             })
-        }).collect();
+            .collect();
         println!("{}", serde_json::to_string_pretty(&json)?);
     } else {
         for (name, pkg, versions) in &results {
             println!("{}", name);
-            if let Some(s) = &pkg.summary { println!("  {}", s); }
+            if let Some(s) = &pkg.summary {
+                println!("  {}", s);
+            }
             for v in versions {
-                println!("  {}-{}  arch={}  sha={}",
-                    v.version, v.release, v.arch, &v.sif_sha256[..12]);
+                println!(
+                    "  {}-{}  arch={}  sha={}",
+                    v.version,
+                    v.release,
+                    v.arch,
+                    &v.sif_sha256[..12]
+                );
             }
         }
     }
@@ -396,8 +537,10 @@ pub fn search(a: SearchArgs) -> Result<i32> {
 
 #[derive(Debug, Args)]
 pub struct ServeArgs {
-    #[arg(long)] pub listen: Option<String>,
-    #[arg(long)] pub root: Option<PathBuf>,
+    #[arg(long)]
+    pub listen: Option<String>,
+    #[arg(long)]
+    pub root: Option<PathBuf>,
 }
 
 pub fn serve(a: ServeArgs) -> Result<i32> {
@@ -414,20 +557,27 @@ pub fn serve(a: ServeArgs) -> Result<i32> {
 #[derive(Debug, Args)]
 pub struct PushArgs {
     pub sif: Vec<PathBuf>,
-    #[arg(long)] pub to: String,
-    #[arg(long)] pub token_file: Option<PathBuf>,
-    #[arg(long)] pub token: Option<String>,
-    #[arg(long)] pub force: bool,
+    #[arg(long)]
+    pub to: String,
+    #[arg(long)]
+    pub token_file: Option<PathBuf>,
+    #[arg(long)]
+    pub token: Option<String>,
+    #[arg(long)]
+    pub force: bool,
 }
 
 pub fn push(a: PushArgs) -> Result<i32> {
-    if a.sif.is_empty() { bail!("no SIF arguments"); }
+    if a.sif.is_empty() {
+        bail!("no SIF arguments");
+    }
     let _ = a.force; // сервер вернёт 409, --force на клиенте не реализован в v1
 
     let token = if let Some(tf) = &a.token_file {
         std::fs::read_to_string(tf)
             .with_context(|| format!("reading token file {}", tf.display()))?
-            .trim().to_string()
+            .trim()
+            .to_string()
     } else if let Ok(t) = std::env::var("APPSPEC_REPO_TOKEN") {
         t
     } else if let Some(t) = &a.token {
@@ -442,9 +592,18 @@ pub fn push(a: PushArgs) -> Result<i32> {
     for sif in &a.sif {
         match super::push::push_one(sif, &a.to, &token) {
             Ok(out) => {
-                let tag = if out.already_present { "no-op" } else { "pushed" };
-                println!("{}: {}:{} (sha {})",
-                    tag, out.package, out.version, &out.sha256[..12.min(out.sha256.len())]);
+                let tag = if out.already_present {
+                    "no-op"
+                } else {
+                    "pushed"
+                };
+                println!(
+                    "{}: {}:{} (sha {})",
+                    tag,
+                    out.package,
+                    out.version,
+                    &out.sha256[..12.min(out.sha256.len())]
+                );
                 ok += 1;
             }
             Err(e) => {
@@ -453,7 +612,12 @@ pub fn push(a: PushArgs) -> Result<i32> {
             }
         }
     }
-    if failed > 0 { Ok(1) } else { let _ = ok; Ok(0) }
+    if failed > 0 {
+        Ok(1)
+    } else {
+        let _ = ok;
+        Ok(0)
+    }
 }
 
 // ---- pull ------------------------------------------------------------------
@@ -461,27 +625,38 @@ pub fn push(a: PushArgs) -> Result<i32> {
 #[derive(Debug, Args)]
 pub struct PullArgs {
     pub package_version: String,
-    #[arg(long)] pub from: Option<String>,
-    #[arg(long)] pub spec_only: bool,
-    #[arg(long)] pub sif_out: Option<PathBuf>,
-    #[arg(long)] pub trusted_key: Option<PathBuf>,
-    #[arg(long)] pub allow_unsigned: bool,
-    #[arg(long)] pub via: Option<String>,
-    #[arg(long)] pub root: Option<PathBuf>,
+    #[arg(long)]
+    pub from: Option<String>,
+    #[arg(long)]
+    pub spec_only: bool,
+    #[arg(long)]
+    pub sif_out: Option<PathBuf>,
+    #[arg(long)]
+    pub trusted_key: Option<PathBuf>,
+    #[arg(long)]
+    pub allow_unsigned: bool,
+    #[arg(long)]
+    pub via: Option<String>,
+    #[arg(long)]
+    pub root: Option<PathBuf>,
 }
 
 pub fn pull(a: PullArgs) -> Result<i32> {
     let root = open_root(a.root)?;
     let _lock = util::FileLock::acquire(&root.lock_path())?;
 
-    super::pull::pull(&root, &a.package_version, super::pull::PullOpts {
-        from: a.from,
-        via: a.via,
-        spec_only: a.spec_only,
-        sif_out: a.sif_out,
-        trusted_key: a.trusted_key,
-        allow_unsigned: a.allow_unsigned,
-    })?;
+    super::pull::pull(
+        &root,
+        &a.package_version,
+        super::pull::PullOpts {
+            from: a.from,
+            via: a.via,
+            spec_only: a.spec_only,
+            sif_out: a.sif_out,
+            trusted_key: a.trusted_key,
+            allow_unsigned: a.allow_unsigned,
+        },
+    )?;
     Ok(0)
 }
 
@@ -492,8 +667,10 @@ pub struct SignArgs {
     /// Путь к приватному ключу. Если файла нет — будет сгенерирован.
     /// По умолчанию: $APPSPEC_SIGNING_KEY, $XDG_CONFIG_HOME/appspec/signing.key,
     /// $HOME/.config/appspec/signing.key.
-    #[arg(long)] pub key: Option<PathBuf>,
-    #[arg(long)] pub root: Option<PathBuf>,
+    #[arg(long)]
+    pub key: Option<PathBuf>,
+    #[arg(long)]
+    pub root: Option<PathBuf>,
 }
 
 pub fn sign(a: SignArgs) -> Result<i32> {
@@ -529,8 +706,10 @@ pub fn sign(a: SignArgs) -> Result<i32> {
 pub struct VerifyArgs {
     /// Публичный ключ (`ed25519:<hex>`) или файл с ним. Если не задан —
     /// берётся `[signing].pubkey` из config.toml.
-    #[arg(long)] pub pubkey: Option<PathBuf>,
-    #[arg(long)] pub root: Option<PathBuf>,
+    #[arg(long)]
+    pub pubkey: Option<PathBuf>,
+    #[arg(long)]
+    pub root: Option<PathBuf>,
 }
 
 pub fn verify(a: VerifyArgs) -> Result<i32> {
@@ -544,9 +723,7 @@ pub fn verify(a: VerifyArgs) -> Result<i32> {
     } else {
         let s = root.config.signing.pubkey.clone();
         if s.is_empty() {
-            bail!(
-                "no public key: pass --pubkey PATH or set [signing].pubkey in config.toml"
-            );
+            bail!("no public key: pass --pubkey PATH or set [signing].pubkey in config.toml");
         }
         super::sign::parse_pubkey(&s)?
     };
@@ -560,8 +737,10 @@ pub fn verify(a: VerifyArgs) -> Result<i32> {
 
 #[derive(Debug, Args)]
 pub struct PublishIndexArgs {
-    #[arg(long)] pub pin: bool,
-    #[arg(long)] pub root: Option<PathBuf>,
+    #[arg(long)]
+    pub pin: bool,
+    #[arg(long)]
+    pub root: Option<PathBuf>,
 }
 
 pub fn publish_index(a: PublishIndexArgs) -> Result<i32> {
@@ -589,25 +768,34 @@ pub struct ExportOciArgs {
     pub target: String,
     /// Префикс registry (например `ghcr.io/user`). Если задан, TARGET —
     /// это имя индекса: `<registry>/<target>:latest`, пакеты — `<registry>/<name>:<ver>`.
-    #[arg(long)] pub registry: Option<String>,
+    #[arg(long)]
+    pub registry: Option<String>,
     /// Только напечатать команды `oras push`, ничего не выполнять.
-    #[arg(long)] pub dry_run: bool,
-    #[arg(long)] pub root: Option<PathBuf>,
+    #[arg(long)]
+    pub dry_run: bool,
+    #[arg(long)]
+    pub root: Option<PathBuf>,
 }
 
 pub fn export_oci(a: ExportOciArgs) -> Result<i32> {
     let root = open_root(a.root)?;
-    let out = super::oci::export_oci(&root, super::oci::OciExportOpts {
-        target: a.target,
-        registry: a.registry,
-        dry_run: a.dry_run,
-    })?;
+    let out = super::oci::export_oci(
+        &root,
+        super::oci::OciExportOpts {
+            target: a.target,
+            registry: a.registry,
+            dry_run: a.dry_run,
+        },
+    )?;
     if out.dry_run {
         println!("# dry-run: {} push command(s)", out.pushed.len());
         println!("# index: {}", out.index_ref);
     } else {
-        println!("exported: {} artifact(s), index: {}",
-            out.pushed.len(), out.index_ref);
+        println!(
+            "exported: {} artifact(s), index: {}",
+            out.pushed.len(),
+            out.index_ref
+        );
     }
     Ok(0)
 }

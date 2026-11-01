@@ -17,16 +17,18 @@ pub fn which_ipfs() -> bool {
     if bin.contains('/') {
         return Path::new(&bin).is_file();
     }
-    std::env::var_os("PATH").is_some_and(|p| {
-        std::env::split_paths(&p).any(|d| d.join(&bin).is_file())
-    })
+    std::env::var_os("PATH")
+        .is_some_and(|p| std::env::split_paths(&p).any(|d| d.join(&bin).is_file()))
 }
 
 /// `ipfs add --pin=<pin> --quieter <path>` → CID (trim).
 pub fn add_file(path: &Path, pin: bool) -> Result<String> {
     let bin = ipfs_bin();
     if !which_ipfs() {
-        bail!("`{}` not found in PATH; required for IPFS ops (set APPSPEC_IPFS to override)", bin);
+        bail!(
+            "`{}` not found in PATH; required for IPFS ops (set APPSPEC_IPFS to override)",
+            bin
+        );
     }
     let out = Command::new(&bin)
         .args(["add", &format!("--pin={}", pin), "--quieter"])
@@ -36,7 +38,8 @@ pub fn add_file(path: &Path, pin: bool) -> Result<String> {
     if !out.status.success() {
         bail!(
             "{} add failed for {}: {}",
-            bin, path.display(),
+            bin,
+            path.display(),
             String::from_utf8_lossy(&out.stderr).trim()
         );
     }
@@ -63,7 +66,8 @@ pub fn cat(cid: &str) -> Result<Vec<u8>> {
     if !out.status.success() {
         bail!(
             "{} cat {} failed: {}",
-            bin, cid,
+            bin,
+            cid,
             String::from_utf8_lossy(&out.stderr).trim()
         );
     }
@@ -74,9 +78,11 @@ pub fn cat(cid: &str) -> Result<Vec<u8>> {
 #[allow(dead_code)] // reserved: pull --sif-out via ipfs (v2)
 pub fn get_to(cid: &str, out: &Path) -> Result<()> {
     let bytes = cat(cid)?;
-    if let Some(p) = out.parent() { std::fs::create_dir_all(p)?; }
-    let mut f = std::fs::File::create(out)
-        .with_context(|| format!("creating {}", out.display()))?;
+    if let Some(p) = out.parent() {
+        std::fs::create_dir_all(p)?;
+    }
+    let mut f =
+        std::fs::File::create(out).with_context(|| format!("creating {}", out.display()))?;
     f.write_all(&bytes)?;
     f.sync_all()?;
     Ok(())

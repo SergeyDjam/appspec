@@ -26,14 +26,16 @@ fn make_index(packages: serde_json::Value) -> String {
         "generator": "appspec test",
         "signature": "",
         "packages": packages
-    }).to_string()
+    })
+    .to_string()
 }
 
 fn sign_text(index_text: &str) -> (sign::SigningKey, String) {
     let key = sign::keygen();
     let sig = sign::sign_index(index_text, &key).unwrap();
     let mut v: serde_json::Value = serde_json::from_str(index_text).unwrap();
-    v.as_object_mut().unwrap()
+    v.as_object_mut()
+        .unwrap()
         .insert("signature".into(), serde_json::Value::String(sig));
     (key, serde_json::to_string(&v).unwrap())
 }
@@ -93,8 +95,10 @@ fn tampered_index_rejected() {
     v["repo"] = serde_json::Value::String("tampered".into());
     let tampered = serde_json::to_string(&v).unwrap();
     let err = sign::verify_index(&tampered, &key.verifying_key()).unwrap_err();
-    assert!(format!("{err:#}").contains("mismatch"),
-        "expected mismatch, got: {err:#}");
+    assert!(
+        format!("{err:#}").contains("mismatch"),
+        "expected mismatch, got: {err:#}"
+    );
 }
 
 #[test]
@@ -102,8 +106,10 @@ fn unsigned_index_rejected() {
     let index = make_index(serde_json::json!({}));
     let key = sign::keygen();
     let err = sign::verify_index(&index, &key.verifying_key()).unwrap_err();
-    assert!(format!("{err:#}").contains("not signed"),
-        "expected not-signed, got: {err:#}");
+    assert!(
+        format!("{err:#}").contains("not signed"),
+        "expected not-signed, got: {err:#}"
+    );
 }
 
 #[test]
@@ -119,8 +125,10 @@ fn canonical_excludes_signature() {
     let index = make_index(serde_json::json!({}));
     let canon = sign::canonical_index_bytes(&index).unwrap();
     let s = String::from_utf8(canon).unwrap();
-    assert!(!s.contains("signature"),
-        "canonical form must exclude signature: {s}");
+    assert!(
+        !s.contains("signature"),
+        "canonical form must exclude signature: {s}"
+    );
 }
 
 // ============================================================================
@@ -139,8 +147,10 @@ fn remote_unsigned_with_trusted_keys_fails() {
     let key = sign::keygen();
     let trusted = vec![("test".to_string(), key.verifying_key())];
     let err = sign::verify_remote_index(&index, &trusted, false).unwrap_err();
-    assert!(format!("{err:#}").contains("signature required"),
-        "expected signature-required, got: {err:#}");
+    assert!(
+        format!("{err:#}").contains("signature required"),
+        "expected signature-required, got: {err:#}"
+    );
 }
 
 #[test]
@@ -166,8 +176,10 @@ fn remote_signed_by_untrusted_fails() {
     let other = sign::keygen();
     let trusted = vec![("other".to_string(), other.verifying_key())];
     let err = sign::verify_remote_index(&signed, &trusted, false).unwrap_err();
-    assert!(format!("{err:#}").contains("mismatch"),
-        "expected mismatch, got: {err:#}");
+    assert!(
+        format!("{err:#}").contains("mismatch"),
+        "expected mismatch, got: {err:#}"
+    );
 }
 
 #[test]
@@ -192,9 +204,11 @@ fn load_trusted_keys_from_toml() {
     let key = sign::keygen();
     let pk = sign::pubkey_to_string(&key.verifying_key());
     let path = tmp.path().join("trusted.toml");
-    std::fs::write(&path, format!(
-        "[[keys]]\nname = \"release\"\npubkey = \"{}\"\n", pk
-    )).unwrap();
+    std::fs::write(
+        &path,
+        format!("[[keys]]\nname = \"release\"\npubkey = \"{}\"\n", pk),
+    )
+    .unwrap();
     let trusted = sign::load_trusted_keys(Some(&path)).unwrap();
     // allowlist может содержать и глобальные ключи из ~/.config/appspec,
     // поэтому проверяем наличие нужного, а не точное количество.

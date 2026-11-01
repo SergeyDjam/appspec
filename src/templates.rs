@@ -373,7 +373,7 @@ pub fn build_labels(spec: &Spec, spec_path: &Path) -> BTreeMap<String, String> {
         // Однострочная версия; оригинал — в spec.content.base64.
         m.insert(
             "org.appspec.package.description".into(),
-            v.replace('\n', " ").replace('\r', " "),
+            v.replace(['\n', '\r'], " "),
         );
     }
     if let Some(v) = &pkg.license {
@@ -396,7 +396,7 @@ pub fn build_labels(spec: &Spec, spec_path: &Path) -> BTreeMap<String, String> {
     if let Some(v) = pkg.summary.as_ref().or(pkg.description.as_ref()) {
         m.insert(
             "org.label-schema.description".into(),
-            v.replace('\n', " ").replace('\r', " "),
+            v.replace(['\n', '\r'], " "),
         );
     }
     if let Some(v) = &pkg.license {
@@ -411,11 +411,14 @@ pub fn build_labels(spec: &Spec, spec_path: &Path) -> BTreeMap<String, String> {
 
     // --- OCI image spec (современный стандарт) ---
     m.insert("org.opencontainers.image.title".into(), pkg.name.clone());
-    m.insert("org.opencontainers.image.version".into(), pkg.version.clone());
+    m.insert(
+        "org.opencontainers.image.version".into(),
+        pkg.version.clone(),
+    );
     if let Some(v) = pkg.summary.as_ref().or(pkg.description.as_ref()) {
         m.insert(
             "org.opencontainers.image.description".into(),
-            v.replace('\n', " ").replace('\r', " "),
+            v.replace(['\n', '\r'], " "),
         );
     }
     if let Some(v) = &pkg.license {

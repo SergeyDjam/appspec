@@ -63,10 +63,14 @@ impl Spec {
 
 #[derive(Debug, Default, Deserialize, Serialize)]
 pub struct Dependencies {
-    #[serde(default)] pub requires:  Vec<String>,
-    #[serde(default)] pub provides:  Vec<String>,
-    #[serde(default)] pub conflicts: Vec<String>,
-    #[serde(default)] pub replaces:  Vec<String>,
+    #[serde(default)]
+    pub requires: Vec<String>,
+    #[serde(default)]
+    pub provides: Vec<String>,
+    #[serde(default)]
+    pub conflicts: Vec<String>,
+    #[serde(default)]
+    pub replaces: Vec<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -265,7 +269,10 @@ fn validate_base_digest(d: &str) -> Result<()> {
             d
         );
     }
-    if !hex.chars().all(|c| c.is_ascii_digit() || ('a'..='f').contains(&c)) {
+    if !hex
+        .chars()
+        .all(|c| c.is_ascii_digit() || ('a'..='f').contains(&c))
+    {
         bail!("base_digest hex must be lowercase [0-9a-f]: `{}`", d);
     }
     Ok(())
@@ -316,8 +323,7 @@ fn validate_pkg_name(name: &str) -> Result<()> {
         bail!("invalid package name `{}`: must start with [a-z0-9]", name);
     }
     for c in chars {
-        let ok = (c.is_ascii_alphanumeric() && !c.is_ascii_uppercase())
-            || "._-".contains(c);
+        let ok = (c.is_ascii_alphanumeric() && !c.is_ascii_uppercase()) || "._-".contains(c);
         if !ok {
             bail!("invalid package name `{}`: unexpected char `{}`", name, c);
         }
@@ -397,44 +403,76 @@ pub struct Scratch {
 
 #[derive(Debug, Default, Deserialize, Serialize)]
 pub struct Runtime {
-    #[serde(default)] pub sif_file: Option<String>,
-    #[serde(default)] pub image_name: Option<String>,
-    #[serde(default)] pub vars: BTreeMap<String, String>,
-    #[serde(default)] pub state_dirs: Vec<String>,
-    #[serde(default)] pub binds: Vec<String>,
-    #[serde(default)] pub optional_binds: Vec<String>,
-    #[serde(default)] pub env_passthrough: Option<Vec<String>>,
-    #[serde(default)] pub xauthority_auto: Option<bool>,
-    #[serde(default)] pub pulse_auto: Option<bool>,
-    #[serde(default)] pub setup: Option<String>,
-    #[serde(default)] pub entry: Option<String>,
-    #[serde(default)] pub create_dirs: Vec<String>,
-    #[serde(default)] pub mode: Option<String>,
-    #[serde(default)] pub command: Option<String>,
-    #[serde(default)] pub workdir: Option<String>,
-    #[serde(default)] pub persist: Option<bool>,
-    #[serde(default)] pub template: Option<String>,
-    #[serde(default)] pub template_file: Option<PathBuf>,
-    #[serde(default)] pub template_dir: Option<PathBuf>,
+    #[serde(default)]
+    pub sif_file: Option<String>,
+    #[serde(default)]
+    pub image_name: Option<String>,
+    #[serde(default)]
+    pub vars: BTreeMap<String, String>,
+    #[serde(default)]
+    pub state_dirs: Vec<String>,
+    #[serde(default)]
+    pub binds: Vec<String>,
+    #[serde(default)]
+    pub optional_binds: Vec<String>,
+    #[serde(default)]
+    pub env_passthrough: Option<Vec<String>>,
+    #[serde(default)]
+    pub xauthority_auto: Option<bool>,
+    #[serde(default)]
+    pub pulse_auto: Option<bool>,
+    #[serde(default)]
+    pub setup: Option<String>,
+    #[serde(default)]
+    pub entry: Option<String>,
+    #[serde(default)]
+    pub create_dirs: Vec<String>,
+    #[serde(default)]
+    pub mode: Option<String>,
+    #[serde(default)]
+    pub command: Option<String>,
+    #[serde(default)]
+    pub workdir: Option<String>,
+    #[serde(default)]
+    pub persist: Option<bool>,
+    #[serde(default)]
+    pub template: Option<String>,
+    #[serde(default)]
+    pub template_file: Option<PathBuf>,
+    #[serde(default)]
+    pub template_dir: Option<PathBuf>,
 }
 
 // --- install (без изменений) ----------------------------------------------
 
 #[derive(Debug, Default, Deserialize, Serialize)]
 pub struct Install {
-    #[serde(default)] pub scope: Option<String>,
-    #[serde(default)] pub sif_dir: Option<PathBuf>,
-    #[serde(default)] pub launcher_name: Option<String>,
-    #[serde(default)] pub desktop: Option<bool>,
-    #[serde(default)] pub icon: Option<PathBuf>,
-    #[serde(default)] pub categories: Vec<String>,
-    #[serde(default)] pub mime_types: Vec<String>,
-    #[serde(default)] pub comment: Option<String>,
-    #[serde(default)] pub wm_class: Option<String>,
-    #[serde(default)] pub extra_files: Vec<ExtraFile>,
-    #[serde(default)] pub user: ScopeOverride,
-    #[serde(default)] pub global: ScopeOverride,
-    #[serde(default)] pub ipfs: IpfsConfig,
+    #[serde(default)]
+    pub scope: Option<String>,
+    #[serde(default)]
+    pub sif_dir: Option<PathBuf>,
+    #[serde(default)]
+    pub launcher_name: Option<String>,
+    #[serde(default)]
+    pub desktop: Option<bool>,
+    #[serde(default)]
+    pub icon: Option<PathBuf>,
+    #[serde(default)]
+    pub categories: Vec<String>,
+    #[serde(default)]
+    pub mime_types: Vec<String>,
+    #[serde(default)]
+    pub comment: Option<String>,
+    #[serde(default)]
+    pub wm_class: Option<String>,
+    #[serde(default)]
+    pub extra_files: Vec<ExtraFile>,
+    #[serde(default)]
+    pub user: ScopeOverride,
+    #[serde(default)]
+    pub global: ScopeOverride,
+    #[serde(default)]
+    pub ipfs: IpfsConfig,
 }
 
 #[derive(Debug, Default, Deserialize, Serialize)]
@@ -454,9 +492,14 @@ pub struct ScopeOverride {
 
 #[derive(Debug, Default, Deserialize, Serialize)]
 pub struct IpfsConfig {
-    #[serde(default)] pub enabled: Option<bool>,
-    #[serde(default)] pub pin: Option<bool>,
-    #[serde(default)] pub api_url: Option<String>,
-    #[serde(default)] pub gateway: Option<String>,
-    #[serde(default)] pub ipns_key: Option<String>,
+    #[serde(default)]
+    pub enabled: Option<bool>,
+    #[serde(default)]
+    pub pin: Option<bool>,
+    #[serde(default)]
+    pub api_url: Option<String>,
+    #[serde(default)]
+    pub gateway: Option<String>,
+    #[serde(default)]
+    pub ipns_key: Option<String>,
 }

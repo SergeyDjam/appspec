@@ -37,8 +37,8 @@ pub struct LockComponent {
 
 impl LockFile {
     pub fn load(path: &Path) -> Result<Self> {
-        let text = std::fs::read_to_string(path)
-            .with_context(|| format!("reading {}", path.display()))?;
+        let text =
+            std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
         Ok(toml::from_str(&text)?)
     }
 
@@ -50,10 +50,13 @@ impl LockFile {
             .with_context(|| format!("writing {}", path.display()))?;
         Ok(())
     }
-    
+
     #[allow(dead_code)] // reserved: bundle build --locked (E4)
     pub fn by_name(&self) -> BTreeMap<&str, &LockComponent> {
-        self.components.iter().map(|c| (c.name.as_str(), c)).collect()
+        self.components
+            .iter()
+            .map(|c| (c.name.as_str(), c))
+            .collect()
     }
 }
 
@@ -70,12 +73,10 @@ pub fn default_path(spec_path: &Path) -> PathBuf {
 pub fn generate(file: &BundleFile, _spec_path: &Path) -> Result<LockFile> {
     use crate::repo::{default_root, layout::RepoRoot};
 
-    let root = RepoRoot::open(&default_root())
-        .map_err(|e| anyhow!("repo not available: {e:#}"))?;
-    let index: crate::repo::meta::IndexV1 = serde_json::from_str(
-        &std::fs::read_to_string(root.index_path())?,
-    )
-    .context("parsing repo index.json")?;
+    let root = RepoRoot::open(&default_root()).map_err(|e| anyhow!("repo not available: {e:#}"))?;
+    let index: crate::repo::meta::IndexV1 =
+        serde_json::from_str(&std::fs::read_to_string(root.index_path())?)
+            .context("parsing repo index.json")?;
 
     let mut components = Vec::new();
     for c in &file.components {
@@ -119,15 +120,15 @@ pub fn check_drift(lock: &LockFile) -> Result<Vec<String>> {
     use crate::repo::{default_root, layout::RepoRoot};
 
     let mut warns = Vec::new();
-    let root = RepoRoot::open(&default_root())
-        .map_err(|e| anyhow!("repo not available: {e:#}"))?;
-    let index: crate::repo::meta::IndexV1 = serde_json::from_str(
-        &std::fs::read_to_string(root.index_path())?,
-    )
-    .context("parsing repo index.json")?;
+    let root = RepoRoot::open(&default_root()).map_err(|e| anyhow!("repo not available: {e:#}"))?;
+    let index: crate::repo::meta::IndexV1 =
+        serde_json::from_str(&std::fs::read_to_string(root.index_path())?)
+            .context("parsing repo index.json")?;
 
     for c in &lock.components {
-        let Some((n, v)) = c.repo.split_once(':') else { continue };
+        let Some((n, v)) = c.repo.split_once(':') else {
+            continue;
+        };
         let n = n.to_ascii_lowercase();
         match index.packages.get(&n).and_then(|p| p.versions.get(v)) {
             Some(iv) if iv.sif_sha256 == c.sif_sha256 => { /* ok */ }

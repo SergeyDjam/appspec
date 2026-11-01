@@ -23,9 +23,9 @@ use super::meta::IndexV1;
 use super::util::{blob_path, sha256_file};
 
 pub const INDEX_ARTIFACT_TYPE: &str = "application/vnd.appspec.index.v1+json";
-pub const SIF_ARTIFACT_TYPE: &str   = "application/vnd.appspec.sif.v1+json";
-pub const INDEX_MEDIA_TYPE: &str    = "application/json";
-pub const SIF_MEDIA_TYPE: &str      = "application/vnd.sylabs.sif";
+pub const SIF_ARTIFACT_TYPE: &str = "application/vnd.appspec.sif.v1+json";
+pub const INDEX_MEDIA_TYPE: &str = "application/json";
+pub const SIF_MEDIA_TYPE: &str = "application/vnd.sylabs.sif";
 
 pub fn oras_bin() -> String {
     std::env::var("APPSPEC_ORAS").unwrap_or_else(|_| "oras".to_string())
@@ -36,9 +36,8 @@ pub fn which_oras() -> bool {
     if bin.contains('/') {
         return Path::new(&bin).is_file();
     }
-    std::env::var_os("PATH").is_some_and(|p| {
-        std::env::split_paths(&p).any(|d| d.join(&bin).is_file())
-    })
+    std::env::var_os("PATH")
+        .is_some_and(|p| std::env::split_paths(&p).any(|d| d.join(&bin).is_file()))
 }
 
 pub struct OciExportOpts {
@@ -68,8 +67,7 @@ pub fn export_oci(root: &RepoRoot, opts: OciExportOpts) -> Result<OciExportOutco
 
     let index_text = std::fs::read_to_string(root.index_path())
         .with_context(|| format!("reading {}", root.index_path().display()))?;
-    let index: IndexV1 = serde_json::from_str(&index_text)
-        .context("parsing local index.json")?;
+    let index: IndexV1 = serde_json::from_str(&index_text).context("parsing local index.json")?;
 
     let (base, index_repo) = match opts.registry.as_deref() {
         Some(r) => {
@@ -94,15 +92,29 @@ pub fn export_oci(root: &RepoRoot, opts: OciExportOpts) -> Result<OciExportOutco
         "--artifact-type".to_string(),
         INDEX_ARTIFACT_TYPE.to_string(),
     ];
-    push_annotation(&mut index_args, "org.opencontainers.image.title", "appspec-index");
-    push_annotation(&mut index_args, "org.opencontainers.image.description",
-        &format!("appspec index for {}", index.repo));
+    push_annotation(
+        &mut index_args,
+        "org.opencontainers.image.title",
+        "appspec-index",
+    );
+    push_annotation(
+        &mut index_args,
+        "org.opencontainers.image.description",
+        &format!("appspec index for {}", index.repo),
+    );
     push_annotation(&mut index_args, "org.appspec.repo", &index.repo);
     push_annotation(&mut index_args, "org.appspec.updated", &index.updated);
     push_annotation(&mut index_args, "org.appspec.generator", &index.generator);
-    push_annotation(&mut index_args, "org.appspec.package_count",
-        &format!("{}", total_versions));
-    index_args.push(format!("{}:{}", root.index_path().display(), INDEX_MEDIA_TYPE));
+    push_annotation(
+        &mut index_args,
+        "org.appspec.package_count",
+        &format!("{}", total_versions),
+    );
+    index_args.push(format!(
+        "{}:{}",
+        root.index_path().display(),
+        INDEX_MEDIA_TYPE
+    ));
 
     run_oras(&index_args, opts.dry_run)?;
     pushed.push(index_ref.clone());
@@ -114,7 +126,9 @@ pub fn export_oci(root: &RepoRoot, opts: OciExportOpts) -> Result<OciExportOutco
             if !blob.is_file() {
                 eprintln!(
                     "warning: skip {}:{} — blob {} missing",
-                    name, ver_key, blob.display()
+                    name,
+                    ver_key,
+                    blob.display()
                 );
                 continue;
             }
@@ -126,7 +140,9 @@ pub fn export_oci(root: &RepoRoot, opts: OciExportOpts) -> Result<OciExportOutco
             if actual != v.sif_sha256 {
                 bail!(
                     "blob {} sha256 mismatch: expected {}, got {}",
-                    blob.display(), v.sif_sha256, actual
+                    blob.display(),
+                    v.sif_sha256,
+                    actual
                 );
             }
 

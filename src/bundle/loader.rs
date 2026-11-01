@@ -237,8 +237,8 @@ fn resolve_repo_source(pv: &str, label: &str) -> Result<ResolvedSource> {
 
     let index_text = std::fs::read_to_string(root.index_path())
         .with_context(|| format!("reading {}", root.index_path().display()))?;
-    let index: crate::repo::meta::IndexV1 = serde_json::from_str(&index_text)
-        .with_context(|| "parsing repo index.json".to_string())?;
+    let index: crate::repo::meta::IndexV1 =
+        serde_json::from_str(&index_text).with_context(|| "parsing repo index.json".to_string())?;
 
     let pkg = index
         .packages
@@ -785,5 +785,6 @@ pub fn bundle_cache_dir(bundle_name: &str) -> PathBuf {
 }
 
 fn which(name: &str) -> bool {
-    std::env::var_os("PATH").is_some_and(|paths| std::env::split_paths(&paths).any(|p| p.join(name).is_file()))
+    std::env::var_os("PATH")
+        .is_some_and(|paths| std::env::split_paths(&paths).any(|p| p.join(name).is_file()))
 }

@@ -13,8 +13,7 @@ pub struct PushOutcome {
 }
 
 pub fn push_one(sif: &Path, server_url: &str, token: &str) -> Result<PushOutcome> {
-    let body = std::fs::read(sif)
-        .with_context(|| format!("reading {}", sif.display()))?;
+    let body = std::fs::read(sif).with_context(|| format!("reading {}", sif.display()))?;
     let sha = sha256_file(sif)?;
 
     let url = format!("{}/api/v1/push", server_url.trim_end_matches('/'));
@@ -43,6 +42,8 @@ pub fn push_one(sif: &Path, server_url: &str, token: &str) -> Result<PushOutcome
         413 => bail!("payload too large (413)"),
         other => bail!(
             "push failed: status={} body={}",
-            other, String::from_utf8_lossy(&resp_body)),
+            other,
+            String::from_utf8_lossy(&resp_body)
+        ),
     }
 }

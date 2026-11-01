@@ -8,7 +8,7 @@ use super::util::{atomic_write, sha256_hex};
 
 pub struct PullOpts {
     pub from: Option<String>,
-    pub via: Option<String>,   // "http" | "ipfs" | "path"
+    pub via: Option<String>, // "http" | "ipfs" | "path"
     pub spec_only: bool,
     pub sif_out: Option<PathBuf>,
     pub trusted_key: Option<PathBuf>,
@@ -16,7 +16,8 @@ pub struct PullOpts {
 }
 
 pub fn pull(local_root: &RepoRoot, name_ver: &str, opts: PullOpts) -> Result<()> {
-    let (name, ver) = name_ver.split_once(':')
+    let (name, ver) = name_ver
+        .split_once(':')
         .ok_or_else(|| anyhow!("expected NAME:VERSION-RELEASE, got `{}`", name_ver))?;
     let name = name.to_ascii_lowercase();
 
@@ -63,28 +64,37 @@ fn pull_from_http(
 
     let url = format!("{}/index.json", base);
     let (status, _h, body) = http_request(&url, "GET", &[], None)?;
-    if status != 200 { bail!("GET {} returned {}", url, status); }
+    if status != 200 {
+        bail!("GET {} returned {}", url, status);
+    }
 
-    let index_text = std::str::from_utf8(&body)
-        .context("remote index.json is not valid UTF-8")?;
+    let index_text = std::str::from_utf8(&body).context("remote index.json is not valid UTF-8")?;
     let trusted = super::sign::load_trusted_keys(opts.trusted_key.as_deref())?;
     super::sign::verify_remote_index(index_text, &trusted, opts.allow_unsigned)?;
 
-    let index: IndexV1 = serde_json::from_str(index_text)
-        .context("parsing remote index.json")?;
+    let index: IndexV1 = serde_json::from_str(index_text).context("parsing remote index.json")?;
 
-    let pkg = index.packages.get(name)
+    let pkg = index
+        .packages
+        .get(name)
         .ok_or_else(|| anyhow!("package `{}` not in remote index", name))?;
-    let v = pkg.versions.get(ver)
+    let v = pkg
+        .versions
+        .get(ver)
         .ok_or_else(|| anyhow!("{}:{} not in remote index", name, ver))?;
 
     let spec_url = format!("{}/packages/{}/{}/spec.appspec", base, name, ver);
     let (s, _h, spec_body) = http_request(&spec_url, "GET", &[], None)?;
-    if s != 200 { bail!("GET {} returned {}", spec_url, s); }
+    if s != 200 {
+        bail!("GET {} returned {}", spec_url, s);
+    }
     let actual_spec_sha = sha256_hex(&spec_body);
     if actual_spec_sha != v.spec_sha256 {
-        bail!("spec sha256 mismatch: expected {}, got {}",
-            v.spec_sha256, actual_spec_sha);
+        bail!(
+            "spec sha256 mismatch: expected {}, got {}",
+            v.spec_sha256,
+            actual_spec_sha
+        );
     }
 
     let meta = build_meta(name, v);
@@ -100,15 +110,22 @@ fn pull_from_http(
     let rest = &v.sif_sha256[2..];
     let blob_url = format!("{}/blobs/sha256/{}/{}", base, ab, rest);
     let (bs, _h, blob_body) = http_request(&blob_url, "GET", &[], None)?;
-    if bs != 200 { bail!("GET {} returned {}", blob_url, bs); }
+    if bs != 200 {
+        bail!("GET {} returned {}", blob_url, bs);
+    }
     let actual_sha = sha256_hex(&blob_body);
     if actual_sha != v.sif_sha256 {
-        bail!("blob sha256 mismatch: expected {}, got {}",
-            v.sif_sha256, actual_sha);
+        bail!(
+            "blob sha256 mismatch: expected {}, got {}",
+            v.sif_sha256,
+            actual_sha
+        );
     }
 
     if let Some(out) = &opts.sif_out {
-        if let Some(p) = out.parent() { std::fs::create_dir_all(p)?; }
+        if let Some(p) = out.parent() {
+            std::fs::create_dir_all(p)?;
+        }
         atomic_write(out, &blob_body)?;
         println!("pulled: {}:{} → {}", name, ver, out.display());
         return Ok(());
@@ -133,7 +150,11 @@ fn pull_from_path(
 ) -> Result<()> {
     let src_root = RepoRoot::open(from)
         .with_context(|| format!("opening source repo at {}", from.display()))?;
-    let meta_path = src_root.packages_dir().join(name).join(ver).join("meta.json");
+    let meta_path = src_root
+        .packages_dir()
+        .join(name)
+        .join(ver)
+        .join("meta.json");
     if !meta_path.is_file() {
         bail!("not found in {}: {}:{}", from.display(), name, ver);
     }
@@ -150,7 +171,9 @@ fn pull_from_path(
     }
 
     if let Some(out) = &opts.sif_out {
-        if let Some(p) = out.parent() { std::fs::create_dir_all(p)?; }
+        if let Some(p) = out.parent() {
+            std::fs::create_dir_all(p)?;
+        }
         std::fs::copy(&blob_src, out)?;
         println!("pulled: {}:{} → {}", name, ver, out.display());
         return Ok(());
@@ -168,12 +191,7 @@ fn pull_from_path(
 // IPFS: локальный index → ipfs_cid → ipfs cat
 // ===========================================================================
 
-fn pull_via_ipfs(
-    local_root: &RepoRoot,
-    name: &str,
-    ver: &str,
-    opts: &PullOpts,
-) -> Result<()> {
+fn pull_via_ipfs(local_root: &RepoRoot, name: &str, ver: &str, opts: &PullOpts) -> Result<()> {
     if !super::ipfs::which_ipfs() {
         bail!(
             "`{}` not found in PATH; required for --via ipfs",
@@ -185,15 +203,23 @@ fn pull_via_ipfs(
         .context("local index.json missing; pull --via ipfs needs a local index")?;
     let index: IndexV1 = serde_json::from_str(&index_text)?;
 
-    let pkg = index.packages.get(name)
+    let pkg = index
+        .packages
+        .get(name)
         .ok_or_else(|| anyhow!("package `{}` not in local index", name))?;
-    let v = pkg.versions.get(ver)
+    let v = pkg
+        .versions
+        .get(ver)
         .ok_or_else(|| anyhow!("{}:{} not in local index", name, ver))?;
 
-    let cid = v.ipfs_cid.as_deref().ok_or_else(|| anyhow!(
-        "no ipfs_cid for {}:{} — first `appspec repo add --pin-ipfs` \
-         or `appspec repo publish-index` and re-add", name, ver
-    ))?;
+    let cid = v.ipfs_cid.as_deref().ok_or_else(|| {
+        anyhow!(
+            "no ipfs_cid for {}:{} — first `appspec repo add --pin-ipfs` \
+         or `appspec repo publish-index` and re-add",
+            name,
+            ver
+        )
+    })?;
 
     pull_blob_from_ipfs(local_root, name, ver, cid, v, opts)
 }
@@ -219,24 +245,31 @@ fn pull_from_ipfs_index(
 
     let index_bytes = super::ipfs::cat(index_cid)
         .with_context(|| format!("ipfs cat {} (index.json)", index_cid))?;
-    let index_text = std::str::from_utf8(&index_bytes)
-        .context("parsing IPFS index.json: not valid UTF-8")?;
+    let index_text =
+        std::str::from_utf8(&index_bytes).context("parsing IPFS index.json: not valid UTF-8")?;
 
     let trusted = super::sign::load_trusted_keys(opts.trusted_key.as_deref())?;
     super::sign::verify_remote_index(index_text, &trusted, opts.allow_unsigned)?;
 
-    let index: IndexV1 = serde_json::from_str(index_text)
-        .context("parsing IPFS index.json")?;
+    let index: IndexV1 = serde_json::from_str(index_text).context("parsing IPFS index.json")?;
 
-    let pkg = index.packages.get(name)
+    let pkg = index
+        .packages
+        .get(name)
         .ok_or_else(|| anyhow!("package `{}` not in IPFS index", name))?;
-    let v = pkg.versions.get(ver)
+    let v = pkg
+        .versions
+        .get(ver)
         .ok_or_else(|| anyhow!("{}:{} not in IPFS index", name, ver))?;
 
-    let cid = v.ipfs_cid.as_deref().ok_or_else(|| anyhow!(
-        "no ipfs_cid for {}:{} in IPFS index — publisher must run \
-         `appspec repo add --pin-ipfs`", name, ver
-    ))?;
+    let cid = v.ipfs_cid.as_deref().ok_or_else(|| {
+        anyhow!(
+            "no ipfs_cid for {}:{} in IPFS index — publisher must run \
+         `appspec repo add --pin-ipfs`",
+            name,
+            ver
+        )
+    })?;
 
     pull_blob_from_ipfs(local_root, name, ver, cid, v, opts)
 }
@@ -255,18 +288,21 @@ fn pull_blob_from_ipfs(
 ) -> Result<()> {
     super::ipfs::validate_cid(cid)?;
 
-    let blob_bytes = super::ipfs::cat(cid)
-        .with_context(|| format!("ipfs cat {}", cid))?;
+    let blob_bytes = super::ipfs::cat(cid).with_context(|| format!("ipfs cat {}", cid))?;
     let actual_sha = sha256_hex(&blob_bytes);
     if actual_sha != v.sif_sha256 {
         bail!(
             "blob sha256 mismatch from IPFS: expected {}, got {} (cid {})",
-            v.sif_sha256, actual_sha, cid
+            v.sif_sha256,
+            actual_sha,
+            cid
         );
     }
 
     if let Some(out) = &opts.sif_out {
-        if let Some(p) = out.parent() { std::fs::create_dir_all(p)?; }
+        if let Some(p) = out.parent() {
+            std::fs::create_dir_all(p)?;
+        }
         atomic_write(out, &blob_bytes)?;
         println!("pulled: {}:{} → {} (cid {})", name, ver, out.display(), cid);
         return Ok(());
@@ -279,7 +315,11 @@ fn pull_blob_from_ipfs(
     let meta = build_meta(name, v);
     write_version(local_root, name, ver, b"", &meta, Some(&blob_bytes))?;
 
-    let spec_path = local_root.packages_dir().join(name).join(ver).join("spec.appspec");
+    let spec_path = local_root
+        .packages_dir()
+        .join(name)
+        .join(ver)
+        .join("spec.appspec");
     if !spec_path.is_file() || std::fs::metadata(&spec_path)?.len() == 0 {
         eprintln!(
             "warning: spec.appspec для {}:{} не восстановлен из IPFS; \
@@ -315,7 +355,9 @@ fn write_version(
     atomic_write(&dir.join("meta.json"), &serde_json::to_vec_pretty(meta)?)?;
     if let Some(b) = blob {
         let blob_path = super::util::blob_path(&local_root.path, &meta.sif_sha256);
-        if let Some(p) = blob_path.parent() { std::fs::create_dir_all(p)?; }
+        if let Some(p) = blob_path.parent() {
+            std::fs::create_dir_all(p)?;
+        }
         atomic_write(&blob_path, b)?;
     }
     Ok(())
