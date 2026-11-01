@@ -56,7 +56,7 @@ pub fn run(root: &RepoRoot, dry_run: bool, keep: Option<usize>) -> Result<GcOutc
                     &meta_path,
                 )?)?);
             }
-            v.sort_by(|a, b| ver_key(b).cmp(&ver_key(a)));
+            v.sort_by_key(|a| std::cmp::Reverse(ver_key(a)));
             per_pkg.insert(name, v);
         }
     }
