@@ -1,4 +1,5 @@
 //! `repo serve`: HTTP-сервер поверх `TcpListener`. Thread-per-connection.
+//! Опционально TLS (E10), если в `config.toml` задан `[server.tls]`.
 //!
 //! Маршруты:
 //!   GET  /healthz
@@ -9,8 +10,8 @@
 //!   POST /api/v1/push
 
 use anyhow::{Context, Result};
-use std::io::BufReader;
-use std::net::{TcpListener, TcpStream};
+use std::io::{BufReader, Read, Write};
+use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
@@ -36,8 +37,19 @@ impl ServerState {
 
 pub fn serve(root: &RepoRoot) -> Result<()> {
     let listen = root.config.server.listen.clone();
+
+    let tls_cfg: Option<Arc<rustls::ServerConfig>> =
+        match super::tls::resolve(&root.config.server.tls.cert, &root.config.server.tls.key)? {
+            Some((cert, key)) => {
+                crate::log(format!("repo serve: TLS enabled (cert={})", cert));
+                Some(super::tls::load_server_config(&cert, &key)?)
+            }
+            None => None,
+        };
+
     let listener = TcpListener::bind(&listen).with_context(|| format!("bind {}", listen))?;
-    crate::log(format!("repo serve: listening on http://{}", listen));
+    let scheme = if tls_cfg.is_some() { "https" } else { "http" };
+    crate::log(format!("repo serve: listening on {}://{}", scheme, listen));
 
     let state = Arc::new(ServerState::from_root(root));
 
@@ -45,9 +57,15 @@ pub fn serve(root: &RepoRoot) -> Result<()> {
         match stream {
             Ok(s) => {
                 let state = state.clone();
+                let tls = tls_cfg.clone();
                 std::thread::spawn(move || {
-                    if let Err(e) = handle(s, state) {
-                        eprintln!("[server] connection error: {e:#}");
+                    let peer = s.peer_addr().ok();
+                    if let Err(e) = handle(s, peer, state, tls) {
+                        if let Some(p) = peer {
+                            eprintln!("[server] {p}: {e:#}");
+                        } else {
+                            eprintln!("[server] connection error: {e:#}");
+                        }
                     }
                 });
             }
@@ -57,14 +75,53 @@ pub fn serve(root: &RepoRoot) -> Result<()> {
     Ok(())
 }
 
-fn handle(stream: TcpStream, state: Arc<ServerState>) -> Result<()> {
+fn handle(
+    stream: TcpStream,
+    peer: Option<SocketAddr>,
+    state: Arc<ServerState>,
+    tls: Option<Arc<rustls::ServerConfig>>,
+) -> Result<()> {
     let read_to = state.config.server.read_timeout_secs;
     let write_to = state.config.server.write_timeout_secs;
     stream.set_read_timeout(Some(std::time::Duration::from_secs(read_to)))?;
     stream.set_write_timeout(Some(std::time::Duration::from_secs(write_to)))?;
 
-    let mut reader = BufReader::new(stream.try_clone()?);
-    let req = match read_request(&mut reader, state.config.server.max_push_bytes) {
+    match tls {
+        Some(cfg) => {
+            let conn = rustls::ServerConnection::new(cfg)
+                .map_err(|e| anyhow::anyhow!("rustls handshake setup: {e}"))?;
+            let mut tls_stream = rustls::StreamOwned::new(conn, stream);
+            let result = handle_conn(&mut tls_stream, peer, state);
+            // Явный TLS shutdown: close_notify в очередь + flush в TCP.
+            // StreamOwned::drop пытается то же самое, но в rustls 0.23
+            // это не гарантирует, что alert попадёт на провод до drop.
+            tls_stream.conn.send_close_notify();
+            while tls_stream.conn.wants_write() {
+                if tls_stream.conn.write_tls(&mut tls_stream.sock).is_err() {
+                    break;
+                }
+            }
+            result
+        }
+        None => {
+            let mut plain = stream;
+            handle_conn(&mut plain, peer, state)
+        }
+    }
+}
+
+fn handle_conn<R: Read + Write>(
+    conn: &mut R,
+    peer: Option<SocketAddr>,
+    state: Arc<ServerState>,
+) -> Result<()> {
+    // BufReader живёт в блоке — после чтения conn освобождается для write.
+    let req_result = {
+        let mut reader = BufReader::new(&mut *conn);
+        read_request(&mut reader, state.config.server.max_push_bytes)
+    };
+
+    let req = match req_result {
         Ok(r) => r,
         Err(e) => {
             let resp = if format!("{e:#}").contains("body too large") {
@@ -72,21 +129,20 @@ fn handle(stream: TcpStream, state: Arc<ServerState>) -> Result<()> {
             } else {
                 Response::bad_request(&format!("{e:#}"))
             };
-            let mut out = stream;
-            return write_response(&mut out, &resp);
+            return write_response(conn, &resp);
         }
     };
 
     let started = std::time::Instant::now();
     let resp = route(&req, &state);
-    let mut out = stream;
-    write_response(&mut out, &resp)?;
+    write_response(conn, &resp)?;
 
     let ms = started.elapsed().as_millis();
     eprintln!(
         "{}",
         serde_json::json!({
             "ts": super::util::now_iso8601(),
+            "peer": peer.map(|p| p.to_string()),
             "method": req.method,
             "path": req.path,
             "status": resp.status,
