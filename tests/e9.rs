@@ -43,12 +43,16 @@ impl OrasMock {
     fn new() -> Self {
         let tmp = TempDir::new().unwrap();
         let bin = tmp.path().join("oras");
-        let map = tmp.path().join("map.json");
+        let map = tmp.path().join("map.txt");   // <ref> <path>, по строке
 
+        // Чистый POSIX sh. Без python3, без jq, без bash-специфики.
+        // Пути в тестах TempDir не содержат пробелов; `read -r r p`
+        // кладёт остаток строки в p без потери пробелов внутри.
         let script = r#"#!/bin/sh
 set -eu
 if [ "$1" != pull ]; then
-    echo "mock oras: expected pull, got $1" >&2; exit 1
+    echo "mock oras: expected pull, got $1" >&2
+    exit 1
 fi
 ref="$2"
 out=""
@@ -61,17 +65,26 @@ while [ "$#" -gt 0 ]; do
 done
 [ -n "$out" ] || { echo "mock oras: -o missing" >&2; exit 1; }
 mkdir -p "$out"
-# читаем map.json через python3 (jq нет в CI-образе)
-python3 -c "
-import json,sys,shutil,os
-m=json.load(open('$MOCK_ORAS_MAP'))
-ref=os.environ.get('MOCK_ORAS_REF_OVERRIDE') or '$ref'
-p=m.get(ref)
-if not p:
-    sys.stderr.write('mock oras: no mapping for ' + ref + '\n')
-    sys.exit(1)
-shutil.copy(p, os.path.join('$out', os.path.basename(p)))
-"
+
+match=""
+if [ -f "$MOCK_ORAS_MAP" ]; then
+    while IFS=' ' read -r r p; do
+        [ -z "$r" ] && continue
+        if [ "$r" = "$ref" ] && [ -n "$p" ]; then
+            match="$p"
+            break
+        fi
+    done < "$MOCK_ORAS_MAP"
+fi
+if [ -z "$match" ]; then
+    echo "mock oras: no mapping for $ref" >&2
+    exit 1
+fi
+if [ ! -f "$match" ]; then
+    echo "mock oras: mapped file missing: $match" >&2
+    exit 1
+fi
+cp "$match" "$out/$(basename "$match")"
 "#;
 
         fs::write(&bin, script).unwrap();
@@ -82,12 +95,8 @@ shutil.copy(p, os.path.join('$out', os.path.basename(p)))
             m.set_mode(0o755);
             fs::set_permissions(&bin, m).unwrap();
         }
-        fs::write(&map, b"{}").unwrap();
-        OrasMock {
-            _tmp: tmp,
-            bin,
-            map,
-        }
+        fs::write(&map, b"").unwrap();  // пустая карта
+        OrasMock { _tmp: tmp, bin, map }
     }
 
     fn set_env(&self) {
@@ -96,16 +105,19 @@ shutil.copy(p, os.path.join('$out', os.path.basename(p)))
     }
 
     fn register(&self, ref_str: &str, path: &std::path::Path) {
-        let mut map: serde_json::Value =
-            serde_json::from_str(&fs::read_to_string(&self.map).unwrap_or_default())
-                .unwrap_or_else(|_| serde_json::json!({}));
-        map.as_object_mut().unwrap().insert(
-            ref_str.to_string(),
-            serde_json::json!(path.to_string_lossy()),
-        );
-        fs::write(&self.map, serde_json::to_vec(&map).unwrap()).unwrap();
+        use std::io::Write;
+        let mut f = fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&self.map)
+            .unwrap();
+        // Рефы не содержат пробелов (ghcr.io/user/repo:tag).
+        // Пути TempDir тоже, но даже если бы содержали — `read -r r p`
+        // съел бы только первый пробел.
+        writeln!(f, "{} {}", ref_str, path.display()).unwrap();
     }
 }
+
 
 // ============================================================================
 // helpers
