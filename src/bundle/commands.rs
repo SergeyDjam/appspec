@@ -181,10 +181,18 @@ fn resolve_all(
 
 fn entry_hint(file: &model::BundleFile) -> Option<&str> {
     let b = &file.bundle.base;
-    if b.entry.is_some() { return Some(""); }
-    if b.setup.is_some() { return Some(""); }
-    if b.source.spec.is_some() { return Some(""); }
-    if b.source.repo.is_some() { return Some(""); }
+    if b.entry.is_some() {
+        return Some("");
+    }
+    if b.setup.is_some() {
+        return Some("");
+    }
+    if b.source.spec.is_some() {
+        return Some("");
+    }
+    if b.source.repo.is_some() {
+        return Some("");
+    }
     None
 }
 
@@ -218,13 +226,9 @@ pub fn build(a: BuildArgs) -> Result<i32> {
                         eprintln!("warning: {w}");
                     }
                 }
-                Err(e) => eprintln!(
-                    "warning: не могу сверить lock: {e:#}"
-                ),
+                Err(e) => eprintln!("warning: не могу сверить lock: {e:#}"),
             },
-            Err(e) => eprintln!(
-                "warning: не читается {}: {e:#}", lock_path.display()
-            ),
+            Err(e) => eprintln!("warning: не читается {}: {e:#}", lock_path.display()),
         }
     }
 

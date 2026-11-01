@@ -16,8 +16,8 @@ use std::path::{Path, PathBuf};
 
 // Публично реэкспортируем типы ключей: `sign::SigningKey`, `sign::VerifyingKey`
 // доступны и для `commands.rs`, и для тестов.
-pub use ed25519_dalek::{SigningKey, VerifyingKey};
 use ed25519_dalek::{Signature, Signer, Verifier};
+pub use ed25519_dalek::{SigningKey, VerifyingKey};
 
 pub const SIG_PREFIX: &str = "ed25519:";
 pub type TrustedKey = (String, VerifyingKey);
@@ -34,8 +34,8 @@ pub fn jcs_canonicalize(v: &Value) -> Vec<u8> {
 
 fn jcs_write(v: &Value, out: &mut Vec<u8>) {
     match v {
-        Value::Null        => out.extend_from_slice(b"null"),
-        Value::Bool(true)  => out.extend_from_slice(b"true"),
+        Value::Null => out.extend_from_slice(b"null"),
+        Value::Bool(true) => out.extend_from_slice(b"true"),
         Value::Bool(false) => out.extend_from_slice(b"false"),
         Value::Number(n) => {
             if let Some(i) = n.as_i64() {
@@ -50,7 +50,9 @@ fn jcs_write(v: &Value, out: &mut Vec<u8>) {
         Value::Array(arr) => {
             out.push(b'[');
             for (i, x) in arr.iter().enumerate() {
-                if i > 0 { out.push(b','); }
+                if i > 0 {
+                    out.push(b',');
+                }
                 jcs_write(x, out);
             }
             out.push(b']');
@@ -60,7 +62,9 @@ fn jcs_write(v: &Value, out: &mut Vec<u8>) {
             let mut keys: Vec<&String> = map.keys().collect();
             keys.sort_by(|a, b| a.as_bytes().cmp(b.as_bytes()));
             for (i, k) in keys.iter().enumerate() {
-                if i > 0 { out.push(b','); }
+                if i > 0 {
+                    out.push(b',');
+                }
                 jcs_write_string(k, out);
                 out.push(b':');
                 jcs_write(&map[*k], out);
@@ -74,13 +78,13 @@ fn jcs_write_string(s: &str, out: &mut Vec<u8>) {
     out.push(b'"');
     for c in s.chars() {
         match c {
-            '"'   => out.extend_from_slice(b"\\\""),
-            '\\'  => out.extend_from_slice(b"\\\\"),
-            '\x08'=> out.extend_from_slice(b"\\b"),
-            '\x0c'=> out.extend_from_slice(b"\\f"),
-            '\n'  => out.extend_from_slice(b"\\n"),
-            '\r'  => out.extend_from_slice(b"\\r"),
-            '\t'  => out.extend_from_slice(b"\\t"),
+            '"' => out.extend_from_slice(b"\\\""),
+            '\\' => out.extend_from_slice(b"\\\\"),
+            '\x08' => out.extend_from_slice(b"\\b"),
+            '\x0c' => out.extend_from_slice(b"\\f"),
+            '\n' => out.extend_from_slice(b"\\n"),
+            '\r' => out.extend_from_slice(b"\\r"),
+            '\t' => out.extend_from_slice(b"\\t"),
             c if (c as u32) < 0x20 => {
                 out.extend_from_slice(format!("\\u{:04x}", c as u32).as_bytes());
             }
@@ -103,8 +107,7 @@ fn format_ecma_number(f: f64) -> String {
 
 /// Каноническая форма `index.json` без поля `signature`.
 pub fn canonical_index_bytes(index_text: &str) -> Result<Vec<u8>> {
-    let mut v: Value = serde_json::from_str(index_text)
-        .context("index.json is not valid JSON")?;
+    let mut v: Value = serde_json::from_str(index_text).context("index.json is not valid JSON")?;
     if let Some(obj) = v.as_object_mut() {
         obj.remove("signature");
     }
@@ -146,7 +149,9 @@ pub fn load_key(path: &Path) -> Result<SigningKey> {
 }
 
 pub fn save_key(path: &Path, key: &SigningKey) -> Result<()> {
-    if let Some(p) = path.parent() { std::fs::create_dir_all(p)?; }
+    if let Some(p) = path.parent() {
+        std::fs::create_dir_all(p)?;
+    }
     let text = format!("{}{}\n", SIG_PREFIX, hex_encode(&key.to_bytes()));
     std::fs::write(path, text)
         .with_context(|| format!("writing signing key {}", path.display()))?;
@@ -162,23 +167,33 @@ pub fn save_key(path: &Path, key: &SigningKey) -> Result<()> {
 
 pub fn default_key_path() -> PathBuf {
     if let Ok(v) = std::env::var("APPSPEC_SIGNING_KEY") {
-        if !v.is_empty() { return PathBuf::from(v); }
+        if !v.is_empty() {
+            return PathBuf::from(v);
+        }
     }
     if let Ok(v) = std::env::var("XDG_CONFIG_HOME") {
-        if !v.is_empty() { return PathBuf::from(v).join("appspec/signing.key"); }
+        if !v.is_empty() {
+            return PathBuf::from(v).join("appspec/signing.key");
+        }
     }
     if let Ok(h) = std::env::var("HOME") {
-        if !h.is_empty() { return PathBuf::from(h).join(".config/appspec/signing.key"); }
+        if !h.is_empty() {
+            return PathBuf::from(h).join(".config/appspec/signing.key");
+        }
     }
     PathBuf::from("/tmp/appspec-signing.key")
 }
 
 pub fn default_trusted_keys_path() -> PathBuf {
     if let Ok(v) = std::env::var("XDG_CONFIG_HOME") {
-        if !v.is_empty() { return PathBuf::from(v).join("appspec/trusted-keys.toml"); }
+        if !v.is_empty() {
+            return PathBuf::from(v).join("appspec/trusted-keys.toml");
+        }
     }
     if let Ok(h) = std::env::var("HOME") {
-        if !h.is_empty() { return PathBuf::from(h).join(".config/appspec/trusted-keys.toml"); }
+        if !h.is_empty() {
+            return PathBuf::from(h).join(".config/appspec/trusted-keys.toml");
+        }
     }
     PathBuf::from("/tmp/appspec-trusted-keys.toml")
 }
@@ -208,10 +223,10 @@ pub fn load_trusted_keys(extra: Option<&Path>) -> Result<Vec<TrustedKey>> {
 }
 
 fn parse_trusted_file(path: &Path) -> Result<Vec<TrustedKey>> {
-    let text = std::fs::read_to_string(path)
-        .with_context(|| format!("reading {}", path.display()))?;
-    let v: toml::Value = toml::from_str(&text)
-        .with_context(|| format!("parsing {}", path.display()))?;
+    let text =
+        std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
+    let v: toml::Value =
+        toml::from_str(&text).with_context(|| format!("parsing {}", path.display()))?;
     parse_trusted_toml(&v, &path.display().to_string())
 }
 
@@ -219,8 +234,14 @@ fn parse_trusted_toml(v: &toml::Value, origin: &str) -> Result<Vec<TrustedKey>> 
     let mut out = Vec::new();
     if let Some(arr) = v.get("keys").and_then(|x| x.as_array()) {
         for k in arr {
-            let name = k.get("name").and_then(|x| x.as_str()).unwrap_or("?").to_string();
-            let pk = k.get("pubkey").and_then(|x| x.as_str())
+            let name = k
+                .get("name")
+                .and_then(|x| x.as_str())
+                .unwrap_or("?")
+                .to_string();
+            let pk = k
+                .get("pubkey")
+                .and_then(|x| x.as_str())
                 .ok_or_else(|| anyhow::anyhow!("{}: key entry without `pubkey`", origin))?;
             out.push((name, parse_pubkey(pk)?));
         }
@@ -239,16 +260,17 @@ pub fn sign_index(index_text: &str, key: &SigningKey) -> Result<String> {
 }
 
 pub fn verify_index(index_text: &str, pubkey: &VerifyingKey) -> Result<()> {
-    let v: Value = serde_json::from_str(index_text)
-        .context("index.json is not valid JSON")?;
+    let v: Value = serde_json::from_str(index_text).context("index.json is not valid JSON")?;
     let sig_str = v.get("signature").and_then(|s| s.as_str()).unwrap_or("");
     if sig_str.is_empty() {
         bail!("index.json is not signed");
     }
-    let hex_sig = sig_str.strip_prefix(SIG_PREFIX)
-        .ok_or_else(|| anyhow::anyhow!(
-            "unsupported signature algorithm: expected prefix `{}`", SIG_PREFIX
-        ))?;
+    let hex_sig = sig_str.strip_prefix(SIG_PREFIX).ok_or_else(|| {
+        anyhow::anyhow!(
+            "unsupported signature algorithm: expected prefix `{}`",
+            SIG_PREFIX
+        )
+    })?;
     let bytes = hex_decode(hex_sig)?;
     if bytes.len() != 64 {
         bail!("signature must be 64 bytes, got {}", bytes.len());
@@ -256,7 +278,8 @@ pub fn verify_index(index_text: &str, pubkey: &VerifyingKey) -> Result<()> {
     let sig_arr: [u8; 64] = bytes.as_slice().try_into().unwrap();
     let sig = Signature::from_bytes(&sig_arr);
     let canon = canonical_index_bytes(index_text)?;
-    pubkey.verify(&canon, &sig)
+    pubkey
+        .verify(&canon, &sig)
         .map_err(|e| anyhow::anyhow!("signature mismatch: {e}"))
 }
 
@@ -270,8 +293,8 @@ pub fn verify_remote_index(
         return Ok(());
     }
 
-    let v: Value = serde_json::from_str(index_text)
-        .context("remote index.json is not valid JSON")?;
+    let v: Value =
+        serde_json::from_str(index_text).context("remote index.json is not valid JSON")?;
     let sig_str = v.get("signature").and_then(|s| s.as_str()).unwrap_or("");
     if sig_str.is_empty() {
         if allow_unsigned {
@@ -292,7 +315,8 @@ pub fn verify_remote_index(
     }
     bail!(
         "signature mismatch: no trusted key verifies the remote index.json \
-         ({} trusted key(s))", trusted.len()
+         ({} trusted key(s))",
+        trusted.len()
     );
 }
 
@@ -302,7 +326,9 @@ pub fn verify_remote_index(
 
 pub fn hex_encode(bytes: &[u8]) -> String {
     let mut s = String::with_capacity(bytes.len() * 2);
-    for b in bytes { s.push_str(&format!("{:02x}", b)); }
+    for b in bytes {
+        s.push_str(&format!("{:02x}", b));
+    }
     s
 }
 

@@ -25,7 +25,8 @@ impl Response {
     pub fn json(status: u16, reason: &'static str, v: serde_json::Value) -> Self {
         let body = serde_json::to_vec(&v).unwrap_or_else(|_| b"{}".to_vec());
         Response {
-            status, reason,
+            status,
+            reason,
             headers: vec![
                 ("Content-Type".into(), "application/json".into()),
                 ("Content-Length".into(), body.len().to_string()),
@@ -36,7 +37,8 @@ impl Response {
 
     pub fn bytes(status: u16, reason: &'static str, ctype: &str, body: Vec<u8>) -> Self {
         Response {
-            status, reason,
+            status,
+            reason,
             headers: vec![
                 ("Content-Type".into(), ctype.into()),
                 ("Content-Length".into(), body.len().to_string()),
@@ -49,32 +51,52 @@ impl Response {
         Response::json(404, "Not Found", serde_json::json!({"error":"not_found"}))
     }
     pub fn bad_request(msg: &str) -> Self {
-        Response::json(400, "Bad Request", serde_json::json!({"error":"invalid","reason":msg}))
+        Response::json(
+            400,
+            "Bad Request",
+            serde_json::json!({"error":"invalid","reason":msg}),
+        )
     }
     pub fn unauthorized() -> Self {
-        Response::json(401, "Unauthorized", serde_json::json!({"error":"unauthorized"}))
+        Response::json(
+            401,
+            "Unauthorized",
+            serde_json::json!({"error":"unauthorized"}),
+        )
     }
     pub fn too_large(limit: u64) -> Self {
-        Response::json(413, "Payload Too Large", serde_json::json!({
-            "error":"too_large", "limit_bytes": limit
-        }))
+        Response::json(
+            413,
+            "Payload Too Large",
+            serde_json::json!({
+                "error":"too_large", "limit_bytes": limit
+            }),
+        )
     }
     pub fn conflict(name: &str, ver: &str, existing: &str) -> Self {
-        Response::json(409, "Conflict", serde_json::json!({
-            "error":"conflict",
-            "reason": format!("{name}:{ver} already exists"),
-            "existing_sha256": existing
-        }))
+        Response::json(
+            409,
+            "Conflict",
+            serde_json::json!({
+                "error":"conflict",
+                "reason": format!("{name}:{ver} already exists"),
+                "existing_sha256": existing
+            }),
+        )
     }
     pub fn internal(msg: &str) -> Self {
-        Response::json(500, "Internal Server Error",
-            serde_json::json!({"error":"internal","reason":msg}))
+        Response::json(
+            500,
+            "Internal Server Error",
+            serde_json::json!({"error":"internal","reason":msg}),
+        )
     }
 }
 
 pub fn read_request<R: Read>(r: &mut BufReader<R>, max_body: u64) -> Result<Request> {
     let mut request_line = String::new();
-    r.read_line(&mut request_line).context("read request line")?;
+    r.read_line(&mut request_line)
+        .context("read request line")?;
     let request_line = request_line.trim_end_matches(&['\r', '\n'][..]);
     if request_line.is_empty() {
         bail!("empty request line");
@@ -92,7 +114,9 @@ pub fn read_request<R: Read>(r: &mut BufReader<R>, max_body: u64) -> Result<Requ
         let mut header_line = String::new();
         r.read_line(&mut header_line).context("read header line")?;
         let header_line = header_line.trim_end_matches(&['\r', '\n'][..]);
-        if header_line.is_empty() { break; }
+        if header_line.is_empty() {
+            break;
+        }
         if let Some((k, v)) = header_line.split_once(':') {
             headers.insert(k.trim().to_ascii_lowercase(), v.trim().to_string());
         }
@@ -110,7 +134,13 @@ pub fn read_request<R: Read>(r: &mut BufReader<R>, max_body: u64) -> Result<Requ
         r.read_exact(&mut body).context("read body")?;
     }
 
-    Ok(Request { method, path, version, headers, body })
+    Ok(Request {
+        method,
+        path,
+        version,
+        headers,
+        body,
+    })
 }
 
 pub fn write_response<W: Write>(w: &mut W, r: &Response) -> Result<()> {
@@ -166,7 +196,9 @@ pub fn http_request(
         let mut header_line = String::new();
         reader.read_line(&mut header_line)?;
         let header_line = header_line.trim_end_matches(&['\r', '\n'][..]);
-        if header_line.is_empty() { break; }
+        if header_line.is_empty() {
+            break;
+        }
         if let Some((k, v)) = header_line.split_once(':') {
             headers.insert(k.trim().to_ascii_lowercase(), v.trim().to_string());
         }
@@ -187,11 +219,12 @@ pub fn http_request(
 }
 
 fn parse_url(url: &str) -> Result<(String, u16, String)> {
-    let rest = url
-        .strip_prefix("http://")
-        .ok_or_else(|| anyhow!(
-            "only http:// URLs supported in v1 (use reverse proxy for https): {}", url
-        ))?;
+    let rest = url.strip_prefix("http://").ok_or_else(|| {
+        anyhow!(
+            "only http:// URLs supported in v1 (use reverse proxy for https): {}",
+            url
+        )
+    })?;
     let (host_port, path) = match rest.find('/') {
         Some(i) => (&rest[..i], &rest[i..]),
         None => (rest, "/"),

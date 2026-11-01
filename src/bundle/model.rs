@@ -41,11 +41,21 @@ impl SourceSpec {
         Ok(())
     }
     pub fn origin(&self) -> String {
-        if let Some(s) = &self.spec     { return format!("spec:{s}"); }
-        if let Some(s) = &self.sif      { return format!("sif:{s}"); }
-        if let Some(s) = &self.cid      { return format!("cid:{s}"); }
-        if let Some(s) = &self.manifest { return format!("manifest:{s}"); }
-        if let Some(s) = &self.repo     { return format!("repo:{s}"); }
+        if let Some(s) = &self.spec {
+            return format!("spec:{s}");
+        }
+        if let Some(s) = &self.sif {
+            return format!("sif:{s}");
+        }
+        if let Some(s) = &self.cid {
+            return format!("cid:{s}");
+        }
+        if let Some(s) = &self.manifest {
+            return format!("manifest:{s}");
+        }
+        if let Some(s) = &self.repo {
+            return format!("repo:{s}");
+        }
         "?".into()
     }
 }

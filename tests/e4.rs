@@ -38,9 +38,7 @@ fn sha256_hex(bytes: &[u8]) -> String {
 /// Хелпер для будущих тестов; отметим `#[allow]`, чтобы не ловить dead_code.
 #[allow(dead_code)]
 fn make_labels(pkg_name: &str, version: &str, release: &str) -> (Vec<u8>, serde_json::Value) {
-    let spec = format!(
-        "[package]\nname = \"{pkg_name}\"\nversion = \"{version}\"\n"
-    ).into_bytes();
+    let spec = format!("[package]\nname = \"{pkg_name}\"\nversion = \"{version}\"\n").into_bytes();
     let spec_b64 = base64::engine::general_purpose::STANDARD.encode(&spec);
     let spec_sha = sha256_hex(&spec);
     let labels = serde_json::json!({
@@ -74,21 +72,30 @@ where
         let mut buf = Vec::new();
         let mut byte = [0u8; 1];
         loop {
-            if stream.read_exact(&mut byte).is_err() { break; }
+            if stream.read_exact(&mut byte).is_err() {
+                break;
+            }
             buf.push(byte[0]);
-            if buf.ends_with(b"\r\n\r\n") { break; }
+            if buf.ends_with(b"\r\n\r\n") {
+                break;
+            }
         }
         let header_str = String::from_utf8_lossy(&buf);
-        let cl: usize = header_str.lines()
+        let cl: usize = header_str
+            .lines()
             .find_map(|l| {
                 let lower = l.to_ascii_lowercase();
                 if lower.starts_with("content-length:") {
                     l.split(':').nth(1).and_then(|v| v.trim().parse().ok())
-                } else { None }
+                } else {
+                    None
+                }
             })
             .unwrap_or(0);
         let mut body = vec![0u8; cl];
-        if cl > 0 { let _ = stream.read_exact(&mut body); }
+        if cl > 0 {
+            let _ = stream.read_exact(&mut body);
+        }
         let resp = responder(body);
         let _ = stream.write_all(&resp);
     });
@@ -100,7 +107,8 @@ fn ok_json(v: serde_json::Value) -> Vec<u8> {
     let mut out = format!(
         "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n",
         b.len()
-    ).into_bytes();
+    )
+    .into_bytes();
     out.extend_from_slice(&b);
     out
 }
@@ -109,8 +117,11 @@ fn status_json(status: u16, reason: &str, v: serde_json::Value) -> Vec<u8> {
     let b = serde_json::to_vec(&v).unwrap();
     let mut out = format!(
         "HTTP/1.1 {} {}\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n",
-        status, reason, b.len()
-    ).into_bytes();
+        status,
+        reason,
+        b.len()
+    )
+    .into_bytes();
     out.extend_from_slice(&b);
     out
 }
@@ -148,7 +159,11 @@ fn make_state() -> (TempDir, Arc<server::ServerState>) {
         },
         ipfs: Default::default(),
     };
-    fs::write(tmp.path().join("config.toml"), toml::to_string_pretty(&cfg).unwrap()).unwrap();
+    fs::write(
+        tmp.path().join("config.toml"),
+        toml::to_string_pretty(&cfg).unwrap(),
+    )
+    .unwrap();
     fs::write(tmp.path().join("index.json"), b"{}").unwrap();
 
     let state = server::ServerState {
@@ -199,8 +214,11 @@ fn server_blocks_path_traversal() {
     let (_tmp, state) = make_state();
     let r = req("GET", "/packages/../etc/passwd", &[], Vec::new());
     let resp = server::route(&r, &state);
-    assert!(resp.status == 400 || resp.status == 404,
-        "expected 400/404, got {}", resp.status);
+    assert!(
+        resp.status == 400 || resp.status == 404,
+        "expected 400/404, got {}",
+        resp.status
+    );
 }
 
 #[test]
@@ -213,16 +231,24 @@ fn server_push_without_auth_returns_401() {
 #[test]
 fn server_push_with_wrong_token_returns_401() {
     let (_tmp, state) = make_state();
-    let r = req("POST", "/api/v1/push",
-        &[("Authorization", "Bearer wrong")], b"fake".to_vec());
+    let r = req(
+        "POST",
+        "/api/v1/push",
+        &[("Authorization", "Bearer wrong")],
+        b"fake".to_vec(),
+    );
     assert_eq!(server::route(&r, &state).status, 401);
 }
 
 #[test]
 fn server_push_with_empty_body_returns_400() {
     let (_tmp, state) = make_state();
-    let r = req("POST", "/api/v1/push",
-        &[("Authorization", "Bearer secret-token")], Vec::new());
+    let r = req(
+        "POST",
+        "/api/v1/push",
+        &[("Authorization", "Bearer secret-token")],
+        Vec::new(),
+    );
     assert_eq!(server::route(&r, &state).status, 400);
 }
 
@@ -268,12 +294,16 @@ fn client_rejects_https() {
 #[test]
 fn push_one_success_returns_outcome() {
     let (port, h) = mock_server(|_body| {
-        status_json(201, "Created", serde_json::json!({
-            "sha256": "abc123",
-            "package": "demo",
-            "version": "0.0.1-1",
-            "already_present": false
-        }))
+        status_json(
+            201,
+            "Created",
+            serde_json::json!({
+                "sha256": "abc123",
+                "package": "demo",
+                "version": "0.0.1-1",
+                "already_present": false
+            }),
+        )
     });
     let tmp = TempDir::new().unwrap();
     let sif = tmp.path().join("x.sif");
@@ -289,7 +319,11 @@ fn push_one_success_returns_outcome() {
 #[test]
 fn push_one_401_is_error() {
     let (port, h) = mock_server(|_| {
-        status_json(401, "Unauthorized", serde_json::json!({"error":"unauthorized"}))
+        status_json(
+            401,
+            "Unauthorized",
+            serde_json::json!({"error":"unauthorized"}),
+        )
     });
     let tmp = TempDir::new().unwrap();
     let sif = tmp.path().join("x.sif");
@@ -304,9 +338,13 @@ fn push_one_401_is_error() {
 #[test]
 fn push_one_409_is_error() {
     let (port, h) = mock_server(|_| {
-        status_json(409, "Conflict", serde_json::json!({
-            "error":"conflict", "reason":"demo:0.0.1-1 already exists"
-        }))
+        status_json(
+            409,
+            "Conflict",
+            serde_json::json!({
+                "error":"conflict", "reason":"demo:0.0.1-1 already exists"
+            }),
+        )
     });
     let tmp = TempDir::new().unwrap();
     let sif = tmp.path().join("x.sif");
@@ -325,7 +363,10 @@ fn push_one_409_is_error() {
 #[test]
 fn make_labels_helper_works() {
     let (spec, labels) = make_labels("demo", "0.0.1", "1");
-    assert_eq!(labels["data"]["attributes"]["labels"]["org.appspec.package.name"], "demo");
+    assert_eq!(
+        labels["data"]["attributes"]["labels"]["org.appspec.package.name"],
+        "demo"
+    );
     assert!(!spec.is_empty());
     let _ = PathBuf::from("/tmp");
 }

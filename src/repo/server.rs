@@ -36,8 +36,7 @@ impl ServerState {
 
 pub fn serve(root: &RepoRoot) -> Result<()> {
     let listen = root.config.server.listen.clone();
-    let listener = TcpListener::bind(&listen)
-        .with_context(|| format!("bind {}", listen))?;
+    let listener = TcpListener::bind(&listen).with_context(|| format!("bind {}", listen))?;
     crate::log(format!("repo serve: listening on http://{}", listen));
 
     let state = Arc::new(ServerState::from_root(root));
@@ -84,14 +83,17 @@ fn handle(stream: TcpStream, state: Arc<ServerState>) -> Result<()> {
     write_response(&mut out, &resp)?;
 
     let ms = started.elapsed().as_millis();
-    eprintln!("{}", serde_json::json!({
-        "ts": super::util::now_iso8601(),
-        "method": req.method,
-        "path": req.path,
-        "status": resp.status,
-        "bytes": resp.body.len(),
-        "ms": ms
-    }));
+    eprintln!(
+        "{}",
+        serde_json::json!({
+            "ts": super::util::now_iso8601(),
+            "method": req.method,
+            "path": req.path,
+            "status": resp.status,
+            "bytes": resp.body.len(),
+            "ms": ms
+        })
+    );
     Ok(())
 }
 
@@ -104,7 +106,11 @@ pub fn route(req: &Request, state: &Arc<ServerState>) -> Response {
             serve_file(state, &p[1..], "application/octet-stream")
         }
         ("GET", p) if p.starts_with("/packages/") || p.starts_with("/refs/") => {
-            let ct = if p.ends_with(".json") { "application/json" } else { "text/plain" };
+            let ct = if p.ends_with(".json") {
+                "application/json"
+            } else {
+                "text/plain"
+            };
             serve_file(state, &p[1..], ct)
         }
         _ => Response::not_found(),
@@ -124,7 +130,11 @@ fn serve_file(state: &ServerState, rel: &str, ctype: &str) -> Response {
 }
 
 fn handle_push(req: &Request, state: &Arc<ServerState>) -> Response {
-    let auth = req.headers.get("authorization").map(String::as_str).unwrap_or("");
+    let auth = req
+        .headers
+        .get("authorization")
+        .map(String::as_str)
+        .unwrap_or("");
     let token = match auth.strip_prefix("Bearer ") {
         Some(t) => t,
         None => return Response::unauthorized(),
@@ -141,7 +151,9 @@ fn handle_push(req: &Request, state: &Arc<ServerState>) -> Response {
     if let Some(expected) = req.headers.get("x-sif-sha256") {
         if expected != &body_sha {
             return Response::bad_request(&format!(
-                "X-Sif-Sha256 mismatch: header={} body={}", expected, body_sha));
+                "X-Sif-Sha256 mismatch: header={} body={}",
+                expected, body_sha
+            ));
         }
     }
 
@@ -162,20 +174,24 @@ fn handle_push(req: &Request, state: &Arc<ServerState>) -> Response {
         }
     };
 
-    let result = super::add::add_one(&root, super::add::AddParams {
-        sif: &tmp_path,
-        arch: None,
-        release_suffix: None,
-        force: false,
-        pin_ipfs: false,
-        tag: None,
-    });
+    let result = super::add::add_one(
+        &root,
+        super::add::AddParams {
+            sif: &tmp_path,
+            arch: None,
+            release_suffix: None,
+            force: false,
+            pin_ipfs: false,
+            tag: None,
+        },
+    );
     let _ = std::fs::remove_file(&tmp_path);
 
     match result {
         Ok(out) => {
             if let Some(expected_spec_sha) = req.headers.get("x-spec-sha256") {
-                let meta_path = root.packages_dir()
+                let meta_path = root
+                    .packages_dir()
                     .join(&out.name)
                     .join(format!("{}-{}", out.version, out.release))
                     .join("meta.json");
@@ -184,7 +200,8 @@ fn handle_push(req: &Request, state: &Arc<ServerState>) -> Response {
                         if &meta.spec_sha256 != expected_spec_sha {
                             return Response::bad_request(&format!(
                                 "X-Spec-Sha256 mismatch: header={} actual={}",
-                                expected_spec_sha, meta.spec_sha256));
+                                expected_spec_sha, meta.spec_sha256
+                            ));
                         }
                     }
                 }
@@ -194,12 +211,16 @@ fn handle_push(req: &Request, state: &Arc<ServerState>) -> Response {
                 let _ = super::index_build::rebuild_all(&root);
             }
 
-            Response::json(201, "Created", serde_json::json!({
-                "sha256": out.sif_sha256,
-                "package": out.name,
-                "version": format!("{}-{}", out.version, out.release),
-                "already_present": out.already_present
-            }))
+            Response::json(
+                201,
+                "Created",
+                serde_json::json!({
+                    "sha256": out.sif_sha256,
+                    "package": out.name,
+                    "version": format!("{}-{}", out.version, out.release),
+                    "already_present": out.already_present
+                }),
+            )
         }
         Err(e) => {
             let msg = format!("{e:#}");
@@ -223,7 +244,9 @@ fn verify_token(config: &Config, provided: &str) -> bool {
 }
 
 fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
-    if a.len() != b.len() { return false; }
+    if a.len() != b.len() {
+        return false;
+    }
     let mut diff = 0u8;
     for (x, y) in a.iter().zip(b.iter()) {
         diff |= x ^ y;

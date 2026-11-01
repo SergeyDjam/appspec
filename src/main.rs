@@ -22,7 +22,7 @@ use crate::spec::Spec;
 #[command(
     name = "appspec",
     version,
-    about = "Apptainer SIF builder from TOML spec",
+    about = "Apptainer SIF builder from TOML spec"
 )]
 struct Cli {
     #[command(subcommand)]
@@ -806,7 +806,8 @@ fn cmd_clean_bundle(bundle_path: &Path) -> Result<()> {
 
     let cache = bundle::loader::bundle_cache_dir(&name);
     if cache.exists() {
-        fs::remove_dir_all(&cache).with_context(|| format!("removing cache {}", cache.display()))?;
+        fs::remove_dir_all(&cache)
+            .with_context(|| format!("removing cache {}", cache.display()))?;
         log(format!("Removed {}", cache.display()));
     }
     Ok(())

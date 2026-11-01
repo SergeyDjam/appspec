@@ -4,15 +4,22 @@ use std::collections::BTreeMap;
 use std::path::Path;
 use std::process::Command;
 
-pub struct SifLabels { pub raw: BTreeMap<String, String> }
+pub struct SifLabels {
+    pub raw: BTreeMap<String, String>,
+}
 
 impl SifLabels {
-    pub fn get(&self, k: &str) -> Option<&str> { self.raw.get(k).map(String::as_str) }
+    pub fn get(&self, k: &str) -> Option<&str> {
+        self.raw.get(k).map(String::as_str)
+    }
     pub fn require(&self, k: &str) -> Result<&str> {
-        self.get(k).ok_or_else(|| anyhow!(
-            "SIF is missing required label `{}`; \
-             rebuild with appspec 0.3.4+ (labels are injected at build time)", k
-        ))
+        self.get(k).ok_or_else(|| {
+            anyhow!(
+                "SIF is missing required label `{}`; \
+             rebuild with appspec 0.3.4+ (labels are injected at build time)",
+                k
+            )
+        })
     }
 }
 
@@ -40,7 +47,8 @@ pub fn inspect(sif: &Path) -> Result<SifLabels> {
     if !out.status.success() {
         bail!(
             "{} inspect failed for {}: {}",
-            bin, sif.display(),
+            bin,
+            sif.display(),
             String::from_utf8_lossy(&out.stderr).trim()
         );
     }
@@ -50,12 +58,14 @@ pub fn inspect(sif: &Path) -> Result<SifLabels> {
     let labels_val = v
         .pointer("/data/attributes/labels")
         .or_else(|| v.get("labels"))
-        .ok_or_else(|| anyhow!(
-            "unexpected `{} inspect --json --labels` output shape; \
+        .ok_or_else(|| {
+            anyhow!(
+                "unexpected `{} inspect --json --labels` output shape; \
              got top-level keys: {:?}",
-            bin,
-            v.as_object().map(|o| o.keys().collect::<Vec<_>>())
-        ))?;
+                bin,
+                v.as_object().map(|o| o.keys().collect::<Vec<_>>())
+            )
+        })?;
 
     let mut raw = BTreeMap::new();
     if let Some(obj) = labels_val.as_object() {
@@ -72,7 +82,6 @@ fn which(name: &str) -> bool {
     if name.contains('/') {
         return Path::new(name).is_file();
     }
-    std::env::var_os("PATH").is_some_and(|p| {
-        std::env::split_paths(&p).any(|d| d.join(name).is_file())
-    })
+    std::env::var_os("PATH")
+        .is_some_and(|p| std::env::split_paths(&p).any(|d| d.join(name).is_file()))
 }

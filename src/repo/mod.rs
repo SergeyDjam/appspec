@@ -12,11 +12,11 @@ pub mod commands;
 pub mod gc;
 pub mod http;
 pub mod index_build;
-pub mod ipfs;
 pub mod inspect;
-pub mod oci;
+pub mod ipfs;
 pub mod layout;
 pub mod meta;
+pub mod oci;
 pub mod pull;
 pub mod push;
 pub mod server;
@@ -62,30 +62,34 @@ pub enum RepoCommand {
 
 pub fn run(cmd: RepoCommand) -> Result<i32> {
     match cmd {
-        RepoCommand::Init(a)    => commands::init(a),
-        RepoCommand::Add(a)     => commands::add(a),
-        RepoCommand::Ls(a)      => commands::ls(a),
-        RepoCommand::Show(a)    => commands::show(a),
+        RepoCommand::Init(a) => commands::init(a),
+        RepoCommand::Add(a) => commands::add(a),
+        RepoCommand::Ls(a) => commands::ls(a),
+        RepoCommand::Show(a) => commands::show(a),
         RepoCommand::Reindex(a) => commands::reindex(a),
-        RepoCommand::Check(a)   => commands::check(a),
-        RepoCommand::Gc(a)      => commands::gc(a),
-        RepoCommand::Search(a)  => commands::search(a),
-        RepoCommand::Serve(a)   => commands::serve(a),
-        RepoCommand::Push(a)    => commands::push(a),
-        RepoCommand::Pull(a)    => commands::pull(a),
-        RepoCommand::Sign(a)    => commands::sign(a),
+        RepoCommand::Check(a) => commands::check(a),
+        RepoCommand::Gc(a) => commands::gc(a),
+        RepoCommand::Search(a) => commands::search(a),
+        RepoCommand::Serve(a) => commands::serve(a),
+        RepoCommand::Push(a) => commands::push(a),
+        RepoCommand::Pull(a) => commands::pull(a),
+        RepoCommand::Sign(a) => commands::sign(a),
         RepoCommand::PublishIndex(a) => commands::publish_index(a),
         RepoCommand::ExportOci(a) => commands::export_oci(a),
-        RepoCommand::Verify(a)  => commands::verify(a),
+        RepoCommand::Verify(a) => commands::verify(a),
     }
 }
 
 pub fn default_root() -> std::path::PathBuf {
     if let Ok(v) = std::env::var("APPSPEC_REPO") {
-        if !v.is_empty() { return std::path::PathBuf::from(v); }
+        if !v.is_empty() {
+            return std::path::PathBuf::from(v);
+        }
     }
     if let Ok(v) = std::env::var("XDG_DATA_HOME") {
-        if !v.is_empty() { return std::path::PathBuf::from(v).join("appspec/repo"); }
+        if !v.is_empty() {
+            return std::path::PathBuf::from(v).join("appspec/repo");
+        }
     }
     if let Ok(h) = std::env::var("HOME") {
         if !h.is_empty() {

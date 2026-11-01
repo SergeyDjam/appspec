@@ -60,7 +60,11 @@ exit 1
             fs::set_permissions(&bin, m).unwrap();
         }
         fs::write(&log, b"").unwrap();
-        OrasMock { _tmp: tmp, bin, log }
+        OrasMock {
+            _tmp: tmp,
+            bin,
+            log,
+        }
     }
 
     fn set_env(&self) {
@@ -163,7 +167,11 @@ fn make_repo_with_packages(packages: &[(&str, &str, &str, &[u8])]) -> (TempDir, 
             ipfs_cid: None,
             raw_labels: Default::default(),
         };
-        fs::write(pd.join("meta.json"), serde_json::to_vec_pretty(&meta_v1).unwrap()).unwrap();
+        fs::write(
+            pd.join("meta.json"),
+            serde_json::to_vec_pretty(&meta_v1).unwrap(),
+        )
+        .unwrap();
     }
 
     let cfg = layout::Config {
@@ -179,7 +187,11 @@ fn make_repo_with_packages(packages: &[(&str, &str, &str, &[u8])]) -> (TempDir, 
         server: Default::default(),
         ipfs: Default::default(),
     };
-    fs::write(root.join("config.toml"), toml::to_string_pretty(&cfg).unwrap()).unwrap();
+    fs::write(
+        root.join("config.toml"),
+        toml::to_string_pretty(&cfg).unwrap(),
+    )
+    .unwrap();
 
     let idx = meta::IndexV1 {
         schema: 1,
@@ -189,7 +201,11 @@ fn make_repo_with_packages(packages: &[(&str, &str, &str, &[u8])]) -> (TempDir, 
         signature: String::new(),
         packages: pkg_map,
     };
-    fs::write(root.join("index.json"), serde_json::to_vec_pretty(&idx).unwrap()).unwrap();
+    fs::write(
+        root.join("index.json"),
+        serde_json::to_vec_pretty(&idx).unwrap(),
+    )
+    .unwrap();
 
     (tmp, root)
 }
@@ -203,16 +219,18 @@ fn export_oci_dry_run_prints_commands_and_does_not_invoke_oras() {
     let _g = lock_env();
     let mock = OrasMock::new();
     mock.set_env();
-    let (_tmp, root) = make_repo_with_packages(&[
-        ("demo", "0.0.1-1", "amd64", b"sif-demo-1"),
-    ]);
+    let (_tmp, root) = make_repo_with_packages(&[("demo", "0.0.1-1", "amd64", b"sif-demo-1")]);
 
     let root_obj = layout::RepoRoot::open(&root).unwrap();
-    let out = oci::export_oci(&root_obj, oci::OciExportOpts {
-        target: "appspec-index".into(),
-        registry: Some("ghcr.io/user".into()),
-        dry_run: true,
-    }).unwrap();
+    let out = oci::export_oci(
+        &root_obj,
+        oci::OciExportOpts {
+            target: "appspec-index".into(),
+            registry: Some("ghcr.io/user".into()),
+            dry_run: true,
+        },
+    )
+    .unwrap();
 
     assert!(out.dry_run);
     assert_eq!(out.index_ref, "ghcr.io/user/appspec-index:latest");
@@ -228,37 +246,55 @@ fn export_oci_pushes_index_and_packages() {
     let mock = OrasMock::new();
     mock.set_env();
     let (_tmp, root) = make_repo_with_packages(&[
-        ("demo",  "0.0.1-1", "amd64", b"sif-demo-1"),
-        ("demo",  "0.0.2-1", "amd64", b"sif-demo-2"),
+        ("demo", "0.0.1-1", "amd64", b"sif-demo-1"),
+        ("demo", "0.0.2-1", "amd64", b"sif-demo-2"),
         ("other", "1.0.0-1", "amd64", b"sif-other-1"),
     ]);
 
     let root_obj = layout::RepoRoot::open(&root).unwrap();
-    let out = oci::export_oci(&root_obj, oci::OciExportOpts {
-        target: "appspec-index".into(),
-        registry: Some("ghcr.io/user".into()),
-        dry_run: false,
-    }).unwrap();
+    let out = oci::export_oci(
+        &root_obj,
+        oci::OciExportOpts {
+            target: "appspec-index".into(),
+            registry: Some("ghcr.io/user".into()),
+            dry_run: false,
+        },
+    )
+    .unwrap();
 
     assert_eq!(out.index_ref, "ghcr.io/user/appspec-index:latest");
     // index + 3 (demo-1, demo-2, other-1)
     assert_eq!(out.pushed.len(), 4);
 
     let log = mock.read_log();
-    assert!(log.contains("ghcr.io/user/appspec-index:latest"),
-        "missing index push in log:\n{log}");
-    assert!(log.contains("ghcr.io/user/demo:0.0.1-1"),
-        "missing demo:0.0.1-1 in log:\n{log}");
-    assert!(log.contains("ghcr.io/user/demo:0.0.2-1"),
-        "missing demo:0.0.2-1 in log:\n{log}");
-    assert!(log.contains("ghcr.io/user/other:1.0.0-1"),
-        "missing other:1.0.0-1 in log:\n{log}");
-    assert!(log.contains("application/vnd.appspec.index.v1+json"),
-        "index must be artifact-typed:\n{log}");
-    assert!(log.contains("application/vnd.appspec.sif.v1+json"),
-        "sif must be artifact-typed:\n{log}");
-    assert!(log.contains("org.appspec.sif_sha256="),
-        "sif push must have org.appspec.sif_sha256 annotation:\n{log}");
+    assert!(
+        log.contains("ghcr.io/user/appspec-index:latest"),
+        "missing index push in log:\n{log}"
+    );
+    assert!(
+        log.contains("ghcr.io/user/demo:0.0.1-1"),
+        "missing demo:0.0.1-1 in log:\n{log}"
+    );
+    assert!(
+        log.contains("ghcr.io/user/demo:0.0.2-1"),
+        "missing demo:0.0.2-1 in log:\n{log}"
+    );
+    assert!(
+        log.contains("ghcr.io/user/other:1.0.0-1"),
+        "missing other:1.0.0-1 in log:\n{log}"
+    );
+    assert!(
+        log.contains("application/vnd.appspec.index.v1+json"),
+        "index must be artifact-typed:\n{log}"
+    );
+    assert!(
+        log.contains("application/vnd.appspec.sif.v1+json"),
+        "sif must be artifact-typed:\n{log}"
+    );
+    assert!(
+        log.contains("org.appspec.sif_sha256="),
+        "sif push must have org.appspec.sif_sha256 annotation:\n{log}"
+    );
 }
 
 #[test]
@@ -266,16 +302,18 @@ fn export_oci_without_registry_uses_target_as_prefix() {
     let _g = lock_env();
     let mock = OrasMock::new();
     mock.set_env();
-    let (_tmp, root) = make_repo_with_packages(&[
-        ("demo", "0.0.1-1", "amd64", b"sif-demo-1"),
-    ]);
+    let (_tmp, root) = make_repo_with_packages(&[("demo", "0.0.1-1", "amd64", b"sif-demo-1")]);
 
     let root_obj = layout::RepoRoot::open(&root).unwrap();
-    let out = oci::export_oci(&root_obj, oci::OciExportOpts {
-        target: "myregistry.example.com".into(),
-        registry: None,
-        dry_run: false,
-    }).unwrap();
+    let out = oci::export_oci(
+        &root_obj,
+        oci::OciExportOpts {
+            target: "myregistry.example.com".into(),
+            registry: None,
+            dry_run: false,
+        },
+    )
+    .unwrap();
 
     assert_eq!(out.index_ref, "myregistry.example.com/appspec-index:latest");
     let log = mock.read_log();
@@ -288,22 +326,24 @@ fn export_oci_skips_missing_blob_with_warning() {
     let _g = lock_env();
     let mock = OrasMock::new();
     mock.set_env();
-    let (_tmp, root) = make_repo_with_packages(&[
-        ("demo", "0.0.1-1", "amd64", b"sif-demo-1"),
-    ]);
+    let (_tmp, root) = make_repo_with_packages(&[("demo", "0.0.1-1", "amd64", b"sif-demo-1")]);
 
     // Удалим blob — должен быть skip, не ошибка.
-    let idx: meta::IndexV1 = serde_json::from_str(
-        &fs::read_to_string(root.join("index.json")).unwrap()).unwrap();
+    let idx: meta::IndexV1 =
+        serde_json::from_str(&fs::read_to_string(root.join("index.json")).unwrap()).unwrap();
     let sha = &idx.packages["demo"].versions["0.0.1-1"].sif_sha256;
     fs::remove_file(util::blob_path(&root, sha)).unwrap();
 
     let root_obj = layout::RepoRoot::open(&root).unwrap();
-    let out = oci::export_oci(&root_obj, oci::OciExportOpts {
-        target: "appspec-index".into(),
-        registry: Some("r.example".into()),
-        dry_run: false,
-    }).unwrap();
+    let out = oci::export_oci(
+        &root_obj,
+        oci::OciExportOpts {
+            target: "appspec-index".into(),
+            registry: Some("r.example".into()),
+            dry_run: false,
+        },
+    )
+    .unwrap();
 
     // index всё равно пушится
     assert_eq!(out.pushed.len(), 1);
@@ -315,25 +355,29 @@ fn export_oci_fails_on_sha_mismatch() {
     let _g = lock_env();
     let mock = OrasMock::new();
     mock.set_env();
-    let (_tmp, root) = make_repo_with_packages(&[
-        ("demo", "0.0.1-1", "amd64", b"sif-demo-1"),
-    ]);
+    let (_tmp, root) = make_repo_with_packages(&[("demo", "0.0.1-1", "amd64", b"sif-demo-1")]);
 
     // Испортим blob, сохранив путь и имя (sha не сойдётся).
-    let idx: meta::IndexV1 = serde_json::from_str(
-        &fs::read_to_string(root.join("index.json")).unwrap()).unwrap();
+    let idx: meta::IndexV1 =
+        serde_json::from_str(&fs::read_to_string(root.join("index.json")).unwrap()).unwrap();
     let sha = &idx.packages["demo"].versions["0.0.1-1"].sif_sha256;
     fs::write(util::blob_path(&root, sha), b"corrupted").unwrap();
 
     let root_obj = layout::RepoRoot::open(&root).unwrap();
-    let err = oci::export_oci(&root_obj, oci::OciExportOpts {
-        target: "appspec-index".into(),
-        registry: Some("r.example".into()),
-        dry_run: false,
-    }).unwrap_err();
+    let err = oci::export_oci(
+        &root_obj,
+        oci::OciExportOpts {
+            target: "appspec-index".into(),
+            registry: Some("r.example".into()),
+            dry_run: false,
+        },
+    )
+    .unwrap_err();
 
-    assert!(format!("{err:#}").contains("sha256 mismatch"),
-        "expected sha256 mismatch, got: {err:#}");
+    assert!(
+        format!("{err:#}").contains("sha256 mismatch"),
+        "expected sha256 mismatch, got: {err:#}"
+    );
 }
 
 #[test]
@@ -341,16 +385,20 @@ fn export_oci_fails_when_oras_missing_and_not_dry_run() {
     let _g = lock_env();
     // APPSPEC_ORAS указывает на несуществующий файл → which_oras() == false
     std::env::set_var("APPSPEC_ORAS", "/nonexistent/oras-for-test");
-    let (_tmp, root) = make_repo_with_packages(&[
-        ("demo", "0.0.1-1", "amd64", b"sif-demo-1"),
-    ]);
+    let (_tmp, root) = make_repo_with_packages(&[("demo", "0.0.1-1", "amd64", b"sif-demo-1")]);
 
     let root_obj = layout::RepoRoot::open(&root).unwrap();
-    let err = oci::export_oci(&root_obj, oci::OciExportOpts {
-        target: "appspec-index".into(),
-        registry: Some("r.example".into()),
-        dry_run: false,
-    }).unwrap_err();
-    assert!(format!("{err:#}").contains("oras"),
-        "expected oras-not-found, got: {err:#}");
+    let err = oci::export_oci(
+        &root_obj,
+        oci::OciExportOpts {
+            target: "appspec-index".into(),
+            registry: Some("r.example".into()),
+            dry_run: false,
+        },
+    )
+    .unwrap_err();
+    assert!(
+        format!("{err:#}").contains("oras"),
+        "expected oras-not-found, got: {err:#}"
+    );
 }

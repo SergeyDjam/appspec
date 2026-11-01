@@ -155,10 +155,7 @@ extra = ["ca-certificates"]
     // qualify_base_image: strip tag → qualify_image → append @digest.
     // Ожидаем `FROM docker.io/library/alpine@sha256:...`.
     let expected = format!("FROM docker.io/library/alpine@{digest}");
-    assert!(
-        df.contains(&expected),
-        "expected `{expected}` in:\n{df}"
-    );
+    assert!(df.contains(&expected), "expected `{expected}` in:\n{df}");
     assert!(
         !df.contains("alpine:3.21"),
         "tag must be stripped, got:\n{df}"

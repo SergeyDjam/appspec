@@ -78,7 +78,9 @@ esac
         std::env::set_var("MOCK_IPFS_ADD_CID", add_cid.unwrap_or(""));
         std::env::set_var(
             "MOCK_IPFS_CAT_FILE",
-            cat_file.map(|p| p.to_string_lossy().to_string()).unwrap_or_default(),
+            cat_file
+                .map(|p| p.to_string_lossy().to_string())
+                .unwrap_or_default(),
         );
     }
 }
@@ -116,7 +118,11 @@ fn make_min_repo() -> (TempDir, PathBuf) {
         server: Default::default(),
         ipfs: Default::default(),
     };
-    fs::write(root.join("config.toml"), toml::to_string_pretty(&cfg).unwrap()).unwrap();
+    fs::write(
+        root.join("config.toml"),
+        toml::to_string_pretty(&cfg).unwrap(),
+    )
+    .unwrap();
 
     let idx = meta::IndexV1 {
         schema: 1,
@@ -126,34 +132,53 @@ fn make_min_repo() -> (TempDir, PathBuf) {
         signature: String::new(),
         packages: BTreeMap::new(),
     };
-    fs::write(root.join("index.json"), serde_json::to_vec_pretty(&idx).unwrap()).unwrap();
+    fs::write(
+        root.join("index.json"),
+        serde_json::to_vec_pretty(&idx).unwrap(),
+    )
+    .unwrap();
 
     (tmp, root)
 }
 
-fn make_index_with_ipfs_cid(pkg: &str, ver: &str, sif_sha: &str, cid: Option<&str>) -> meta::IndexV1 {
+fn make_index_with_ipfs_cid(
+    pkg: &str,
+    ver: &str,
+    sif_sha: &str,
+    cid: Option<&str>,
+) -> meta::IndexV1 {
     let mut versions = BTreeMap::new();
-    versions.insert(ver.to_string(), meta::IndexVersion {
-        epoch: 0,
-        version: ver.split('-').next().unwrap().to_string(),
-        release: ver.split('-').nth(1).unwrap_or("1").to_string(),
-        arch: "amd64".into(),
-        sif_sha256: sif_sha.to_string(),
-        sif_size: 10,
-        spec_sha256: sha256_hex(b"spec"),
-        spec_size: 4,
-        built_at: "2026-10-28T00:00:00Z".into(),
-        generator: "appspec test".into(),
-        base_digest: None,
-        tags: vec![],
-        requires: vec![],
-        provides: vec![],
-        ipfs_cid: cid.map(str::to_string),
-    });
+    versions.insert(
+        ver.to_string(),
+        meta::IndexVersion {
+            epoch: 0,
+            version: ver.split('-').next().unwrap().to_string(),
+            release: ver.split('-').nth(1).unwrap_or("1").to_string(),
+            arch: "amd64".into(),
+            sif_sha256: sif_sha.to_string(),
+            sif_size: 10,
+            spec_sha256: sha256_hex(b"spec"),
+            spec_size: 4,
+            built_at: "2026-10-28T00:00:00Z".into(),
+            generator: "appspec test".into(),
+            base_digest: None,
+            tags: vec![],
+            requires: vec![],
+            provides: vec![],
+            ipfs_cid: cid.map(str::to_string),
+        },
+    );
     let mut packages = BTreeMap::new();
-    packages.insert(pkg.to_string(), meta::IndexPackage {
-        summary: None, license: None, vendor: None, url: None, versions,
-    });
+    packages.insert(
+        pkg.to_string(),
+        meta::IndexPackage {
+            summary: None,
+            license: None,
+            vendor: None,
+            url: None,
+            versions,
+        },
+    );
     meta::IndexV1 {
         schema: 1,
         repo: "test/e6".into(),
@@ -253,7 +278,11 @@ fn pull_via_ipfs_uses_local_index() {
     let blob_bytes = b"fake-sif-from-ipfs";
     let sha = sha256_hex(blob_bytes);
     let index = make_index_with_ipfs_cid("demo", "0.0.1-1", &sha, Some("QmBlobCID"));
-    fs::write(root.join("index.json"), serde_json::to_vec_pretty(&index).unwrap()).unwrap();
+    fs::write(
+        root.join("index.json"),
+        serde_json::to_vec_pretty(&index).unwrap(),
+    )
+    .unwrap();
 
     let cat_file = mock._tmp.path().join("blob.bin");
     fs::write(&cat_file, blob_bytes).unwrap();
@@ -275,15 +304,21 @@ fn pull_via_ipfs_no_cid_errors() {
     let mock = IpfsMock::new();
     let (_tmp, root) = make_min_repo();
     let index = make_index_with_ipfs_cid("demo", "0.0.1-1", "deadbeef", None);
-    fs::write(root.join("index.json"), serde_json::to_vec_pretty(&index).unwrap()).unwrap();
+    fs::write(
+        root.join("index.json"),
+        serde_json::to_vec_pretty(&index).unwrap(),
+    )
+    .unwrap();
     mock.set_env(None, None);
 
     let root_obj = layout::RepoRoot::open(&root).unwrap();
     let mut opts = default_opts();
     opts.via = Some("ipfs".into());
     let err = pull::pull(&root_obj, "demo:0.0.1-1", opts).unwrap_err();
-    assert!(format!("{err:#}").contains("no ipfs_cid"),
-        "expected no-ipfs-cid, got: {err:#}");
+    assert!(
+        format!("{err:#}").contains("no ipfs_cid"),
+        "expected no-ipfs-cid, got: {err:#}"
+    );
 }
 
 // ============================================================================
@@ -305,8 +340,7 @@ fn pull_from_ipfs_index_with_invalid_json_fails_parsing() {
     opts.from = Some("ipfs://QmIndexCID".into());
     let err = pull::pull(&root_obj, "demo:0.0.1-1", opts).unwrap_err();
     let msg = format!("{err:#}");
-    assert!(msg.contains("parsing"),
-        "expected parse error, got: {msg}");
+    assert!(msg.contains("parsing"), "expected parse error, got: {msg}");
 }
 
 #[test]
@@ -321,6 +355,8 @@ fn pull_from_and_via_mutually_exclusive() {
     opts.from = Some("ipfs://QmX".into());
     opts.via = Some("ipfs".into());
     let err = pull::pull(&root_obj, "demo:0.0.1-1", opts).unwrap_err();
-    assert!(format!("{err:#}").contains("mutually exclusive"),
-        "expected mutual-exclusion error, got: {err:#}");
+    assert!(
+        format!("{err:#}").contains("mutually exclusive"),
+        "expected mutual-exclusion error, got: {err:#}"
+    );
 }

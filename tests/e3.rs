@@ -39,12 +39,9 @@ impl RepoFixture {
 
         // мок apptainer + labels.json
         let labels_path = tmp.path().join("labels.json");
-        let spec_bytes = format!(
-            "[package]\nname = \"{pkg_name}\"\nversion = \"{version}\"\n"
-        )
-        .into_bytes();
-        let spec_b64 =
-            base64::engine::general_purpose::STANDARD.encode(&spec_bytes);
+        let spec_bytes =
+            format!("[package]\nname = \"{pkg_name}\"\nversion = \"{version}\"\n").into_bytes();
+        let spec_b64 = base64::engine::general_purpose::STANDARD.encode(&spec_bytes);
         let spec_sha = sha256_hex(&spec_bytes);
         let labels = serde_json::json!({
             "data": { "attributes": { "labels": {
@@ -86,30 +83,48 @@ impl RepoFixture {
 
         // init + add через мок
         let mut cmd = appspec();
-        cmd.env("PATH", format!(
-            "{}:{}", mock_bin.display(),
-            std::env::var("PATH").unwrap_or_default()
-        ));
+        cmd.env(
+            "PATH",
+            format!(
+                "{}:{}",
+                mock_bin.display(),
+                std::env::var("PATH").unwrap_or_default()
+            ),
+        );
         cmd.env("APPSPEC_REPO", &repo_root);
         cmd.args(["repo", "init"]).assert().success();
 
         let mut cmd = appspec();
-        cmd.env("PATH", format!(
-            "{}:{}", mock_bin.display(),
-            std::env::var("PATH").unwrap_or_default()
-        ));
+        cmd.env(
+            "PATH",
+            format!(
+                "{}:{}",
+                mock_bin.display(),
+                std::env::var("PATH").unwrap_or_default()
+            ),
+        );
         cmd.env("APPSPEC_REPO", &repo_root);
-        cmd.args(["repo", "add", sif.to_str().unwrap()]).assert().success();
+        cmd.args(["repo", "add", sif.to_str().unwrap()])
+            .assert()
+            .success();
 
-        RepoFixture { _tmp: tmp, repo_root, mock_bin }
+        RepoFixture {
+            _tmp: tmp,
+            repo_root,
+            mock_bin,
+        }
     }
 
     fn cmd(&self) -> Command {
         let mut c = appspec();
-        c.env("PATH", format!(
-            "{}:{}", self.mock_bin.display(),
-            std::env::var("PATH").unwrap_or_default()
-        ));
+        c.env(
+            "PATH",
+            format!(
+                "{}:{}",
+                self.mock_bin.display(),
+                std::env::var("PATH").unwrap_or_default()
+            ),
+        );
         c.env("APPSPEC_REPO", &self.repo_root);
         c
     }
@@ -256,11 +271,16 @@ provide = "demo"
 
     // подменяем sif_sha256 в lock, чтобы был дрейф
     let lock_path = tmp.path().join("bundle.lock.toml");
-    let mut lock: toml::Value =
-        toml::from_str(&fs::read_to_string(&lock_path).unwrap()).unwrap();
-    let sif_sha = lock["components"][0]["sif_sha256"].as_str().unwrap().to_string();
+    let mut lock: toml::Value = toml::from_str(&fs::read_to_string(&lock_path).unwrap()).unwrap();
+    let sif_sha = lock["components"][0]["sif_sha256"]
+        .as_str()
+        .unwrap()
+        .to_string();
     lock["components"][0]["sif_sha256"] = toml::Value::String(
-        sif_sha.chars().map(|c| if c == '0' { '1' } else { '0' }).collect::<String>(),
+        sif_sha
+            .chars()
+            .map(|c| if c == '0' { '1' } else { '0' })
+            .collect::<String>(),
     );
     fs::write(&lock_path, toml::to_string_pretty(&lock).unwrap()).unwrap();
 

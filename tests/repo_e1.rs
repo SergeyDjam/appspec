@@ -51,7 +51,8 @@ impl Fixture {
         let spec_text = format!(
             "[package]\nname = \"{}\"\nversion = \"{}\"\n",
             name, version
-        ).into_bytes();
+        )
+        .into_bytes();
         let spec_b64 = base64::engine::general_purpose::STANDARD.encode(&spec_text);
         let spec_sha = sha256_hex(&spec_text);
 
@@ -104,14 +105,25 @@ impl Fixture {
             .assert()
             .success();
 
-        Fixture { _tmp: tmp, root, sif, mock_bin: mock_bin_dir, spec_text }
+        Fixture {
+            _tmp: tmp,
+            root,
+            sif,
+            mock_bin: mock_bin_dir,
+            spec_text,
+        }
     }
 
     fn cmd(&self) -> Command {
         let mut c = appspec();
-        c.env("PATH", format!("{}:{}",
-            self.mock_bin.display(),
-            std::env::var("PATH").unwrap_or_default()));
+        c.env(
+            "PATH",
+            format!(
+                "{}:{}",
+                self.mock_bin.display(),
+                std::env::var("PATH").unwrap_or_default()
+            ),
+        );
         c
     }
 }
@@ -124,14 +136,25 @@ fn init_creates_expected_layout() {
     let root = tmp.path().join("repo");
 
     appspec()
-        .args(["repo", "init", root.to_str().unwrap(), "--name", "test/init"])
+        .args([
+            "repo",
+            "init",
+            root.to_str().unwrap(),
+            "--name",
+            "test/init",
+        ])
         .assert()
         .success()
         .stdout(predicate::str::contains("initialized repository"));
 
-    for rel in ["config.toml", "index.json",
-                "blobs/sha256", "packages", "refs",
-                "index/.keep"] {
+    for rel in [
+        "config.toml",
+        "index.json",
+        "blobs/sha256",
+        "packages",
+        "refs",
+        "index/.keep",
+    ] {
         assert!(root.join(rel).exists(), "missing: {rel}");
     }
 }
@@ -143,7 +166,8 @@ fn init_is_idempotent_with_same_name() {
 
     appspec()
         .args(["repo", "init", root.to_str().unwrap(), "--name", "test/x"])
-        .assert().success();
+        .assert()
+        .success();
     appspec()
         .args(["repo", "init", root.to_str().unwrap(), "--name", "test/x"])
         .assert()
@@ -158,7 +182,8 @@ fn init_rejects_different_name() {
 
     appspec()
         .args(["repo", "init", root.to_str().unwrap(), "--name", "test/a"])
-        .assert().success();
+        .assert()
+        .success();
     appspec()
         .args(["repo", "init", root.to_str().unwrap(), "--name", "test/b"])
         .assert()
@@ -188,14 +213,13 @@ fn add_and_show_roundtrip() {
     assert_eq!(meta["version"], "0.0.1");
     assert_eq!(meta["release"], "1");
     assert_eq!(meta["arch"], "amd64");
-    assert_eq!(meta["epoch"], 0);                    // integer, не строка
+    assert_eq!(meta["epoch"], 0); // integer, не строка
     assert_eq!(meta["requires"], serde_json::json!([]));
     assert_eq!(meta["provides"], serde_json::json!([]));
     assert_eq!(meta["conflicts"], serde_json::json!([]));
 
     // spec.appspec байт-в-байт
-    let spec_on_disk =
-        fs::read(f.root.join("packages/demo/0.0.1-1/spec.appspec")).unwrap();
+    let spec_on_disk = fs::read(f.root.join("packages/demo/0.0.1-1/spec.appspec")).unwrap();
     assert_eq!(spec_on_disk, f.spec_text);
 
     // blob присутствует, sha256 совпадает с meta
@@ -205,10 +229,14 @@ fn add_and_show_roundtrip() {
     assert_eq!(sha256_hex(&fs::read(&blob).unwrap()), sha);
 
     // show --spec — байт-в-байт
-    let out = f.cmd()
+    let out = f
+        .cmd()
         .args(["repo", "show", "demo:0.0.1-1", "--spec", "--root", root_str])
-        .assert().success()
-        .get_output().stdout.clone();
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
     assert_eq!(out, f.spec_text);
 }
 
@@ -218,7 +246,10 @@ fn add_is_idempotent() {
     let root = f.root.to_str().unwrap();
     let sif = f.sif.to_str().unwrap();
 
-    f.cmd().args(["repo", "add", "--root", root, sif]).assert().success();
+    f.cmd()
+        .args(["repo", "add", "--root", root, sif])
+        .assert()
+        .success();
     f.cmd()
         .args(["repo", "add", "--root", root, sif])
         .assert()
@@ -232,10 +263,14 @@ fn release_suffix_creates_new_version() {
     let root = f.root.to_str().unwrap();
     let sif = f.sif.to_str().unwrap();
 
-    f.cmd().args(["repo", "add", "--root", root, sif]).assert().success();
+    f.cmd()
+        .args(["repo", "add", "--root", root, sif])
+        .assert()
+        .success();
     f.cmd()
         .args(["repo", "add", "--root", root, "--release-suffix", "2", sif])
-        .assert().success();
+        .assert()
+        .success();
 
     // A-9: обе записи на месте; sif_sha256 одинаковый (dedup blob'а).
     // §6.2: --release-suffix N → release = "<original>.<N>"
@@ -244,11 +279,13 @@ fn release_suffix_creates_new_version() {
     assert!(f.root.join("packages/demo/0.0.1-1.2/meta.json").is_file());
 
     let m1: serde_json::Value = serde_json::from_str(
-        &fs::read_to_string(f.root.join("packages/demo/0.0.1-1/meta.json")).unwrap()
-    ).unwrap();
+        &fs::read_to_string(f.root.join("packages/demo/0.0.1-1/meta.json")).unwrap(),
+    )
+    .unwrap();
     let m2: serde_json::Value = serde_json::from_str(
-        &fs::read_to_string(f.root.join("packages/demo/0.0.1-1.2/meta.json")).unwrap()
-    ).unwrap();
+        &fs::read_to_string(f.root.join("packages/demo/0.0.1-1.2/meta.json")).unwrap(),
+    )
+    .unwrap();
     assert_eq!(m1["sif_sha256"], m2["sif_sha256"]);
     assert_eq!(m1["release"], "1");
     assert_eq!(m2["release"], "1.2");
@@ -260,12 +297,21 @@ fn reindex_is_idempotent() {
     let root = f.root.to_str().unwrap();
     let sif = f.sif.to_str().unwrap();
 
-    f.cmd().args(["repo", "add", "--root", root, sif]).assert().success();
+    f.cmd()
+        .args(["repo", "add", "--root", root, sif])
+        .assert()
+        .success();
 
     let before = fs::read(f.root.join("index.json")).unwrap();
-    f.cmd().args(["repo", "reindex", "--root", root]).assert().success();
+    f.cmd()
+        .args(["repo", "reindex", "--root", root])
+        .assert()
+        .success();
     let after1 = fs::read(f.root.join("index.json")).unwrap();
-    f.cmd().args(["repo", "reindex", "--root", root]).assert().success();
+    f.cmd()
+        .args(["repo", "reindex", "--root", root])
+        .assert()
+        .success();
     let after2 = fs::read(f.root.join("index.json")).unwrap();
 
     // A-8: без изменений в packages/index.json байт-в-байт
@@ -278,7 +324,10 @@ fn ls_and_search_find_package() {
     let f = Fixture::new("demo", "0.0.1", "amd64");
     let root = f.root.to_str().unwrap();
     let sif = f.sif.to_str().unwrap();
-    f.cmd().args(["repo", "add", "--root", root, sif]).assert().success();
+    f.cmd()
+        .args(["repo", "add", "--root", root, sif])
+        .assert()
+        .success();
 
     f.cmd()
         .args(["repo", "ls", "--root", root])
@@ -323,7 +372,8 @@ fn check_reports_ok_for_healthy_repo() {
     let root = f.root.to_str().unwrap();
     f.cmd()
         .args(["repo", "add", "--root", root, f.sif.to_str().unwrap()])
-        .assert().success();
+        .assert()
+        .success();
 
     f.cmd()
         .args(["repo", "check", "--root", root])
@@ -338,12 +388,14 @@ fn check_detects_corrupted_blob() {
     let root = f.root.to_str().unwrap();
     f.cmd()
         .args(["repo", "add", "--root", root, f.sif.to_str().unwrap()])
-        .assert().success();
+        .assert()
+        .success();
 
     // портим blob
     let meta: serde_json::Value = serde_json::from_str(
-        &fs::read_to_string(f.root.join("packages/demo/0.0.1-1/meta.json")).unwrap()
-    ).unwrap();
+        &fs::read_to_string(f.root.join("packages/demo/0.0.1-1/meta.json")).unwrap(),
+    )
+    .unwrap();
     let sha = meta["sif_sha256"].as_str().unwrap();
     let blob = f.root.join("blobs/sha256").join(&sha[..2]).join(&sha[2..]);
     fs::write(&blob, b"corrupted").unwrap();
@@ -361,11 +413,13 @@ fn gc_dry_run_does_not_remove() {
     let root = f.root.to_str().unwrap();
     f.cmd()
         .args(["repo", "add", "--root", root, f.sif.to_str().unwrap()])
-        .assert().success();
+        .assert()
+        .success();
 
     let meta: serde_json::Value = serde_json::from_str(
-        &fs::read_to_string(f.root.join("packages/demo/0.0.1-1/meta.json")).unwrap()
-    ).unwrap();
+        &fs::read_to_string(f.root.join("packages/demo/0.0.1-1/meta.json")).unwrap(),
+    )
+    .unwrap();
     let sha = meta["sif_sha256"].as_str().unwrap();
     let blob = f.root.join("blobs/sha256").join(&sha[..2]).join(&sha[2..]);
     assert!(blob.is_file());
@@ -396,7 +450,8 @@ fn unsupported_layout_is_rejected() {
     let root = tmp.path().join("repo");
     appspec()
         .args(["repo", "init", root.to_str().unwrap()])
-        .assert().success();
+        .assert()
+        .success();
 
     // подменяем layout на 2
     let cfg_path = root.join("config.toml");
