@@ -43,6 +43,17 @@ install -m755 target/release/appspec ~/.local/bin/
 | curl или wget | bundle-расширения по URL |
 | unzip | подготовка .vsix |
 
+### Bash completion
+
+```sh
+# для текущего пользователя
+mkdir -p ~/.local/share/bash-completion/completions
+appspec completions bash > ~/.local/share/bash-completion/completions/appspec
+
+# или системно
+sudo appspec completions bash > /etc/bash_completion.d/appspec
+```
+
 ## Быстрый старт
 
 Одиночное приложение:
@@ -110,6 +121,7 @@ appspec repo pull pkg:1.0.0-1 --from oci://ghcr.io/user/appspec-index:latest
 | `ipfs-publish SPEC` | Опубликовать SIF в IPFS |
 | `bundle {check,build,ls,add,remove,lock}` | Составные окружения |
 | `repo {init,add,ls,show,reindex,check,gc,search,sign,verify,serve,push,pull,publish-index,export-oci}` | Локальный / удалённый репозиторий SIF |
+| `completions <SHELL>` | Сгенерировать bash/zsh/fish/elvish/powershell-completion |
 
 ## Спека *.appspec
 
@@ -224,6 +236,32 @@ name = "ms-azuretools.vscode-docker"
 
 Компоненты бывают трёх режимов: `chroot`, `instance`, `both`.
 Расширения — четырёх источников: file, cid, url, online (Open VSX).
+
+### Типы расширений
+
+`[[extensions]].type` — `vsix` (default, parse package.json), `file`
+(положить как есть, например `.oxt`/`.deb`/`.rpm`), `archive` (распаковать
+.zip/.tar.gz без разбора package.json), `auto` (по расширению файла/URL).
+
+`[bundle.extensions].install` — shell-команда внутри base-инстанса.
+Плейсхолдеры: `{file}` — путь смонтированного расширения в `mount_dir`,
+`{name}`/`{id}` — ext.id, `{version}` — версия.
+
+`[bundle.extensions].mount_dir` — куда монтировать каталог
+`$BUNDLE_DIR/extensions` (по умолчанию `/config/home/.vscodium/extensions`).
+
+Пример для LibreOffice:
+
+```toml
+[bundle.extensions]
+mount_dir = "/opt/extensions"
+install   = "unopkg add --shared {file}"
+
+[[extensions]]
+name = "grammalecte"
+url  = "https://grammalecte.net/grammalecte-fr-v2.1.3.oxt"
+type = "file"
+```
 
 ### `source = repo` и `bundle.lock` (E3)
 

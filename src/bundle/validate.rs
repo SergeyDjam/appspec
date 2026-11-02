@@ -106,11 +106,13 @@ pub fn preflight(file: &BundleFile, base_dir: &Path, cache: &Path) -> Vec<Issue>
             if !p.is_file() {
                 out.push(Issue::error(
                     &scope,
-                    format!(".vsix не найден: {}", p.display()),
+                    format!("файл расширения не найден: {}", p.display()),
                 ));
             }
         } else if let Some(cid) = &e.cid {
-            let cached = cache.join(format!("{}.vsix", loader::sanitize_filename(cid)));
+            let cached = cache
+                .join("extensions")
+                .join(format!("{}.bin", loader::sanitize_filename(cid)));
             if !cached.is_file() {
                 out.push(Issue::warn(
                     &scope,
@@ -118,7 +120,10 @@ pub fn preflight(file: &BundleFile, base_dir: &Path, cache: &Path) -> Vec<Issue>
                 ));
             }
         } else if let Some(url) = &e.url {
-            let cached = cache.join(format!("{}.vsix", loader::sanitize_filename(&e.name)));
+            let base = url.rsplit('/').next().unwrap_or("extension.bin");
+            let cached = cache
+                .join("extensions")
+                .join(loader::sanitize_filename(base));
             if !cached.is_file() {
                 out.push(Issue::warn(
                     &scope,
@@ -314,8 +319,15 @@ pub fn validate_static(
                 "укажите не более одного из file | cid | url",
             ));
         }
+        if let Some(t) = &e.r#type {
+            if !matches!(t.as_str(), "vsix" | "file" | "archive" | "auto") {
+                out.push(Issue::error(
+                    &scope,
+                    format!("неизвестный type `{t}` (ожидается vsix | file | archive | auto)"),
+                ));
+            }
+        }
     }
-
     out
 }
 

@@ -371,7 +371,29 @@ pub fn prepare_extension(
     let ext_dir_root = cache_dir.join("extensions");
     std::fs::create_dir_all(&ext_dir_root)?;
 
-    let (vsix_path, fp, source_label) = if let Some(f) = &ext.file {
+    let kind = ext.kind();
+    let (src_path, fp, source_label) =
+        resolve_extension_source(ext, &ext_dir_root, base_dir, allow_fetch)?;
+
+    match kind {
+        ExtensionKind::File => prepare_as_file(ext, &src_path, &fp, &ext_dir_root, source_label),
+        ExtensionKind::Vsix => {
+            prepare_as_archive(ext, &src_path, &fp, &ext_dir_root, source_label, true)
+        }
+        ExtensionKind::Archive => {
+            prepare_as_archive(ext, &src_path, &fp, &ext_dir_root, source_label, false)
+        }
+    }
+}
+
+/// Локальный путь к исходнику расширения + fingerprint + label источника.
+fn resolve_extension_source(
+    ext: &Extension,
+    ext_dir_root: &Path,
+    base_dir: &Path,
+    allow_fetch: bool,
+) -> Result<(PathBuf, String, String)> {
+    if let Some(f) = &ext.file {
         let p = resolve_relative(f, base_dir);
         if !p.is_file() {
             bail!("extension `{}`: файл не найден: {}", ext.name, p.display());
@@ -387,9 +409,10 @@ pub fn prepare_extension(
                 .map(|d| d.as_secs())
                 .unwrap_or(0)
         );
-        (p, fp, format!("file:{}", f))
-    } else if let Some(cid) = &ext.cid {
-        let cached = cache_dir.join(format!("{}.vsix", sanitize_filename(cid)));
+        return Ok((p, fp, format!("file:{}", f)));
+    }
+    if let Some(cid) = &ext.cid {
+        let cached = ext_dir_root.join(format!("{}.bin", sanitize_filename(cid)));
         if !cached.is_file() {
             if !allow_fetch {
                 bail!("extension `{}`: CID не выкачан", ext.name);
@@ -404,9 +427,11 @@ pub fn prepare_extension(
                 bail!("extension `{}`: `ipfs get {}` не удался", ext.name, cid);
             }
         }
-        (cached, format!("cid:{}", cid), format!("cid:{}", cid))
-    } else if let Some(url) = &ext.url {
-        let cached = cache_dir.join(format!("{}.vsix", sanitize_filename(&ext.name)));
+        return Ok((cached, format!("cid:{}", cid), format!("cid:{}", cid)));
+    }
+    if let Some(url) = &ext.url {
+        let base = url.rsplit('/').next().unwrap_or("extension.bin");
+        let cached = ext_dir_root.join(sanitize_filename(base));
         if !cached.is_file() {
             if !allow_fetch {
                 bail!("extension `{}`: url не скачан", ext.name);
@@ -414,103 +439,223 @@ pub fn prepare_extension(
             crate::log(format!("bundle: download {} → {}", url, cached.display()));
             download_url(url, &cached)?;
         }
-        (cached, format!("url:{}", url), format!("url:{}", url))
-    } else {
-        let (dl_url, ver) = openvsx_lookup(&ext.name, allow_fetch)?;
-        let cached = cache_dir.join(format!("{}-{}.vsix", ext.name, ver));
-        if !cached.is_file() {
-            if !allow_fetch {
-                bail!("extension `{}`: v{} не скачан", ext.name, ver);
-            }
-            crate::log(format!(
-                "bundle: download {} v{} → {}",
-                ext.name,
-                ver,
-                cached.display()
-            ));
-            download_url(&dl_url, &cached)?;
-        }
-        (
-            cached,
-            format!("openvsx:{}@{}", ext.name, ver),
-            format!("openvsx:{}", ext.name),
-        )
-    };
-
-    if !which("unzip") {
-        bail!("не найден `unzip` в PATH");
+        return Ok((cached, format!("url:{}", url), format!("url:{}", url)));
     }
-    let tmp_root = cache_dir.join(format!(".tmp-extract-{}", std::process::id()));
+    // Online-расширение (Open VSX), только для vsix.
+    let (dl_url, ver) = openvsx_lookup(&ext.name, allow_fetch)?;
+    let cached = ext_dir_root.join(format!("{}-{}.vsix", ext.name, ver));
+    if !cached.is_file() {
+        if !allow_fetch {
+            bail!("extension `{}`: v{} не скачан", ext.name, ver);
+        }
+        crate::log(format!(
+            "bundle: download {} v{} → {}",
+            ext.name,
+            ver,
+            cached.display()
+        ));
+        download_url(&dl_url, &cached)?;
+    }
+    Ok((
+        cached,
+        format!("openvsx:{}@{}", ext.name, ver),
+        format!("openvsx:{}", ext.name),
+    ))
+}
+
+/// `type = "file"`: просто скопировать файл в `<extensions>/`.
+/// `<mount_dir>/<basename>` — то, что получит install-команда в `{file}`.
+/// `type = "file"`: просто скопировать файл в `<extensions>/`.
+/// `<mount_dir>/<basename>` — то, что получит install-команда в `{file}`.
+///
+/// Важно: если `src` уже лежит в `ext_dir_root` (URL/CID кэшируются туда же),
+/// копировать «в самого себя» нельзя — иначе `remove_file(target)` удалит
+/// `src`, и `copy(src, target)` упадёт с ENOENT. Пропускаем копию,
+/// пишем только fingerprint.
+fn prepare_as_file(
+    ext: &Extension,
+    src: &Path,
+    fp: &str,
+    ext_dir_root: &Path,
+    source_label: String,
+) -> Result<PreparedExtension> {
+    let basename = src
+        .file_name()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_else(|| sanitize_filename(&ext.name));
+    let target = ext_dir_root.join(&basename);
+    let fp_file = ext_dir_root.join(format!(".{}.fingerprint", basename));
+
+    if target.is_file()
+        && fp_file.is_file()
+        && std::fs::read_to_string(&fp_file).ok().as_deref() == Some(fp)
+    {
+        return Ok(PreparedExtension {
+            id: ext.name.clone(),
+            version: "1".into(),
+            path: target,
+            kind: ExtensionKind::File,
+            source: source_label,
+            dependencies: Vec::new(),
+            extension_pack: Vec::new(),
+            engines_vscode: None,
+            requires: ext.requires.clone(),
+        });
+    }
+
+    // src может совпадать с target: URL/CID уже кэшируются в ext_dir_root.
+    // Копию «в самого себя» не делаем — файл уже на месте.
+    if src != target {
+        if target.is_file() {
+            let _ = std::fs::remove_file(&target);
+        }
+        std::fs::copy(src, &target)
+            .with_context(|| format!("copy {} → {}", src.display(), target.display()))?;
+    }
+    std::fs::write(&fp_file, fp)?;
+
+    crate::log(format!(
+        "bundle: extension prepared (file): {} → {}",
+        ext.name,
+        target.display()
+    ));
+
+    Ok(PreparedExtension {
+        id: ext.name.clone(),
+        version: "1".into(),
+        path: target,
+        kind: ExtensionKind::File,
+        source: source_label,
+        dependencies: Vec::new(),
+        extension_pack: Vec::new(),
+        engines_vscode: None,
+        requires: ext.requires.clone(),
+    })
+}
+
+/// `type = "vsix"` или `"archive"`: распаковать в каталог.
+/// Для vsix — прочитать `extension/package.json` (id, version, deps, engines).
+/// Для archive — использовать `ext.name` как id, версия `"1"`.
+fn prepare_as_archive(
+    ext: &Extension,
+    src: &Path,
+    fp: &str,
+    ext_dir_root: &Path,
+    source_label: String,
+    parse_vsix: bool,
+) -> Result<PreparedExtension> {
+    let src_lower = src.to_string_lossy().to_ascii_lowercase();
+    let is_zip = src_lower.ends_with(".zip") || src_lower.ends_with(".vsix");
+
+    let tmp_root = ext_dir_root.join(format!(".tmp-extract-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&tmp_root);
     std::fs::create_dir_all(&tmp_root)?;
 
-    let status = Command::new("unzip")
-        .arg("-q")
-        .arg(&vsix_path)
-        .arg("-d")
-        .arg(&tmp_root)
-        .status()
-        .with_context(|| format!("spawn unzip {}", vsix_path.display()))?;
-    if !status.success() {
+    let unpack_ok = if is_zip {
+        if !which("unzip") {
+            let _ = std::fs::remove_dir_all(&tmp_root);
+            bail!("не найден `unzip` в PATH (нужен для .vsix / .zip)");
+        }
+        Command::new("unzip")
+            .arg("-q")
+            .arg(src)
+            .arg("-d")
+            .arg(&tmp_root)
+            .status()
+            .with_context(|| format!("spawn unzip {}", src.display()))?
+            .success()
+    } else {
+        if !which("tar") {
+            let _ = std::fs::remove_dir_all(&tmp_root);
+            bail!("не найден `tar` в PATH (нужен для .tar.gz / .tgz)");
+        }
+        Command::new("tar")
+            .arg("-xf")
+            .arg(src)
+            .arg("-C")
+            .arg(&tmp_root)
+            .status()
+            .with_context(|| format!("spawn tar -xf {}", src.display()))?
+            .success()
+    };
+    if !unpack_ok {
         let _ = std::fs::remove_dir_all(&tmp_root);
-        bail!("unzip {} завершился с ошибкой", vsix_path.display());
+        bail!("распаковка {} завершилась с ошибкой", src.display());
     }
 
-    let pkg_path = tmp_root.join("extension/package.json");
-    if !pkg_path.is_file() {
-        let _ = std::fs::remove_dir_all(&tmp_root);
-        bail!("{}: нет extension/package.json", vsix_path.display());
-    }
-    let pkg: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&pkg_path)?)?;
-    let publisher = pkg
-        .get("publisher")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| anyhow!("{}: нет publisher", vsix_path.display()))?;
-    let name_pkg = pkg
-        .get("name")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| anyhow!("{}: нет name", vsix_path.display()))?;
-    let version = pkg
-        .get("version")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| anyhow!("{}: нет version", vsix_path.display()))?;
+    let (full_id, version, dependencies, extension_pack, engines_vscode) = if parse_vsix {
+        let pkg_path = tmp_root.join("extension/package.json");
+        if !pkg_path.is_file() {
+            let _ = std::fs::remove_dir_all(&tmp_root);
+            bail!(
+                "{}: нет extension/package.json — не похоже на .vsix \
+                 (для другого формата используйте `type = \"file\"` или `type = \"archive\"`)",
+                src.display()
+            );
+        }
+        let pkg: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&pkg_path)?)?;
+        let publisher = pkg
+            .get("publisher")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| anyhow!("{}: нет publisher", src.display()))?;
+        let name_pkg = pkg
+            .get("name")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| anyhow!("{}: нет name", src.display()))?;
+        let version = pkg
+            .get("version")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| anyhow!("{}: нет version", src.display()))?;
+        let full_id = format!("{}.{}", publisher, name_pkg);
+        let deps: Vec<String> = pkg
+            .get("extensionDependencies")
+            .and_then(|v| v.as_array())
+            .map(|a| {
+                a.iter()
+                    .filter_map(|v| v.as_str().map(str::to_owned))
+                    .collect()
+            })
+            .unwrap_or_default();
+        let pack: Vec<String> = pkg
+            .get("extensionPack")
+            .and_then(|v| v.as_array())
+            .map(|a| {
+                a.iter()
+                    .filter_map(|v| v.as_str().map(str::to_owned))
+                    .collect()
+            })
+            .unwrap_or_default();
+        let engines = pkg
+            .pointer("/engines/vscode")
+            .and_then(|v| v.as_str())
+            .map(str::to_owned);
+        (full_id, version.to_string(), deps, pack, engines)
+    } else {
+        (ext.name.clone(), "1".into(), Vec::new(), Vec::new(), None)
+    };
 
-    let full_id = format!("{}.{}", publisher, name_pkg);
-    let target = ext_dir_root.join(format!("{}-{}", full_id, version));
-
-    let dependencies: Vec<String> = pkg
-        .get("extensionDependencies")
-        .and_then(|v| v.as_array())
-        .map(|a| {
-            a.iter()
-                .filter_map(|v| v.as_str().map(str::to_owned))
-                .collect()
-        })
-        .unwrap_or_default();
-    let extension_pack: Vec<String> = pkg
-        .get("extensionPack")
-        .and_then(|v| v.as_array())
-        .map(|a| {
-            a.iter()
-                .filter_map(|v| v.as_str().map(str::to_owned))
-                .collect()
-        })
-        .unwrap_or_default();
-    let engines_vscode = pkg
-        .pointer("/engines/vscode")
-        .and_then(|v| v.as_str())
-        .map(str::to_owned);
-
+    let target_name = if parse_vsix {
+        format!("{}-{}", full_id, version)
+    } else {
+        format!("{}-archive", sanitize_filename(&ext.name))
+    };
+    let target = ext_dir_root.join(&target_name);
     let fp_file = target.join(".appspec-fingerprint");
+
     if target.is_dir()
         && fp_file.is_file()
-        && std::fs::read_to_string(&fp_file).ok().as_deref() == Some(fp.as_str())
+        && std::fs::read_to_string(&fp_file).ok().as_deref() == Some(fp)
     {
         let _ = std::fs::remove_dir_all(&tmp_root);
         return Ok(PreparedExtension {
             id: full_id,
-            version: version.to_string(),
-            dir: target,
+            version,
+            path: target,
+            kind: if parse_vsix {
+                ExtensionKind::Vsix
+            } else {
+                ExtensionKind::Archive
+            },
             source: source_label,
             dependencies,
             extension_pack,
@@ -519,30 +664,41 @@ pub fn prepare_extension(
         });
     }
 
-    let src = tmp_root.join("extension");
-    if !src.is_dir() {
+    let content_src = if parse_vsix {
+        tmp_root.join("extension")
+    } else {
+        tmp_root.clone()
+    };
+    if !content_src.is_dir() {
         let _ = std::fs::remove_dir_all(&tmp_root);
-        bail!("{}: нет каталога extension/", vsix_path.display());
+        bail!("{}: нет каталога с содержимым", src.display());
     }
     if target.exists() {
         let _ = std::fs::remove_dir_all(&target);
     }
-    if std::fs::rename(&src, &target).is_err() {
-        copy_dir_recursive(&src, &target)?;
+    if std::fs::rename(&content_src, &target).is_err() {
+        copy_dir_recursive(&content_src, &target)?;
     }
-    std::fs::write(target.join(".appspec-fingerprint"), &fp)?;
+    std::fs::write(&fp_file, fp)?;
     let _ = std::fs::remove_dir_all(&tmp_root);
 
     crate::log(format!(
-        "bundle: extension prepared: {} v{} → {}",
+        "bundle: extension prepared ({}): {} v{} → {}",
+        if parse_vsix { "vsix" } else { "archive" },
         full_id,
         version,
         target.display()
     ));
+
     Ok(PreparedExtension {
         id: full_id,
-        version: version.to_string(),
-        dir: target,
+        version,
+        path: target,
+        kind: if parse_vsix {
+            ExtensionKind::Vsix
+        } else {
+            ExtensionKind::Archive
+        },
         source: source_label,
         dependencies,
         extension_pack,

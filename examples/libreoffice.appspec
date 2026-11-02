@@ -1,0 +1,115 @@
+# =============================================================================
+# appspec spec: libreoffice
+# Полный LibreOffice rootfs (шаблон "full") — для офисных приложений надёжнее
+# magicpak.
+# =============================================================================
+
+[package]
+name        = "libreoffice"
+version     = "7.4.7"
+description = "LibreOffice productivity suite (containerized GUI)"
+
+[build]
+base     = "debian:bookworm"
+arch     = "amd64"
+template = "full"
+tools    = ["ca-certificates", "wget"]
+
+[build.source]
+type = ""
+url  = ""
+
+[build.apt]
+extra = [
+    # --- основные приложения ---
+    "libreoffice-writer",
+    "libreoffice-calc",
+    "libreoffice-impress",
+    "libreoffice-draw",
+    "libreoffice-gtk3",
+    "libreoffice-gnome",
+    # --- локализация ---
+    "libreoffice-l10n-ru",
+    "libreoffice-l10n-en-us",
+    # --- шрифты ---
+    "fonts-dejavu-core",
+    "fonts-liberation",
+    # --- D-Bus (для GTK) ---
+    "dbus",
+    "dbus-x11",
+    # --- утилиты (pkill/sleep в setup) ---
+    "procps",
+    "psmisc",
+    "default-jre",
+    "libreoffice-java-common",
+    "libreoffice-script-provider-python",
+    "python3-uno",
+]
+
+[build.collect]
+# Для full не используется, но поле обязательно.
+binary = "/usr/bin/libreoffice"
+
+[build.scratch]
+workdir = "/config/home"
+cmd     = ["/usr/bin/libreoffice"]
+
+[build.scratch.env]
+LANG   = "C.UTF-8"
+LC_ALL = "C.UTF-8"
+HOME   = "/config/home"
+
+[runtime]
+sif_file   = "libreoffice.sif"
+image_name = "libreoffice:latest"
+template   = "default"
+
+state_dirs      = ["home", "log"]
+env_passthrough = ["DISPLAY", "XAUTHORITY", "XDG_RUNTIME_DIR", "DBUS_SESSION_BUS_ADDRESS"]
+xauthority_auto = false
+pulse_auto      = true
+
+create_dirs = []
+
+binds = [
+    "/tmp/.X11-unix:/tmp/.X11-unix",
+    "$XDG_RUNTIME_DIR/bus:$XDG_RUNTIME_DIR/bus",
+    "$CONFIG_DIR/home:/config/home",
+    "$CONFIG_DIR/log:/config/log",
+    "$HOME/Documents:/config/home/Documents",
+]
+
+optional_binds = [
+    "/dev/dri:/dev/dri",
+    "/dev/snd:/dev/snd",
+]
+
+setup = """
+export HOME=/config/home
+mkdir -p "$HOME/.config" "$HOME/.local/share" "$HOME/.cache" "$HOME/Documents" 2>/dev/null || true
+
+export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u 2>/dev/null || echo 1000)}"
+mkdir -p "$XDG_RUNTIME_DIR" && chmod 700 "$XDG_RUNTIME_DIR" 2>/dev/null || true
+
+if [ -z "${DBUS_SESSION_BUS_ADDRESS:-}" ]; then
+    export DBUS_SESSION_BUS_ADDRESS="unix:path=$XDG_RUNTIME_DIR/bus"
+    dbus-daemon --session --address="$DBUS_SESSION_BUS_ADDRESS" --fork 2>/dev/null || true
+fi
+
+export LANG=C.UTF-8
+export LC_ALL=C.UTF-8
+"""
+
+entry = 'exec /usr/bin/libreoffice --nologo --nofirststartwizard "$@"'
+
+[runtime.vars]
+CONFIG_DIR = "$HOME/libreoffice_config"
+
+[install]
+scope         = "user"
+launcher_name = "libreoffice-container"
+desktop       = true
+categories    = ["Office", "WordProcessor", "Spreadsheet", "Presentation"]
+comment       = "LibreOffice (containerized)"
+wm_class      = "libreoffice"
+extra_files   = []

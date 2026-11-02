@@ -589,6 +589,22 @@ pub fn render_launcher(
 ) -> Result<String> {
     let b = &file.bundle;
 
+    // Куда монтировать подготовленные расширения внутри base-инстанса.
+    // Default — путь VSCodium (обратная совместимость для старых бандлов).
+    let ext_mount_dir: String = b
+        .extensions
+        .as_ref()
+        .map(|s| s.mount_dir.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "/config/home/.vscodium/extensions".into());
+
+    // Шаблон install-команды: {file}, {name}, {id}, {version}.
+    let ext_install_tpl: Option<&str> = b
+        .extensions
+        .as_ref()
+        .map(|s| s.install.as_str())
+        .filter(|s| !s.is_empty());
+
     let sandbox_comps: Vec<&(Component, std::path::PathBuf)> =
         resolved.iter().filter(|(c, _)| c.has_sandbox()).collect();
     let instance_comps: Vec<&(Component, std::path::PathBuf)> =
@@ -906,7 +922,11 @@ pub fn render_launcher(
     writeln!(w, "fi")?;
     writeln!(w, "[ -d \"$BUNDLE_DIR/home\" ] && BINDS=\"$BINDS --bind $BUNDLE_DIR/home:/config/home\" || true")?;
     writeln!(w, "[ -d \"$BUNDLE_DIR/extensions\" ] && \\")?;
-    writeln!(w, "    BINDS=\"$BINDS --bind $BUNDLE_DIR/extensions:/config/home/.vscodium/extensions\" || true")?;
+    writeln!(
+        w,
+        "    BINDS=\"$BINDS --bind $BUNDLE_DIR/extensions:{}\" || true",
+        ext_mount_dir
+    )?;
     for l in &instance_socket_binds_for_base {
         writeln!(w, "{}", l)?;
     }
@@ -986,7 +1006,37 @@ pub fn render_launcher(
         writeln!(w, ":")?;
     } else {
         for e in prepared_exts {
-            writeln!(w, "echo '  ready: {} v{}' >&2", e.id, e.version)?;
+            writeln!(
+                w,
+                "echo '  ready: {} v{} ({})' >&2",
+                e.id,
+                e.version,
+                e.kind.as_str()
+            )?;
+        }
+        if let Some(tpl) = ext_install_tpl {
+            for e in prepared_exts {
+                let file_path = format!("{}/{}", ext_mount_dir.trim_end_matches('/'), e.rel_path());
+                let cmd = tpl
+                    .replace("{file}", &file_path)
+                    .replace("{name}", &e.id)
+                    .replace("{id}", &e.id)
+                    .replace("{version}", &e.version);
+                writeln!(w, "echo '  install: {}' >&2", sh_quote(&cmd))?;
+                // Auto-accept EULA prompts from unopkg / similar tools.
+                //
+                // Без этого install-команда наследует stdin от heredoc, и
+                // unopkg (а также некоторые .vsix-installers) читает строки
+                // скрипта вместо ответа на «yes/no» → dp_misc.cxx:484
+                // "reading from stdin failed".
+                //
+                // `yes yes` пишет "yes\n" бесконечно. Инструмент выходит,
+                // `yes` получает SIGPIPE; exit code пайплайна = exit code
+                // инструмента (последний в pipe), так что `set -e` корректно
+                // пробрасывает реальные ошибки. `pipefail` в heredoc не
+                // включён, поэтому SIGPIPE у `yes` не ломает скрипт.
+                writeln!(w, "yes yes 2>/dev/null | {}", cmd)?;
+            }
         }
     }
     writeln!(w)?;

@@ -1,11 +1,37 @@
+# =============================================================================
+# appspec bundle: libreoffice + Grammalecte (French grammar checker)
+#
+# Расширения здесь — НЕ .vsix, а .oxt (LibreOffice extension pack, это zip).
+# Используется `type = "file"` + install-команда `unopkg add --shared {file}`.
+#
+# Сборка:
+#   appspec build libreoffice-bundle.appspec
+#   appspec run   libreoffice-bundle.appspec
+#
+# Требуется сеть для скачивания .oxt (либо положить его локально и
+# заменить `url` на `file = "./extensions/loki-assistent.oxt"`).
+# =============================================================================
+
 [bundle]
-name = "libreoffice"
-base = { spec = "./libreoffice.appspec" }
+name        = "libreoffice"
+description = "LibreOffice + LLM/AI Loki Assistant"
+strict      = false
+
+[bundle.base]
+spec  = "./libreoffice.appspec"
+entry = 'exec /usr/bin/libreoffice --nologo --nofirststartwizard "$@"'
 
 [bundle.extensions]
+# Куда монтировать $BUNDLE_DIR/extensions внутри base-инстанса.
 mount_dir = "/opt/extensions"
+# Команда установки внутри контейнера.
+# {file} подставляется на путь смонтированного файла,
+# {name} / {id} — на ext.id, {version} — на версию.
 install   = "unopkg add --shared {file}"
 
 [[extensions]]
-name = "grammalecte"
-file = "./extensions/grammalecte.oxt"
+name = "LibreThinker: AI Copilot for LibreOffice Writer"
+# LibreOffice extension — это .oxt (zip внутри), но unopkg распакует сам.
+# type = "file" — просто положить файл, без разбора package.json.
+url  = "https://extensions.libreoffice.org/assets/downloads/7313/1780598176/LibreThinker.oxt"
+type = "file"

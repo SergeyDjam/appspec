@@ -330,6 +330,12 @@ pub struct ExtensionsSection {
 #[derive(Debug, Clone, Deserialize)]
 pub struct Extension {
     pub name: String,
+    /// Тип расширения: `vsix` | `file` | `archive` | `auto`.
+    /// Если не задан — определяется по расширению файла/URL
+    /// (`.vsix` → vsix, `.oxt`/`.deb`/`.rpm`/… → file, `.zip`/`.tar.gz` → archive).
+    /// Для online-расширений (без file/cid/url) — vsix (Open VSX).
+    #[serde(default, rename = "type")]
+    pub r#type: Option<String>,
     #[serde(default)]
     pub file: Option<String>,
     #[serde(default)]
@@ -339,30 +345,25 @@ pub struct Extension {
     #[serde(default)]
     pub requires: Vec<String>,
 }
-impl Extension {
-    pub fn kind_count(&self) -> usize {
-        [self.file.is_some(), self.cid.is_some(), self.url.is_some()]
-            .into_iter()
-            .filter(|b| *b)
-            .count()
-    }
-    pub fn is_online(&self) -> bool {
-        self.kind_count() == 0
-    }
-    pub fn validate(&self, ctx: &str) -> anyhow::Result<()> {
-        let n = self.kind_count();
-        if n > 1 {
-            anyhow::bail!("{ctx}: укажите не более одного из `file` | `cid` | `url`");
-        }
-        Ok(())
-    }
-    pub fn online(name: impl Into<String>) -> Self {
-        Self {
-            name: name.into(),
-            file: None,
-            cid: None,
-            url: None,
-            requires: Vec::new(),
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+pub enum ExtensionKind {
+    /// VS Code extension (.vsix): распаковать, прочитать `extension/package.json`,
+    /// положить распакованный каталог в `<id>-<version>/`.
+    Vsix,
+    /// Одиночный файл (.oxt, .deb, .rpm, …): положить как есть,
+    /// `{file}` в install-команде указывает на файл.
+    File,
+    /// Архив (.zip / .tar.gz / …): распаковать в каталог без разбора package.json.
+    Archive,
+}
+
+impl ExtensionKind {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            ExtensionKind::Vsix => "vsix",
+            ExtensionKind::File => "file",
+            ExtensionKind::Archive => "archive",
         }
     }
 }
@@ -371,12 +372,115 @@ impl Extension {
 pub struct PreparedExtension {
     pub id: String,
     pub version: String,
-    pub dir: PathBuf,
+    /// Путь внутри `$BUNDLE_CACHE/extensions/`.
+    /// Для `Vsix`/`Archive` — каталог; для `File` — сам файл.
+    pub path: PathBuf,
+    pub kind: ExtensionKind,
     pub source: String,
     pub dependencies: Vec<String>,
     pub extension_pack: Vec<String>,
     pub engines_vscode: Option<String>,
     pub requires: Vec<String>,
+}
+
+impl PreparedExtension {
+    /// Относительный путь внутри каталога `<mount_dir>` —
+    /// то, что подставляется в `{file}` install-команды.
+    pub fn rel_path(&self) -> String {
+        self.path
+            .file_name()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_else(|| self.id.clone())
+    }
+}
+
+impl Extension {
+    /// Сколько из `file | cid | url` задано. 0 — online (Open VSX),
+    /// 1 — корректно, ≥2 — ошибка (ловится в `validate`).
+    pub fn kind_count(&self) -> usize {
+        [self.file.is_some(), self.cid.is_some(), self.url.is_some()]
+            .into_iter()
+            .filter(|b| *b)
+            .count()
+    }
+
+    pub fn is_online(&self) -> bool {
+        self.kind_count() == 0
+    }
+
+    /// Конструктор для авто-добавляемых расширений (extensionDependencies,
+    /// extensionPack): `file`/`cid`/`url` пустые → online через Open VSX.
+    /// `type` не задаём — `kind()` вернёт `Vsix` (нет URL/файла).
+    pub fn online(name: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            r#type: None,
+            file: None,
+            cid: None,
+            url: None,
+            requires: Vec::new(),
+        }
+    }
+
+    pub fn validate(&self, ctx: &str) -> anyhow::Result<()> {
+        let n = self.kind_count();
+        if n > 1 {
+            anyhow::bail!("{ctx}: укажите не более одного из `file` | `cid` | `url`");
+        }
+        if let Some(t) = &self.r#type {
+            if !matches!(t.as_str(), "vsix" | "file" | "archive" | "auto") {
+                anyhow::bail!(
+                    "{ctx}: неизвестный type `{t}` (ожидается vsix | file | archive | auto)"
+                );
+            }
+        }
+        Ok(())
+    }
+
+    /// Реальный тип расширения: явный `type`, либо автоопределение по
+    /// расширению файла/URL. Для online (нет file/cid/url) — `Vsix`.
+    pub fn kind(&self) -> ExtensionKind {
+        match self.r#type.as_deref() {
+            Some("vsix") => return ExtensionKind::Vsix,
+            Some("file") => return ExtensionKind::File,
+            Some("archive") => return ExtensionKind::Archive,
+            Some("auto") | None => {}
+            Some(other) => crate::log(format!(
+                "bundle: extension `{}`: неизвестный type `{}`, авто-определение",
+                self.name, other
+            )),
+        }
+        let candidate = self.file.as_deref().or(self.url.as_deref()).unwrap_or("");
+        let lower = candidate.to_ascii_lowercase();
+        if lower.ends_with(".vsix") {
+            return ExtensionKind::Vsix;
+        }
+        if lower.ends_with(".zip")
+            || lower.ends_with(".tar.gz")
+            || lower.ends_with(".tgz")
+            || lower.ends_with(".tar.xz")
+            || lower.ends_with(".tar.bz2")
+            || lower.ends_with(".tar")
+        {
+            return ExtensionKind::Archive;
+        }
+        if lower.ends_with(".oxt")
+            || lower.ends_with(".deb")
+            || lower.ends_with(".rpm")
+            || lower.ends_with(".sh")
+            || lower.ends_with(".bin")
+            || lower.ends_with(".exe")
+        {
+            return ExtensionKind::File;
+        }
+        // Ничего не опознали: file/url → file (безопаснее),
+        // cid/online → vsix (backwards compat).
+        if self.file.is_some() || self.url.is_some() {
+            ExtensionKind::File
+        } else {
+            ExtensionKind::Vsix
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
