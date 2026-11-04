@@ -274,8 +274,19 @@ install = "codium --install-extension {target} --force"
         "extracted dir must contain package.json (contents of extension/)"
     );
 
-    // 2. Исходный .vsix остаётся — это кэш исходника.
-    assert!(exts.join("demo.vsix").is_file());
+    // 2. Исходный .vsix (в спеке `file = "./demo.vsix"`, т.е. рядом
+    //    со спеком, а НЕ в кэше) не тронут: prepare_as_archive его
+    //    только читает. Попадание в `exts/` — это поведение для
+    //    `url =` / online-источников; для локального `file =` файл
+    //    остаётся там, где лежал.
+    assert!(
+        tmp.path().join("demo.vsix").is_file(),
+        "source .vsix (relative to spec) must remain untouched"
+    );
+    assert!(
+        !exts.join("demo.vsix").exists(),
+        "local `file =` source must not be cached into exts/"
+    );
 
     // 3. Launcher НЕ содержит `install:` — ни `codium --install-extension`,
     //    ни вообще `yes yes | …`.
