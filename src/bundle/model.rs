@@ -140,7 +140,6 @@ pub struct Component {
     #[serde(default)]
     pub files: Vec<FileRef>,
 
-    /// "chroot" (по умолчанию) | "instance" | "both"
     #[serde(default)]
     pub mode: Option<String>,
 
@@ -257,8 +256,6 @@ pub struct FileRef {
     pub content: Option<String>,
     #[serde(default)]
     pub mode: Option<u32>,
-    /// "base" (по умолчанию) | "sandbox" | "instance";
-    /// можно несколько через запятую: "base,sandbox".
     #[serde(default)]
     pub scope: Option<String>,
 }
@@ -330,6 +327,8 @@ pub struct ExtensionsSection {
 #[derive(Debug, Clone, Deserialize)]
 pub struct Extension {
     pub name: String,
+    #[serde(default, rename = "type")]
+    pub r#type: Option<String>,
     #[serde(default)]
     pub file: Option<String>,
     #[serde(default)]
@@ -339,6 +338,46 @@ pub struct Extension {
     #[serde(default)]
     pub requires: Vec<String>,
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+pub enum ExtensionKind {
+    Vsix,
+    File,
+    Archive,
+}
+
+impl ExtensionKind {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            ExtensionKind::Vsix => "vsix",
+            ExtensionKind::File => "file",
+            ExtensionKind::Archive => "archive",
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct PreparedExtension {
+    pub id: String,
+    pub version: String,
+    pub path: PathBuf,
+    pub kind: ExtensionKind,
+    pub source: String,
+    pub dependencies: Vec<String>,
+    pub extension_pack: Vec<String>,
+    pub engines_vscode: Option<String>,
+    pub requires: Vec<String>,
+}
+
+impl PreparedExtension {
+    pub fn rel_path(&self) -> String {
+        self.path
+            .file_name()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_else(|| self.id.clone())
+    }
+}
+
 impl Extension {
     pub fn kind_count(&self) -> usize {
         [self.file.is_some(), self.cid.is_some(), self.url.is_some()]
@@ -349,34 +388,70 @@ impl Extension {
     pub fn is_online(&self) -> bool {
         self.kind_count() == 0
     }
-    pub fn validate(&self, ctx: &str) -> anyhow::Result<()> {
-        let n = self.kind_count();
-        if n > 1 {
-            anyhow::bail!("{ctx}: укажите не более одного из `file` | `cid` | `url`");
-        }
-        Ok(())
-    }
     pub fn online(name: impl Into<String>) -> Self {
         Self {
             name: name.into(),
+            r#type: None,
             file: None,
             cid: None,
             url: None,
             requires: Vec::new(),
         }
     }
-}
-
-#[derive(Debug, Clone)]
-pub struct PreparedExtension {
-    pub id: String,
-    pub version: String,
-    pub dir: PathBuf,
-    pub source: String,
-    pub dependencies: Vec<String>,
-    pub extension_pack: Vec<String>,
-    pub engines_vscode: Option<String>,
-    pub requires: Vec<String>,
+    pub fn validate(&self, ctx: &str) -> anyhow::Result<()> {
+        let n = self.kind_count();
+        if n > 1 {
+            anyhow::bail!("{ctx}: укажите не более одного из `file` | `cid` | `url`");
+        }
+        if let Some(t) = &self.r#type {
+            if !matches!(t.as_str(), "vsix" | "file" | "archive" | "auto") {
+                anyhow::bail!(
+                    "{ctx}: неизвестный type `{t}` (ожидается vsix | file | archive | auto)"
+                );
+            }
+        }
+        Ok(())
+    }
+    pub fn kind(&self) -> ExtensionKind {
+        match self.r#type.as_deref() {
+            Some("vsix") => return ExtensionKind::Vsix,
+            Some("file") => return ExtensionKind::File,
+            Some("archive") => return ExtensionKind::Archive,
+            Some("auto") | None => {}
+            Some(other) => crate::log(format!(
+                "bundle: extension `{}`: неизвестный type `{}`, авто-определение",
+                self.name, other
+            )),
+        }
+        let candidate = self.file.as_deref().or(self.url.as_deref()).unwrap_or("");
+        let lower = candidate.to_ascii_lowercase();
+        if lower.ends_with(".vsix") {
+            return ExtensionKind::Vsix;
+        }
+        if lower.ends_with(".zip")
+            || lower.ends_with(".tar.gz")
+            || lower.ends_with(".tgz")
+            || lower.ends_with(".tar.xz")
+            || lower.ends_with(".tar.bz2")
+            || lower.ends_with(".tar")
+        {
+            return ExtensionKind::Archive;
+        }
+        if lower.ends_with(".oxt")
+            || lower.ends_with(".deb")
+            || lower.ends_with(".rpm")
+            || lower.ends_with(".sh")
+            || lower.ends_with(".bin")
+            || lower.ends_with(".exe")
+        {
+            return ExtensionKind::File;
+        }
+        if self.file.is_some() || self.url.is_some() {
+            ExtensionKind::File
+        } else {
+            ExtensionKind::Vsix
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -450,4 +525,74 @@ pub struct LsExtension<'a> {
     pub engines_vscode: Option<String>,
     #[serde(default)]
     pub auto_added: bool,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn prep(kind: ExtensionKind, id: &str, ver: &str, file_name: &str) -> PreparedExtension {
+        PreparedExtension {
+            id: id.into(),
+            version: ver.into(),
+            path: PathBuf::from(format!("/cache/extensions/{file_name}")),
+            kind,
+            source: "test".into(),
+            dependencies: Vec::new(),
+            extension_pack: Vec::new(),
+            engines_vscode: None,
+            requires: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn rel_path_file_returns_basename() {
+        let e = prep(
+            ExtensionKind::File,
+            "grammalecte",
+            "1",
+            "Grammalecte-fr-v2.1.3.oxt",
+        );
+        assert_eq!(e.rel_path(), "Grammalecte-fr-v2.1.3.oxt");
+    }
+
+    #[test]
+    fn rel_path_vsix_returns_vsix_filename() {
+        let e = prep(
+            ExtensionKind::Vsix,
+            "opentofu.vscode-opentofu",
+            "0.6.3",
+            "opentofu.vscode-opentofu-0.6.3.vsix",
+        );
+        assert_eq!(e.rel_path(), "opentofu.vscode-opentofu-0.6.3.vsix");
+    }
+
+    #[test]
+    fn rel_path_archive_returns_archive_dir_name() {
+        let e = prep(ExtensionKind::Archive, "stuff", "1", "stuff-archive");
+        assert_eq!(e.rel_path(), "stuff-archive");
+    }
+
+    #[test]
+    fn kind_defaults_to_vsix_for_online() {
+        let ext = Extension::online("publisher.name");
+        assert_eq!(ext.kind(), ExtensionKind::Vsix);
+        assert_eq!(ext.kind_count(), 0);
+        assert!(ext.is_online());
+    }
+
+    #[test]
+    fn kind_detects_by_extension_heuristics() {
+        let mut e = Extension::online("x");
+        e.file = Some("x.oxt".into());
+        assert_eq!(e.kind(), ExtensionKind::File);
+
+        let mut e = Extension::online("x");
+        e.url = Some("https://host/x.zip".into());
+        assert_eq!(e.kind(), ExtensionKind::Archive);
+
+        let mut e = Extension::online("x");
+        e.url = Some("https://host/x.vsix".into());
+        assert_eq!(e.kind(), ExtensionKind::Vsix);
+    }
 }

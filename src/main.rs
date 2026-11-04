@@ -101,6 +101,19 @@ enum Cmd {
         #[command(subcommand)]
         cmd: repo::RepoCommand,
     },
+
+    /// Сгенерировать shell-completion (bash, zsh, fish, elvish, powershell)
+    ///
+    /// Пример установки bash-completion:
+    ///   appspec completions bash > /etc/bash_completion.d/appspec
+    ///   # или (только для текущего пользователя):
+    ///   mkdir -p ~/.local/share/bash-completion/completions
+    ///   appspec completions bash > ~/.local/share/bash-completion/completions/appspec
+    Completions {
+        /// Целевой shell
+        #[arg(value_enum)]
+        shell: clap_complete::Shell,
+    },
 }
 
 // ===========================================================================
@@ -161,6 +174,13 @@ fn main() {
         }
 
         Cmd::IpfsPublish { spec, no_pin } => cmd_ipfs_publish(&spec, no_pin).map(|_| 0),
+
+        Cmd::Completions { shell } => {
+            use clap::CommandFactory;
+            let mut cmd = Cli::command();
+            clap_complete::generate(shell, &mut cmd, "appspec", &mut std::io::stdout());
+            Ok(0)
+        }
 
         Cmd::Bundle { cmd } => bundle::run(cmd),
 

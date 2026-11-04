@@ -45,13 +45,11 @@ pub fn has_errors(issues: &[Issue]) -> bool {
 
 pub fn preflight(file: &BundleFile, base_dir: &Path, cache: &Path) -> Vec<Issue> {
     let mut out = Vec::new();
-
     check_source("base", &file.bundle.base.source, base_dir, cache, &mut out);
 
     for c in &file.components {
         let scope = format!("component:{}", c.name);
         check_source(&scope, &c.source, base_dir, cache, &mut out);
-
         for fr in &c.files {
             if let Err(e) = fr.validate(&scope) {
                 out.push(Issue::error(&scope, format!("{:#}", e)));
@@ -67,7 +65,6 @@ pub fn preflight(file: &BundleFile, base_dir: &Path, cache: &Path) -> Vec<Issue>
                 }
             }
         }
-
         if c.has_instance() {
             for dev in &["/dev/fuse", "/dev/net/tun"] {
                 if c.mounts().iter().any(|m| m == dev) && !Path::new(dev).exists() {
@@ -81,7 +78,6 @@ pub fn preflight(file: &BundleFile, base_dir: &Path, cache: &Path) -> Vec<Issue>
                 }
             }
         }
-
         for m in c.mounts() {
             if !m.starts_with('/') {
                 continue;
@@ -106,11 +102,13 @@ pub fn preflight(file: &BundleFile, base_dir: &Path, cache: &Path) -> Vec<Issue>
             if !p.is_file() {
                 out.push(Issue::error(
                     &scope,
-                    format!(".vsix не найден: {}", p.display()),
+                    format!("файл расширения не найден: {}", p.display()),
                 ));
             }
         } else if let Some(cid) = &e.cid {
-            let cached = cache.join(format!("{}.vsix", loader::sanitize_filename(cid)));
+            let cached = cache
+                .join("extensions")
+                .join(format!("{}.bin", loader::sanitize_filename(cid)));
             if !cached.is_file() {
                 out.push(Issue::warn(
                     &scope,
@@ -118,7 +116,10 @@ pub fn preflight(file: &BundleFile, base_dir: &Path, cache: &Path) -> Vec<Issue>
                 ));
             }
         } else if let Some(url) = &e.url {
-            let cached = cache.join(format!("{}.vsix", loader::sanitize_filename(&e.name)));
+            let base = url.rsplit('/').next().unwrap_or("extension.bin");
+            let cached = cache
+                .join("extensions")
+                .join(loader::sanitize_filename(base));
             if !cached.is_file() {
                 out.push(Issue::warn(
                     &scope,
@@ -127,7 +128,6 @@ pub fn preflight(file: &BundleFile, base_dir: &Path, cache: &Path) -> Vec<Issue>
             }
         }
     }
-
     out
 }
 
@@ -196,7 +196,6 @@ fn check_source(
 
 fn check_repo_source(scope: &str, pv: &str, out: &mut Vec<Issue>) {
     use crate::repo::{default_root, layout::RepoRoot};
-
     let Some((name, ver)) = pv.split_once(':') else {
         out.push(Issue::error(
             scope,
@@ -205,7 +204,6 @@ fn check_repo_source(scope: &str, pv: &str, out: &mut Vec<Issue>) {
         return;
     };
     let name = name.to_ascii_lowercase();
-
     let Ok(root) = RepoRoot::open(&default_root()) else {
         out.push(Issue::error(
             scope,
@@ -255,7 +253,6 @@ pub fn validate_static(
     strict: bool,
 ) -> Vec<Issue> {
     let mut out = Vec::new();
-
     if base_src.kind_count() != 1 {
         out.push(
             Issue::error("base", "source должен содержать ровно один источник")
@@ -268,7 +265,6 @@ pub fn validate_static(
             "не указан entry (нет `exec …` в setup и нет [bundle.base].entry)",
         ));
     }
-
     for c in components {
         let scope = format!("component:{}", c.name);
         if !c.target().starts_with('/') {
@@ -295,7 +291,6 @@ pub fn validate_static(
             out.push(Issue::warn(&scope, "strict = true, но selftest не задан"));
         }
     }
-
     let mut seen_provides = std::collections::BTreeMap::<String, String>::new();
     for c in components {
         if let Some(prev) = seen_provides.insert(c.provide(), c.name.clone()) {
@@ -305,7 +300,6 @@ pub fn validate_static(
             ));
         }
     }
-
     for e in extensions {
         let scope = format!("extension:{}", e.name);
         if e.kind_count() > 1 {
@@ -314,8 +308,15 @@ pub fn validate_static(
                 "укажите не более одного из file | cid | url",
             ));
         }
+        if let Some(t) = &e.r#type {
+            if !matches!(t.as_str(), "vsix" | "file" | "archive" | "auto") {
+                out.push(Issue::error(
+                    &scope,
+                    format!("неизвестный type `{t}` (ожидается vsix | file | archive | auto)"),
+                ));
+            }
+        }
     }
-
     out
 }
 
@@ -326,7 +327,6 @@ pub fn validate_resolved(
     strict: bool,
 ) -> Vec<Issue> {
     let mut out = Vec::new();
-
     if !base.sif.is_file() {
         out.push(Issue::error(
             "base",
@@ -341,7 +341,6 @@ pub fn validate_resolved(
             ));
         }
     }
-
     let installed: HashSet<&str> = prepared_exts.iter().map(|e| e.id.as_str()).collect();
     for e in prepared_exts {
         for dep in &e.dependencies {
@@ -355,7 +354,6 @@ pub fn validate_resolved(
             }
         }
     }
-
     let provided: std::collections::BTreeMap<String, String> = resolved_components
         .iter()
         .map(|(c, _)| (c.provide(), c.name.clone()))
@@ -373,6 +371,5 @@ pub fn validate_resolved(
             }
         }
     }
-
     out
 }

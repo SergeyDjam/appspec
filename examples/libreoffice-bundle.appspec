@@ -1,11 +1,43 @@
+# =============================================================================
+# appspec bundle: libreoffice + расширения (.oxt)
+#
+# Расширения здесь — не .vsix, а .oxt (LibreOffice extension pack).
+# Используется `type = "file"` + install-команда `unopkg add --shared {file}`.
+# `yes yes |` в install добавляется автоматически в codegen — EULA
+# принимается без интерактива.
+#
+# Сборка:
+#   appspec build libreoffice-bundle.appspec
+#   appspec run   libreoffice-bundle.appspec
+#
+# Подготовка .oxt (один раз):
+#   1. Открыть https://extensions.libreoffice.org/ и скачать нужный .oxt.
+#      (Прямые URL у extensions.libreoffice.org меняются от релиза к релизу,
+#      поэтому используем `file =`, а не `url =`.)
+#   2. Положить в ./extensions/ рядом с этим спеком.
+#   3. appspec bundle build — файл будет смонтирован в /opt/extensions
+#      и установлен через `unopkg add --shared {file}`.
+# =============================================================================
+
 [bundle]
-name = "libreoffice"
-base = { spec = "./libreoffice.appspec" }
+name        = "libreoffice"
+description = "LibreOffice + .oxt extensions"
+strict      = false
+
+[bundle.base]
+spec  = "./libreoffice.appspec"
+entry = 'exec /usr/bin/libreoffice --nologo --nofirststartwizard "$@"'
 
 [bundle.extensions]
+# Куда монтировать $BUNDLE_DIR/extensions внутри base-инстанса.
 mount_dir = "/opt/extensions"
+# Команда установки внутри контейнера.
+# {file}/{target} — путь смонтированного файла в mount_dir,
+# {name}/{id} — ext.id, {version} — версия.
 install   = "unopkg add --shared {file}"
 
 [[extensions]]
-name = "grammalecte"
-file = "./extensions/grammalecte.oxt"
+name = "AI Copilot for LibreOffice Writer"
+# Положить файл в examples/extensions/ и обновить имя:
+file = "./extensions/LibreThinker.oxt"
+type = "file"
