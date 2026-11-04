@@ -40,8 +40,10 @@ extra = [
     # --- утилиты (pkill/sleep в setup) ---
     "procps",
     "psmisc",
+    # --- Java для Grammalecte/LibreThinker и других расширений ---
     "default-jre",
     "libreoffice-java-common",
+    # --- Python-UNO: com.sun.star.loader.Python для .oxt с Python ---
     "libreoffice-script-provider-python",
     "python3-uno",
 ]

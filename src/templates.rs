@@ -42,6 +42,7 @@ const TPL_INSTALLED_LAUNCHER: &str = include_str!("../templates/launcher.sh.j2")
 const TPL_DESKTOP: &str = include_str!("../templates/app.desktop.j2");
 const TPL_DF_DEB_LDD: &str = include_str!("../templates/Dockerfile.deb-ldd.j2");
 const TPL_DF_QT_STATIC: &str = include_str!("../templates/Dockerfile.qt-static.j2");
+const TPL_DF_APPIMAGE: &str = include_str!("../templates/Dockerfile.appimage.j2");
 
 fn builtin_dockerfile(name: &str) -> Option<&'static str> {
     Some(match name {
@@ -57,6 +58,7 @@ fn builtin_dockerfile(name: &str) -> Option<&'static str> {
         "scratch" => TPL_DF_SCRATCH,
         "deb-ldd" | "ldd" => TPL_DF_DEB_LDD,
         "qt-static" | "qt" => TPL_DF_QT_STATIC,
+        "appimage" => TPL_DF_APPIMAGE,
         _ => return None,
     })
 }

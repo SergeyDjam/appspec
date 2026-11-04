@@ -319,7 +319,7 @@ fn validate_pkg_name(name: &str) -> Result<()> {
     }
     let mut chars = name.chars();
     let first = chars.next().unwrap();
-    if !(first.is_ascii_alphanumeric() && !first.is_ascii_uppercase()) {
+    if !first.is_ascii_alphanumeric() || first.is_ascii_uppercase() {
         bail!("invalid package name `{}`: must start with [a-z0-9]", name);
     }
     for c in chars {

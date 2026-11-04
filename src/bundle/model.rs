@@ -140,7 +140,6 @@ pub struct Component {
     #[serde(default)]
     pub files: Vec<FileRef>,
 
-    /// "chroot" (по умолчанию) | "instance" | "both"
     #[serde(default)]
     pub mode: Option<String>,
 
@@ -257,8 +256,6 @@ pub struct FileRef {
     pub content: Option<String>,
     #[serde(default)]
     pub mode: Option<u32>,
-    /// "base" (по умолчанию) | "sandbox" | "instance";
-    /// можно несколько через запятую: "base,sandbox".
     #[serde(default)]
     pub scope: Option<String>,
 }
@@ -330,10 +327,6 @@ pub struct ExtensionsSection {
 #[derive(Debug, Clone, Deserialize)]
 pub struct Extension {
     pub name: String,
-    /// Тип расширения: `vsix` | `file` | `archive` | `auto`.
-    /// Если не задан — определяется по расширению файла/URL
-    /// (`.vsix` → vsix, `.oxt`/`.deb`/`.rpm`/… → file, `.zip`/`.tar.gz` → archive).
-    /// Для online-расширений (без file/cid/url) — vsix (Open VSX).
     #[serde(default, rename = "type")]
     pub r#type: Option<String>,
     #[serde(default)]
@@ -348,13 +341,8 @@ pub struct Extension {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 pub enum ExtensionKind {
-    /// VS Code extension (.vsix): распаковать, прочитать `extension/package.json`,
-    /// положить распакованный каталог в `<id>-<version>/`.
     Vsix,
-    /// Одиночный файл (.oxt, .deb, .rpm, …): положить как есть,
-    /// `{file}` в install-команде указывает на файл.
     File,
-    /// Архив (.zip / .tar.gz / …): распаковать в каталог без разбора package.json.
     Archive,
 }
 
@@ -372,8 +360,6 @@ impl ExtensionKind {
 pub struct PreparedExtension {
     pub id: String,
     pub version: String,
-    /// Путь внутри `$BUNDLE_CACHE/extensions/`.
-    /// Для `Vsix`/`Archive` — каталог; для `File` — сам файл.
     pub path: PathBuf,
     pub kind: ExtensionKind,
     pub source: String,
@@ -384,8 +370,6 @@ pub struct PreparedExtension {
 }
 
 impl PreparedExtension {
-    /// Относительный путь внутри каталога `<mount_dir>` —
-    /// то, что подставляется в `{file}` install-команды.
     pub fn rel_path(&self) -> String {
         self.path
             .file_name()
@@ -395,22 +379,15 @@ impl PreparedExtension {
 }
 
 impl Extension {
-    /// Сколько из `file | cid | url` задано. 0 — online (Open VSX),
-    /// 1 — корректно, ≥2 — ошибка (ловится в `validate`).
     pub fn kind_count(&self) -> usize {
         [self.file.is_some(), self.cid.is_some(), self.url.is_some()]
             .into_iter()
             .filter(|b| *b)
             .count()
     }
-
     pub fn is_online(&self) -> bool {
         self.kind_count() == 0
     }
-
-    /// Конструктор для авто-добавляемых расширений (extensionDependencies,
-    /// extensionPack): `file`/`cid`/`url` пустые → online через Open VSX.
-    /// `type` не задаём — `kind()` вернёт `Vsix` (нет URL/файла).
     pub fn online(name: impl Into<String>) -> Self {
         Self {
             name: name.into(),
@@ -421,7 +398,6 @@ impl Extension {
             requires: Vec::new(),
         }
     }
-
     pub fn validate(&self, ctx: &str) -> anyhow::Result<()> {
         let n = self.kind_count();
         if n > 1 {
@@ -436,9 +412,6 @@ impl Extension {
         }
         Ok(())
     }
-
-    /// Реальный тип расширения: явный `type`, либо автоопределение по
-    /// расширению файла/URL. Для online (нет file/cid/url) — `Vsix`.
     pub fn kind(&self) -> ExtensionKind {
         match self.r#type.as_deref() {
             Some("vsix") => return ExtensionKind::Vsix,
@@ -473,8 +446,6 @@ impl Extension {
         {
             return ExtensionKind::File;
         }
-        // Ничего не опознали: file/url → file (безопаснее),
-        // cid/online → vsix (backwards compat).
         if self.file.is_some() || self.url.is_some() {
             ExtensionKind::File
         } else {
@@ -554,4 +525,74 @@ pub struct LsExtension<'a> {
     pub engines_vscode: Option<String>,
     #[serde(default)]
     pub auto_added: bool,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn prep(kind: ExtensionKind, id: &str, ver: &str, file_name: &str) -> PreparedExtension {
+        PreparedExtension {
+            id: id.into(),
+            version: ver.into(),
+            path: PathBuf::from(format!("/cache/extensions/{file_name}")),
+            kind,
+            source: "test".into(),
+            dependencies: Vec::new(),
+            extension_pack: Vec::new(),
+            engines_vscode: None,
+            requires: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn rel_path_file_returns_basename() {
+        let e = prep(
+            ExtensionKind::File,
+            "grammalecte",
+            "1",
+            "Grammalecte-fr-v2.1.3.oxt",
+        );
+        assert_eq!(e.rel_path(), "Grammalecte-fr-v2.1.3.oxt");
+    }
+
+    #[test]
+    fn rel_path_vsix_returns_vsix_filename() {
+        let e = prep(
+            ExtensionKind::Vsix,
+            "opentofu.vscode-opentofu",
+            "0.6.3",
+            "opentofu.vscode-opentofu-0.6.3.vsix",
+        );
+        assert_eq!(e.rel_path(), "opentofu.vscode-opentofu-0.6.3.vsix");
+    }
+
+    #[test]
+    fn rel_path_archive_returns_archive_dir_name() {
+        let e = prep(ExtensionKind::Archive, "stuff", "1", "stuff-archive");
+        assert_eq!(e.rel_path(), "stuff-archive");
+    }
+
+    #[test]
+    fn kind_defaults_to_vsix_for_online() {
+        let ext = Extension::online("publisher.name");
+        assert_eq!(ext.kind(), ExtensionKind::Vsix);
+        assert_eq!(ext.kind_count(), 0);
+        assert!(ext.is_online());
+    }
+
+    #[test]
+    fn kind_detects_by_extension_heuristics() {
+        let mut e = Extension::online("x");
+        e.file = Some("x.oxt".into());
+        assert_eq!(e.kind(), ExtensionKind::File);
+
+        let mut e = Extension::online("x");
+        e.url = Some("https://host/x.zip".into());
+        assert_eq!(e.kind(), ExtensionKind::Archive);
+
+        let mut e = Extension::online("x");
+        e.url = Some("https://host/x.vsix".into());
+        assert_eq!(e.kind(), ExtensionKind::Vsix);
+    }
 }

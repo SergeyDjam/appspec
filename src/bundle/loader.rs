@@ -24,11 +24,9 @@ pub fn load_bundle(path: &Path) -> Result<BundleFile> {
             bail!("[[components]]: дубликат имени `{}`", c.name);
         }
         c.source.validate(&format!("component `{}`", c.name))?;
-
         for f in &c.files {
             f.validate(&format!("component `{}`", c.name))?;
         }
-
         match c.mode() {
             ComponentMode::Chroot => {
                 if let Some(b) = &c.bridge {
@@ -80,8 +78,6 @@ pub fn load_bundle(path: &Path) -> Result<BundleFile> {
                 }
             }
         }
-
-        // daemon без daemon_socket и наоборот — ошибка в любом режиме.
         match (&c.daemon, &c.daemon_socket) {
             (Some(d), Some(_)) => {
                 if d.trim().is_empty() {
@@ -101,7 +97,6 @@ pub fn load_bundle(path: &Path) -> Result<BundleFile> {
             bail!("[[extensions]]: дубликат имени `{}`", e.name);
         }
     }
-
     Ok(file)
 }
 
@@ -125,7 +120,6 @@ pub fn resolve_source(
             origin: format!("sif:{s}"),
         });
     }
-
     if let Some(s) = &src.spec {
         let sp = resolve_relative(s, base_dir);
         if !sp.is_file() {
@@ -136,7 +130,6 @@ pub fn resolve_source(
             .parent()
             .unwrap_or_else(|| Path::new("."))
             .join(spec.sif_file());
-
         if !sif.is_file() {
             if !allow_build {
                 bail!(
@@ -156,7 +149,6 @@ pub fn resolve_source(
             origin: format!("spec:{s}"),
         });
     }
-
     if let Some(c) = &src.cid {
         std::fs::create_dir_all(cache_dir)?;
         let cached = cache_dir.join(format!("{}.sif", sanitize_filename(c)));
@@ -185,7 +177,6 @@ pub fn resolve_source(
             origin: format!("cid:{c}"),
         });
     }
-
     if let Some(m) = &src.manifest {
         let d = resolve_relative(m, base_dir);
         let mf = d.join("manifest.json");
@@ -207,23 +198,14 @@ pub fn resolve_source(
             origin: format!("manifest:{m}"),
         });
     }
-
     if let Some(r) = &src.repo {
         return resolve_repo_source(r, label);
     }
-
     unreachable!()
 }
 
-/// Резолв `source = repo`:
-///   `repo = "name:version-release"` → локальный `index.json` →
-///   `sif_sha256` → `blobs/sha256/…`.
-///
-/// Setup берётся из `packages/<name>/<ver>/spec.appspec`, если он есть.
-/// `allow_build` пока не используется: pull из удалённого появится в E2.
 fn resolve_repo_source(pv: &str, label: &str) -> Result<ResolvedSource> {
     use crate::repo::{default_root, layout::RepoRoot};
-
     let (name, ver) = pv.split_once(':').ok_or_else(|| {
         anyhow!(
             "{label}: repo source must be `NAME:VERSION-RELEASE`, got `{}`",
@@ -231,15 +213,12 @@ fn resolve_repo_source(pv: &str, label: &str) -> Result<ResolvedSource> {
         )
     })?;
     let name = name.to_ascii_lowercase();
-
     let root = RepoRoot::open(&default_root())
         .map_err(|e| anyhow!("{label}: repo not available: {e:#}"))?;
-
     let index_text = std::fs::read_to_string(root.index_path())
         .with_context(|| format!("reading {}", root.index_path().display()))?;
     let index: crate::repo::meta::IndexV1 =
         serde_json::from_str(&index_text).with_context(|| "parsing repo index.json".to_string())?;
-
     let pkg = index
         .packages
         .get(&name)
@@ -248,7 +227,6 @@ fn resolve_repo_source(pv: &str, label: &str) -> Result<ResolvedSource> {
         .versions
         .get(ver)
         .ok_or_else(|| anyhow!("{label}: {name}:{ver} not found in repo index"))?;
-
     let sif = crate::repo::util::blob_path(&root.path, &v.sif_sha256);
     if !sif.is_file() {
         bail!(
@@ -256,8 +234,6 @@ fn resolve_repo_source(pv: &str, label: &str) -> Result<ResolvedSource> {
             sif.display()
         );
     }
-
-    // setup — из спека в packages/<name>/<ver>/spec.appspec
     let spec_path = root
         .packages_dir()
         .join(&name)
@@ -270,7 +246,6 @@ fn resolve_repo_source(pv: &str, label: &str) -> Result<ResolvedSource> {
     } else {
         None
     };
-
     Ok(ResolvedSource {
         sif,
         setup,
@@ -367,14 +342,11 @@ pub fn prepare_extension(
     allow_fetch: bool,
 ) -> Result<PreparedExtension> {
     ext.validate(&format!("extension `{}`", ext.name))?;
-
     let ext_dir_root = cache_dir.join("extensions");
     std::fs::create_dir_all(&ext_dir_root)?;
-
     let kind = ext.kind();
     let (src_path, fp, source_label) =
         resolve_extension_source(ext, &ext_dir_root, base_dir, allow_fetch)?;
-
     match kind {
         ExtensionKind::File => prepare_as_file(ext, &src_path, &fp, &ext_dir_root, source_label),
         ExtensionKind::Vsix => {
@@ -386,7 +358,6 @@ pub fn prepare_extension(
     }
 }
 
-/// Локальный путь к исходнику расширения + fingerprint + label источника.
 fn resolve_extension_source(
     ext: &Extension,
     ext_dir_root: &Path,
@@ -441,7 +412,6 @@ fn resolve_extension_source(
         }
         return Ok((cached, format!("url:{}", url), format!("url:{}", url)));
     }
-    // Online-расширение (Open VSX), только для vsix.
     let (dl_url, ver) = openvsx_lookup(&ext.name, allow_fetch)?;
     let cached = ext_dir_root.join(format!("{}-{}.vsix", ext.name, ver));
     if !cached.is_file() {
@@ -463,15 +433,12 @@ fn resolve_extension_source(
     ))
 }
 
-/// `type = "file"`: просто скопировать файл в `<extensions>/`.
-/// `<mount_dir>/<basename>` — то, что получит install-команда в `{file}`.
-/// `type = "file"`: просто скопировать файл в `<extensions>/`.
+/// `type = "file"`: скопировать файл в `<extensions>/`.
 /// `<mount_dir>/<basename>` — то, что получит install-команда в `{file}`.
 ///
-/// Важно: если `src` уже лежит в `ext_dir_root` (URL/CID кэшируются туда же),
-/// копировать «в самого себя» нельзя — иначе `remove_file(target)` удалит
-/// `src`, и `copy(src, target)` упадёт с ENOENT. Пропускаем копию,
-/// пишем только fingerprint.
+/// Если `src` уже лежит в `ext_dir_root` (URL/CID кэшируются туда же),
+/// копировать «в самого себя» нельзя — иначе `remove_file(target)`
+/// удалит `src`, и `copy(src, target)` упадёт с ENOENT.
 fn prepare_as_file(
     ext: &Extension,
     src: &Path,
@@ -503,8 +470,6 @@ fn prepare_as_file(
         });
     }
 
-    // src может совпадать с target: URL/CID уже кэшируются в ext_dir_root.
-    // Копию «в самого себя» не делаем — файл уже на месте.
     if src != target {
         if target.is_file() {
             let _ = std::fs::remove_file(&target);
@@ -533,9 +498,13 @@ fn prepare_as_file(
     })
 }
 
-/// `type = "vsix"` или `"archive"`: распаковать в каталог.
-/// Для vsix — прочитать `extension/package.json` (id, version, deps, engines).
-/// Для archive — использовать `ext.name` как id, версия `"1"`.
+/// `type = "vsix"` — распаковать `.vsix` в каталог
+/// `<publisher>.<name>-<version>/` в `$BUNDLE_DIR/extensions/`. Этот каталог
+/// монтируется в целевой `--extensions-dir` VSCodium — VSCodium подхватывает
+/// расширения из подкаталогов без запуска `codium --install-extension`
+/// (без X-сервера, без GUI).
+///
+/// `type = "archive"` — распаковать в каталог `<name>-archive/` в `$BUNDLE_DIR/extensions/`.
 fn prepare_as_archive(
     ext: &Extension,
     src: &Path,
@@ -634,13 +603,15 @@ fn prepare_as_archive(
         (ext.name.clone(), "1".into(), Vec::new(), Vec::new(), None)
     };
 
+    // Для vsix target — КАТАЛОГ `<id>-<version>/`, чтобы VSCodium подхватил
+    // его из `--extensions-dir`. Для archive — `<name>-archive/`.
     let target_name = if parse_vsix {
         format!("{}-{}", full_id, version)
     } else {
         format!("{}-archive", sanitize_filename(&ext.name))
     };
     let target = ext_dir_root.join(&target_name);
-    let fp_file = target.join(".appspec-fingerprint");
+    let fp_file = ext_dir_root.join(format!(".{}.fingerprint", target_name));
 
     if target.is_dir()
         && fp_file.is_file()
@@ -943,4 +914,197 @@ pub fn bundle_cache_dir(bundle_name: &str) -> PathBuf {
 fn which(name: &str) -> bool {
     std::env::var_os("PATH")
         .is_some_and(|paths| std::env::split_paths(&paths).any(|p| p.join(name).is_file()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::process::Command;
+
+    fn has(tool: &str) -> bool {
+        std::env::var_os("PATH")
+            .is_some_and(|p| std::env::split_paths(&p).any(|d| d.join(tool).is_file()))
+    }
+
+    fn has_zip_tools() -> bool {
+        has("zip") && has("unzip")
+    }
+
+    /// Собирает минимальный `.vsix` с `extension/package.json`.
+    fn make_vsix(dst: &Path, publisher: &str, name: &str, version: &str) -> Result<()> {
+        let build = dst
+            .parent()
+            .ok_or_else(|| anyhow!("no parent for {}", dst.display()))?
+            .join(format!(".vsix-build-{}", std::process::id()));
+        let inner = build.join("extension");
+        let _ = std::fs::remove_dir_all(&build);
+        std::fs::create_dir_all(&inner)?;
+        let pkg = format!(r#"{{"publisher":"{publisher}","name":"{name}","version":"{version}"}}"#);
+        std::fs::write(inner.join("package.json"), pkg)?;
+        let st = Command::new("zip")
+            .current_dir(&build)
+            .args(["-qr"])
+            .arg(dst)
+            .arg("extension")
+            .status()
+            .map_err(|e| anyhow!("spawn zip: {e}"))?;
+        let _ = std::fs::remove_dir_all(&build);
+        if !st.success() {
+            bail!("zip failed");
+        }
+        Ok(())
+    }
+
+    fn dummy_ext(name: &str) -> Extension {
+        Extension {
+            name: name.into(),
+            r#type: None,
+            file: None,
+            cid: None,
+            url: None,
+            requires: Vec::new(),
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // prepare_as_file
+    // -----------------------------------------------------------------------
+    //
+    // `type = "file"`: URL/CID кэшируются прямо в `<ext_dir>/<basename>`,
+    // что совпадает с target. Старый код делал `remove_file(target)` —
+    // это удаляло src, `copy(src, target)` падал с ENOENT. Сейчас проверяем
+    // ветку `if src != target` для обоих сценариев.
+
+    #[test]
+    fn prepare_file_skips_copy_when_src_equals_target() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let ext_dir = tmp.path().join("extensions");
+        std::fs::create_dir_all(&ext_dir).unwrap();
+        let src = ext_dir.join("demo.oxt");
+        std::fs::write(&src, b"fake-oxt").unwrap();
+
+        let ext = dummy_ext("demo");
+        let prep = prepare_as_file(&ext, &src, "fp-1", &ext_dir, "t".into())
+            .expect("prepare_as_file must not fail when src == target");
+        assert!(prep.path.is_file());
+        assert_eq!(prep.path, src);
+        assert_eq!(prep.kind, ExtensionKind::File);
+        assert_eq!(std::fs::read(&prep.path).unwrap(), b"fake-oxt");
+
+        let fp = ext_dir.join(".demo.oxt.fingerprint");
+        assert!(fp.is_file());
+        assert_eq!(std::fs::read_to_string(&fp).unwrap(), "fp-1");
+    }
+
+    #[test]
+    fn prepare_file_copies_when_src_differs_from_target() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let ext_dir = tmp.path().join("extensions");
+        std::fs::create_dir_all(&ext_dir).unwrap();
+        let src = tmp.path().join("custom-name.oxt");
+        std::fs::write(&src, b"oxt").unwrap();
+
+        let ext = dummy_ext("grammalecte");
+        let prep =
+            prepare_as_file(&ext, &src, "fp-2", &ext_dir, "t".into()).expect("prepare_as_file");
+
+        assert_ne!(prep.path, src);
+        assert_eq!(prep.path, ext_dir.join("custom-name.oxt"));
+        assert!(prep.path.is_file());
+        assert!(src.is_file());
+    }
+
+    // -----------------------------------------------------------------------
+    // prepare_as_archive (vsix) — распаковка в каталог `<id>-<ver>/`
+    // -----------------------------------------------------------------------
+    //
+    // VSCodium сам подхватывает каталоги `<id>-<ver>/` из `--extensions-dir`,
+    // `codium --install-extension` не нужен (и без X он зависает в GUI-режиме).
+    // Поэтому target — КАТАЛОГ, а не `.vsix`-файл.
+    // Исходный `.vsix` остаётся в `<ext_dir>/` как источник для инкрементальной
+    // пересборки (fingerprint по size+mtime).
+
+    #[test]
+    fn prepare_vsix_extracts_to_dir() {
+        if !has_zip_tools() {
+            eprintln!("SKIP: zip/unzip не в PATH");
+            return;
+        }
+        let tmp = tempfile::TempDir::new().unwrap();
+        let ext_dir = tmp.path().join("extensions");
+        std::fs::create_dir_all(&ext_dir).unwrap();
+
+        // Имитация online (OpenVSX): src = <ext_dir>/<id>-<ver>.vsix.
+        let src = ext_dir.join("demo.widget-1.0.0.vsix");
+        make_vsix(&src, "demo", "widget", "1.0.0").unwrap();
+
+        let ext = dummy_ext("demo.widget");
+        let prep = prepare_as_archive(&ext, &src, "fp", &ext_dir, "t".into(), true)
+            .expect("prepare_as_archive");
+
+        // target — каталог, а не .vsix.
+        assert!(
+            prep.path.is_dir(),
+            "path must be a directory: {:?}",
+            prep.path
+        );
+        assert_eq!(prep.path, ext_dir.join("demo.widget-1.0.0"));
+        assert_eq!(prep.path.extension().and_then(|s| s.to_str()), None);
+        // Содержимое `extension/` из .vsix теперь корень каталога.
+        assert!(prep.path.join("package.json").is_file());
+        // Исходный .vsix остаётся на месте (кэш для инкрементальности).
+        assert!(src.is_file());
+        // Fingerprint — рядом с каталогом, не внутри.
+        let fp = ext_dir.join(".demo.widget-1.0.0.fingerprint");
+        assert!(fp.is_file());
+        assert_eq!(std::fs::read_to_string(&fp).unwrap(), "fp");
+        // Метаданные из package.json.
+        assert_eq!(prep.id, "demo.widget");
+        assert_eq!(prep.version, "1.0.0");
+        assert_eq!(prep.kind, ExtensionKind::Vsix);
+    }
+
+    #[test]
+    fn prepare_vsix_idempotent_with_same_fingerprint() {
+        if !has_zip_tools() {
+            eprintln!("SKIP: zip/unzip не в PATH");
+            return;
+        }
+        let tmp = tempfile::TempDir::new().unwrap();
+        let ext_dir = tmp.path().join("extensions");
+        std::fs::create_dir_all(&ext_dir).unwrap();
+        let src = ext_dir.join("demo.widget-1.0.0.vsix");
+        make_vsix(&src, "demo", "widget", "1.0.0").unwrap();
+
+        let ext = dummy_ext("demo.widget");
+        let p1 = prepare_as_archive(&ext, &src, "same", &ext_dir, "t".into(), true).unwrap();
+        let p2 = prepare_as_archive(&ext, &src, "same", &ext_dir, "t".into(), true).unwrap();
+        assert_eq!(p1.path, p2.path);
+        assert!(p2.path.is_dir());
+        assert!(p2.path.join("package.json").is_file());
+    }
+
+    #[test]
+    fn prepare_vsix_refreshes_dir_when_fingerprint_differs() {
+        if !has_zip_tools() {
+            eprintln!("SKIP: zip/unzip не в PATH");
+            return;
+        }
+        let tmp = tempfile::TempDir::new().unwrap();
+        let ext_dir = tmp.path().join("extensions");
+        std::fs::create_dir_all(&ext_dir).unwrap();
+        let src = ext_dir.join("demo.widget-1.0.0.vsix");
+        make_vsix(&src, "demo", "widget", "1.0.0").unwrap();
+
+        let ext = dummy_ext("demo.widget");
+        let _ = prepare_as_archive(&ext, &src, "old-fp", &ext_dir, "t".into(), true).unwrap();
+
+        // Ставим «мусор» внутри — при смене fingerprint он должен быть удалён
+        // вместе с каталогом и заменён свежим содержимым.
+        std::fs::write(ext_dir.join("demo.widget-1.0.0/MARKER"), b"stale").unwrap();
+
+        let p = prepare_as_archive(&ext, &src, "new-fp", &ext_dir, "t".into(), true).unwrap();
+        assert!(!p.path.join("MARKER").exists(), "stale dir must be removed");
+        assert!(p.path.join("package.json").is_file());
+    }
 }

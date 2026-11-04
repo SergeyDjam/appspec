@@ -1,0 +1,158 @@
+# =============================================================================
+# appspec spec: openshot-4.1
+# OpenShot 4.1 из официального AppImage + Qt5 + software OpenGL (Mesa).
+# =============================================================================
+
+[package]
+name    = "openshot"
+version = "4.1.0"
+
+release     = "1"
+epoch       = 0
+summary     = "OpenShot 4.1 video editor (AppImage + system Qt5 + Mesa software GL)"
+description = """
+OpenShot — нелинейный видеоредактор. 4.1 добавил нативную поддержку текста,
+автоматическую оптимизацию 4K+ и CLI-интерфейс для автоматизации.
+Собран из официального AppImage; недостающие Qt5 и Mesa — из Debian trixie.
+"""
+license  = "GPL-3.0-or-later"
+url      = "https://www.openshot.org"
+vendor   = "OpenShot Studios, LLC"
+packager = "appspec <appspec@example.invalid>"
+bin      = "openshot-qt"
+
+# -----------------------------------------------------------------------------
+# build
+# -----------------------------------------------------------------------------
+[build]
+base     = "debian:trixie"
+arch     = "amd64"
+template = "appimage"
+
+[build.source]
+type = "appimage"
+url  = "https://github.com/OpenShot/openshot-qt/releases/download/v4.1.0/OpenShot-v4.1.0-x86_64.AppImage"
+
+[build.apt]
+extra = [
+    "bash",
+    "python3-minimal",
+
+    # --- Qt5 ---
+    "libqt5core5a",
+    "libqt5gui5",
+    "libqt5widgets5",
+    "libqt5network5",
+    "libqt5dbus5",
+    "libqt5svg5",
+    "libqt5x11extras5",
+    "libqt5xml5",
+    "libqt5sql5",
+    "libqt5concurrent5",
+    "libqt5opengl5",
+    "libqt5test5",
+    "libqt5printsupport5",
+
+    # --- Qt5: ICU ---
+    "libicu76",
+
+    # --- libopenshot: транзитивные зависимости ---
+    "ffmpeg",
+    "libzmq5",
+    "libprotobuf32t64",
+    "libjsoncpp26",
+
+    # --- Software OpenGL: Mesa DRI (swrast/llvmpipe) ---
+    "libgl1-mesa-dri",
+]
+
+[build.collect]
+binary = "usr/bin/openshot-qt"
+
+[build.scratch]
+workdir = "/config/home"
+cmd     = ["/usr/bin/openshot-qt"]
+
+[build.scratch.env]
+LANG   = "C.UTF-8"
+LC_ALL = "C.UTF-8"
+HOME   = "/config/home"
+LD_LIBRARY_PATH = "/usr/bin:/usr/bin/lib:/usr/lib:/usr/lib/x86_64-linux-gnu:/lib/x86_64-linux-gnu"
+
+# Обход GLX: Qt не будет пытаться инициализировать OpenGL,
+# переключится на raster-рендеринг.
+QT_XCB_GL_INTEGRATION = "none"
+LIBGL_ALWAYS_SOFTWARE = "1"
+
+# -----------------------------------------------------------------------------
+# runtime — GUI (instance)
+# -----------------------------------------------------------------------------
+[runtime]
+sif_file   = "openshot.sif"
+image_name = "openshot:latest"
+template   = "default"
+mode       = "instance"
+persist    = false
+workdir    = "/config/home"
+
+env_passthrough = [
+    "DISPLAY",
+    "XAUTHORITY",
+    "XDG_RUNTIME_DIR",
+    "DBUS_SESSION_BUS_ADDRESS",
+]
+
+xauthority_auto = false
+pulse_auto      = true
+
+state_dirs = ["home", "log"]
+
+create_dirs = [
+    "$CONFIG_DIR/home/.config/openshot_qt",
+    "$CONFIG_DIR/home/.local/share/openshot",
+]
+
+binds = [
+    "/tmp/.X11-unix:/tmp/.X11-unix",
+    "$XDG_RUNTIME_DIR/bus:$XDG_RUNTIME_DIR/bus",
+    "$CONFIG_DIR/home:/config/home",
+    "$CONFIG_DIR/log:/config/log",
+]
+
+optional_binds = [
+    "/dev/dri:/dev/dri",
+    "/dev/snd:/dev/snd",
+]
+
+setup = """
+export HOME=/config/home
+mkdir -p "$HOME/.config/openshot_qt" \
+         "$HOME/.local/share/openshot" \
+         "$HOME/.cache/openshot_qt" 2>/dev/null || true
+
+export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u 2>/dev/null || echo 1000)}"
+mkdir -p "$XDG_RUNTIME_DIR" && chmod 700 "$XDG_RUNTIME_DIR" 2>/dev/null || true
+
+if [ -z "${DBUS_SESSION_BUS_ADDRESS:-}" ]; then
+    export DBUS_SESSION_BUS_ADDRESS="unix:path=$HOME/.config/bus"
+    dbus-daemon --session --address="$DBUS_SESSION_BUS_ADDRESS" --fork 2>/dev/null || true
+fi
+
+export LANG=C.UTF-8
+export LC_ALL=C.UTF-8
+"""
+
+entry = 'exec /usr/bin/openshot-qt "$@"'
+
+[runtime.vars]
+CONFIG_DIR = "$HOME/openshot_config"
+
+[install]
+scope         = "user"
+launcher_name = "openshot-container"
+desktop       = true
+categories    = ["AudioVideo", "Video", "Editor"]
+comment       = "OpenShot 4.1 video editor (containerized, AppImage)"
+wm_class      = "openshot-qt"
+icon          = "icons/openshot.png"
+extra_files   = []

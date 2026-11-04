@@ -4,7 +4,7 @@ use std::fmt::Write as _;
 use crate::templates::sh_quote;
 
 use super::model::{
-    BundleFile, Component, FileScope, PreparedExtension, ResolvedBase, ResolvedFile,
+    BundleFile, Component, ExtensionKind, FileScope, PreparedExtension, ResolvedBase, ResolvedFile,
 };
 
 // ===========================================================================
@@ -114,18 +114,6 @@ fn emit_bridge(c: &Component, mount: &str) -> String {
     }
     let _ = writeln!(w);
 
-    // --- chroot сбрасывает cwd на `/`, поэтому `cd $PWD_REAL` до chroot
-    // --- бесполезен: после chroot cwd снова станет `/`. Заходим в chroot
-    // --- и уже там переходим в каталог пользователя. PWD_REAL передаём
-    // --- позиционным аргументом, потому что shell-переменные внешнего
-    // --- shell внутрь chroot не попадают (только env, а не переменные).
-    //
-    // --- Позиции внутри sh -c:
-    // ---   $0 = sh
-    // ---   $1 = $PWD_REAL
-    // ---   $2 = binary
-    // ---   $3.. = пользовательские аргументы
-    // --- После cd "$1" и shift: $1 = binary, $2.. = аргументы, exec "$@".
     let _ = writeln!(w, "if [ -x \"$SANDBOX/bin/sh\" ]; then");
     let _ = writeln!(w, "    exec chroot \"$SANDBOX\" /bin/sh -c '");
     let _ = writeln!(w, "        cd \"$1\" || exit 1");
@@ -205,8 +193,6 @@ fn emit_files_for(
 // Fingerprint для state_dir
 // ===========================================================================
 
-/// Простой djb2-хеш по содержимому instance-файлов.
-/// Используется для сброса state_dir при смене storage.conf.
 fn instance_storage_fp(files: &[ResolvedFile]) -> u64 {
     let mut h: u64 = 5381;
     for f in files {
@@ -577,6 +563,30 @@ fn emit_selftest(c: &Component, strict: bool) -> String {
 }
 
 // ===========================================================================
+// Install-команда для расширения
+// ===========================================================================
+
+/// Собрать финальную install-команду для расширения.
+///
+/// Плейсхолдеры в `tpl` (все подставляются в один проход):
+///   * `{file}`   — путь внутри `<mount_dir>` (legacy alias: `{target}`).
+///   * `{target}` — то же, что `{file}` (совместимость с примерами).
+///   * `{name}`   — ext.id (для type=file это ext.name).
+///   * `{id}`     — ext.id.
+///   * `{version}` — ext.version.
+///
+/// Вынесено в отдельную функцию, чтобы был unit-тест на regress
+/// «плейсхолдер не подставился → codium --install-extension {target}».
+pub(crate) fn build_install_command(tpl: &str, mount_dir: &str, ext: &PreparedExtension) -> String {
+    let file_path = format!("{}/{}", mount_dir.trim_end_matches('/'), ext.rel_path());
+    tpl.replace("{file}", &file_path)
+        .replace("{target}", &file_path)
+        .replace("{name}", &ext.id)
+        .replace("{id}", &ext.id)
+        .replace("{version}", &ext.version)
+}
+
+// ===========================================================================
 // Launcher
 // ===========================================================================
 
@@ -598,7 +608,7 @@ pub fn render_launcher(
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| "/config/home/.vscodium/extensions".into());
 
-    // Шаблон install-команды: {file}, {name}, {id}, {version}.
+    // Шаблон install-команды: {file}/{target}, {name}, {id}, {version}.
     let ext_install_tpl: Option<&str> = b
         .extensions
         .as_ref()
@@ -1000,7 +1010,6 @@ pub fn render_launcher(
     writeln!(w, "# ===== component files (base) =====")?;
     writeln!(w, "{}", base_files_block)?;
     writeln!(w)?;
-
     writeln!(w, "# ===== extensions =====")?;
     if prepared_exts.is_empty() {
         writeln!(w, ":")?;
@@ -1016,25 +1025,23 @@ pub fn render_launcher(
         }
         if let Some(tpl) = ext_install_tpl {
             for e in prepared_exts {
-                let file_path = format!("{}/{}", ext_mount_dir.trim_end_matches('/'), e.rel_path());
-                let cmd = tpl
-                    .replace("{file}", &file_path)
-                    .replace("{name}", &e.id)
-                    .replace("{id}", &e.id)
-                    .replace("{version}", &e.version);
+                // install исполняется ТОЛЬКО для type=file (.oxt/.deb/.rpm):
+                // unopkg и подобные требуют явного вызова.
+                //
+                // Для type=vsix расширение уже распаковано в каталог
+                // <id>-<version>/ в $BUNDLE_DIR/extensions, который bind'ится
+                // в целевой --extensions-dir VSCodium. VSCodium подхватывает
+                // каталоги сам — codium --install-extension не нужен
+                // (и без X-сервера он бы завис в GUI-режиме).
+                //
+                // Для type=archive — пользователь сам решает, что делать
+                // с распакованным каталогом; install не исполняем.
+                if e.kind != ExtensionKind::File {
+                    continue;
+                }
+                let cmd = build_install_command(tpl, &ext_mount_dir, e);
                 writeln!(w, "echo '  install: {}' >&2", sh_quote(&cmd))?;
-                // Auto-accept EULA prompts from unopkg / similar tools.
-                //
-                // Без этого install-команда наследует stdin от heredoc, и
-                // unopkg (а также некоторые .vsix-installers) читает строки
-                // скрипта вместо ответа на «yes/no» → dp_misc.cxx:484
-                // "reading from stdin failed".
-                //
-                // `yes yes` пишет "yes\n" бесконечно. Инструмент выходит,
-                // `yes` получает SIGPIPE; exit code пайплайна = exit code
-                // инструмента (последний в pipe), так что `set -e` корректно
-                // пробрасывает реальные ошибки. `pipefail` в heredoc не
-                // включён, поэтому SIGPIPE у `yes` не ломает скрипт.
+                // yes yes — auto-accept EULA-промптов (unopkg).
                 writeln!(w, "yes yes 2>/dev/null | {}", cmd)?;
             }
         }
@@ -1051,4 +1058,74 @@ pub fn render_launcher(
     writeln!(w)?;
 
     Ok(s)
+}
+
+#[cfg(test)]
+mod install_command_tests {
+    use super::*;
+    use crate::bundle::model::ExtensionKind;
+    use std::path::PathBuf;
+
+    fn fake_ext(kind: ExtensionKind, id: &str, ver: &str, file_name: &str) -> PreparedExtension {
+        PreparedExtension {
+            id: id.into(),
+            version: ver.into(),
+            path: PathBuf::from(format!("/cache/extensions/{file_name}")),
+            kind,
+            source: "test".into(),
+            dependencies: Vec::new(),
+            extension_pack: Vec::new(),
+            engines_vscode: None,
+            requires: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn install_command_substitutes_target_legacy_alias() {
+        let ext = fake_ext(
+            ExtensionKind::Vsix,
+            "opentofu.vscode-opentofu",
+            "0.6.3",
+            "opentofu.vscode-opentofu-0.6.3.vsix",
+        );
+        let cmd = build_install_command(
+            "codium --install-extension {target} --force",
+            "/opt/extensions",
+            &ext,
+        );
+        assert_eq!(
+            cmd,
+            "codium --install-extension /opt/extensions/opentofu.vscode-opentofu-0.6.3.vsix --force"
+        );
+        assert!(!cmd.contains("{target}"), "literal {{target}} left: {cmd}");
+    }
+
+    #[test]
+    fn install_command_substitutes_file_and_id_and_version() {
+        let ext = fake_ext(
+            ExtensionKind::File,
+            "grammalecte",
+            "1",
+            "Grammalecte-fr-v2.1.3.oxt",
+        );
+        let cmd = build_install_command(
+            "unopkg add --shared {file}  # {id} v{version}",
+            "/opt/extensions/",
+            &ext,
+        );
+        assert_eq!(
+            cmd,
+            "unopkg add --shared /opt/extensions/Grammalecte-fr-v2.1.3.oxt  # grammalecte v1"
+        );
+        assert!(!cmd.contains('{'));
+    }
+
+    #[test]
+    fn install_command_trims_trailing_slash_in_mount_dir() {
+        let ext = fake_ext(ExtensionKind::File, "x", "1", "x.oxt");
+        let a = build_install_command("cmd {file}", "/opt/extensions/", &ext);
+        let b = build_install_command("cmd {file}", "/opt/extensions", &ext);
+        assert_eq!(a, b);
+        assert_eq!(a, "cmd /opt/extensions/x.oxt");
+    }
 }
