@@ -1049,7 +1049,14 @@ mod tests {
             prep.path
         );
         assert_eq!(prep.path, ext_dir.join("demo.widget-1.0.0"));
-        assert_eq!(prep.path.extension().and_then(|s| s.to_str()), None);
+        // Basename заканчивается на `.0` (часть версии), поэтому проверять
+        // `extension() == None` бессмысленно — is_dir() уже гарантирует,
+        // что это каталог, а не файл.
+        assert!(
+            !prep.path.to_string_lossy().ends_with(".vsix"),
+            "extracted dir must not carry .vsix suffix: {:?}",
+            prep.path
+        );
         // Содержимое `extension/` из .vsix теперь корень каталога.
         assert!(prep.path.join("package.json").is_file());
         // Исходный .vsix остаётся на месте (кэш для инкрементальности).
