@@ -83,7 +83,10 @@ pub fn run(cmd: RepoCommand) -> Result<i32> {
 
 pub fn default_root() -> std::path::PathBuf {
     if let Ok(v) = std::env::var("APPSPEC_REPO") {
-        if !v.is_empty() {
+        // $APPSPEC_REPO может быть URL сервера — это не путь.
+        // Для локальных операций (init, serve, add, check, gc, reindex,
+        // sign, bundle-lock) нужен путь на диске.
+        if !v.is_empty() && !v.starts_with("http://") && !v.starts_with("https://") {
             return std::path::PathBuf::from(v);
         }
     }

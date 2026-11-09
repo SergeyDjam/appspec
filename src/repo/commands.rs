@@ -1,11 +1,14 @@
 use anyhow::{anyhow, bail, Context, Result};
 use clap::Args;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use super::{add, check as check_mod, default_root, gc as gc_mod, index_build, layout, meta, util};
 
 // ---- helpers ---------------------------------------------------------------
 
+/// `RepoRoot` только для локального пути. Используется в `serve`,
+/// `publish_index`, `export_oci` — там, где URL недопустим, но
+/// `default_root()` уже сам отсеивает URL из `$APPSPEC_REPO`.
 fn open_root(a: Option<PathBuf>) -> Result<layout::RepoRoot> {
     layout::RepoRoot::open(&a.unwrap_or_else(default_root))
 }
@@ -21,6 +24,115 @@ fn split_pv(s: &str) -> Result<(String, String)> {
         .split_once(':')
         .ok_or_else(|| anyhow!("expected NAME:VERSION-RELEASE, got `{}`", s))?;
     Ok((n.to_ascii_lowercase(), v.to_string()))
+}
+
+// ---- origin resolution -----------------------------------------------------
+
+fn is_http_url(s: &str) -> bool {
+    s.starts_with("http://") || s.starts_with("https://")
+}
+
+/// `--root` || $APPSPEC_REPO (как есть, включая URL) || default_root().
+/// Используется для команд, которые умеют работать с URL
+/// (search, ls, show, verify).
+fn resolve_origin(root: &Option<PathBuf>) -> String {
+    if let Some(p) = root {
+        let s = p.display().to_string();
+        if !s.is_empty() {
+            return s;
+        }
+    }
+    if let Ok(v) = std::env::var("APPSPEC_REPO") {
+        if !v.is_empty() {
+            return v;
+        }
+    }
+    default_root().display().to_string()
+}
+
+/// `RepoRoot` только для локального пути; для URL — понятная ошибка.
+/// Используется в локальных операциях (add, check, gc, reindex, sign).
+fn require_local_root(root: &Option<PathBuf>, cmd: &str) -> Result<layout::RepoRoot> {
+    let origin = resolve_origin(root);
+    if is_http_url(&origin) {
+        let hint = if cmd == "add" {
+            " (для публикации на сервер: `repo push --to <url>`)"
+        } else {
+            ""
+        };
+        bail!(
+            "`repo {}` — локальная операция, требует путь к каталогу \
+             (получено `{}`){}",
+            cmd,
+            origin,
+            hint
+        );
+    }
+    layout::RepoRoot::open(Path::new(&origin))
+}
+
+/// Загрузить index.json из локального репозитория или из HTTP.
+/// Поддерживается только `http://` — как и в `repo pull --from`
+/// (для https — reverse proxy, v1-ограничение сохраняется).
+fn read_index_from(origin: &str) -> Result<meta::IndexV1> {
+    if is_http_url(origin) {
+        eprintln!("\x1b[2m[appspec] repo: {}\x1b[0m", origin);
+        let url = format!("{}/index.json", origin.trim_end_matches('/'));
+        let (status, _h, body) = super::http::http_request(&url, "GET", &[], None)
+            .with_context(|| format!("GET {}", url))?;
+        if status != 200 {
+            bail!("GET {} returned {}", url, status);
+        }
+        let index: meta::IndexV1 = serde_json::from_slice(&body)
+            .with_context(|| format!("parsing remote index.json from {}", url))?;
+        if index.schema != 1 {
+            bail!(
+                "unsupported remote index schema {} (this client supports 1)",
+                index.schema
+            );
+        }
+        return Ok(index);
+    }
+    let root = layout::RepoRoot::open(Path::new(origin))?;
+    read_index(&root)
+}
+
+/// Печать полей `MetaV1` без JSON-обёртки. Общая для `show` (local + HTTP).
+fn print_meta_fields(m: &meta::MetaV1) {
+    println!("Name:        {}", m.name);
+    println!(
+        "Version:     {}-{} (epoch {})",
+        m.version, m.release, m.epoch
+    );
+    println!("Arch:        {}", m.arch);
+    if let Some(s) = &m.summary {
+        println!("Summary:     {}", s);
+    }
+    if let Some(s) = &m.license {
+        println!("License:     {}", s);
+    }
+    if let Some(s) = &m.url {
+        println!("URL:         {}", s);
+    }
+    if let Some(s) = &m.vendor {
+        println!("Vendor:      {}", s);
+    }
+    if let Some(s) = &m.base_digest {
+        println!("Base digest: {}", s);
+    }
+    println!("SIF sha256:  {}", m.sif_sha256);
+    println!("SIF size:    {}", m.sif_size);
+    println!("Spec sha256: {}", m.spec_sha256);
+    println!("Built at:    {}", m.built_at);
+    if !m.requires.is_empty() {
+        println!("Requires:    {}", m.requires.join(", "));
+    }
+    if !m.provides.is_empty() {
+        println!("Provides:    {}", m.provides.join(", "));
+    }
+    if !m.conflicts.is_empty() {
+        println!("Conflicts:   {}", m.conflicts.join(", "));
+    }
 }
 
 // ---- init ------------------------------------------------------------------
@@ -131,7 +243,7 @@ pub fn add(a: AddArgs) -> Result<i32> {
     if a.sif.is_empty() {
         bail!("no SIF arguments");
     }
-    let root = open_root(a.root)?;
+    let root = require_local_root(&a.root, "add")?;
     let _lock = util::FileLock::acquire(&root.lock_path())?;
 
     if a.pin_ipfs {
@@ -201,8 +313,8 @@ pub struct LsArgs {
 }
 
 pub fn ls(a: LsArgs) -> Result<i32> {
-    let root = open_root(a.root)?;
-    let index = read_index(&root)?;
+    let origin = resolve_origin(&a.root);
+    let index = read_index_from(&origin)?;
     match a.package {
         Some(p) => {
             let key = p.to_ascii_lowercase();
@@ -213,7 +325,14 @@ pub fn ls(a: LsArgs) -> Result<i32> {
             if a.json {
                 println!("{}", serde_json::to_string_pretty(&pkg.versions)?);
             } else {
-                for (k, v) in &pkg.versions {
+                // §5.2: newest first — тот же компаратор `ver_key`,
+                // что и в `pick_latest` / `rebuild_refs`.
+                // `sort_by_cached_key` вычисляет ключ один раз на элемент,
+                // а не на каждое сравнение (`sort_key` аллоцирует Vec+String).
+                let mut versions: Vec<(&String, &meta::IndexVersion)> =
+                    pkg.versions.iter().collect();
+                versions.sort_by_cached_key(|(_, v)| std::cmp::Reverse(v.sort_key()));
+                for (k, v) in versions {
                     println!(
                         "{:<24}  {:>12}  tags=[{}]  arch={}  sha={}",
                         k,
@@ -232,10 +351,6 @@ pub fn ls(a: LsArgs) -> Result<i32> {
                 for (name, pkg) in &index.packages {
                     // §5.2: latest — по `(version, release, epoch)`, а не
                     // по лексикографическому порядку ключа BTreeMap.
-                    // `"2.2.0-1" < "2.2.6-1"` лексикографически, но
-                    // semver-максимум — "2.2.6-1"; `.keys().next()` даёт
-                    // именно старейшую версию. Используем тот же `pick_latest`,
-                    // что и `rebuild_refs` для `refs/latest`.
                     let latest_owned = index_build::pick_latest(&pkg.versions);
                     let latest = latest_owned.as_deref().unwrap_or("-");
                     println!(
@@ -269,8 +384,14 @@ pub struct ShowArgs {
 }
 
 pub fn show(a: ShowArgs) -> Result<i32> {
-    let root = open_root(a.root)?;
+    let origin = resolve_origin(&a.root);
     let (pkg, ver) = split_pv(&a.package_version)?;
+
+    if is_http_url(&origin) {
+        return show_http(&origin, &pkg, &ver, &a);
+    }
+
+    let root = layout::RepoRoot::open(Path::new(&origin))?;
     let meta_path = root.packages_dir().join(&pkg).join(&ver).join("meta.json");
     if !meta_path.is_file() {
         bail!("not found: {}:{}", pkg, ver);
@@ -302,40 +423,75 @@ pub fn show(a: ShowArgs) -> Result<i32> {
         println!("{}", serde_json::to_string_pretty(&m)?);
         return Ok(0);
     }
-    println!("Name:        {}", m.name);
-    println!(
-        "Version:     {}-{} (epoch {})",
-        m.version, m.release, m.epoch
-    );
-    println!("Arch:        {}", m.arch);
-    if let Some(s) = &m.summary {
-        println!("Summary:     {}", s);
+    print_meta_fields(&m);
+    Ok(0)
+}
+
+fn show_http(origin: &str, pkg: &str, ver: &str, a: &ShowArgs) -> Result<i32> {
+    let base = origin.trim_end_matches('/');
+    eprintln!("\x1b[2m[appspec] repo: {}\x1b[0m", origin);
+
+    if a.spec {
+        let url = format!("{}/packages/{}/{}/spec.appspec", base, pkg, ver);
+        let (status, _h, body) = super::http::http_request(&url, "GET", &[], None)
+            .with_context(|| format!("GET {}", url))?;
+        if status == 404 {
+            bail!("not found: {}:{}", pkg, ver);
+        }
+        if status != 200 {
+            bail!("GET {} returned {}", url, status);
+        }
+        let text = std::str::from_utf8(&body).context("remote spec.appspec is not valid UTF-8")?;
+        print!("{}", text);
+        return Ok(0);
     }
-    if let Some(s) = &m.license {
-        println!("License:     {}", s);
+
+    let meta_url = format!("{}/packages/{}/{}/meta.json", base, pkg, ver);
+    let (status, _h, meta_body) = super::http::http_request(&meta_url, "GET", &[], None)
+        .with_context(|| format!("GET {}", meta_url))?;
+    if status == 404 {
+        bail!("not found: {}:{}", pkg, ver);
     }
-    if let Some(s) = &m.url {
-        println!("URL:         {}", s);
+    if status != 200 {
+        bail!("GET {} returned {}", meta_url, status);
     }
-    if let Some(s) = &m.vendor {
-        println!("Vendor:      {}", s);
+    let m: meta::MetaV1 = serde_json::from_slice(&meta_body).context("parsing remote meta.json")?;
+
+    if let Some(out) = &a.sif {
+        if m.sif_sha256.len() < 2 {
+            bail!("malformed sif_sha256 in remote meta.json: {}", m.sif_sha256);
+        }
+        let ab = &m.sif_sha256[..2];
+        let rest = &m.sif_sha256[2..];
+        let blob_url = format!("{}/blobs/sha256/{}/{}", base, ab, rest);
+        let (bs, _h, blob_body) = super::http::http_request(&blob_url, "GET", &[], None)
+            .with_context(|| format!("GET {}", blob_url))?;
+        if bs != 200 {
+            bail!("GET {} returned {}", blob_url, bs);
+        }
+        if !a.no_verify {
+            let actual = util::sha256_hex(&blob_body);
+            if actual != m.sif_sha256 {
+                bail!(
+                    "blob sha256 mismatch: expected {}, got {}",
+                    m.sif_sha256,
+                    actual
+                );
+            }
+        }
+        if let Some(p) = out.parent() {
+            std::fs::create_dir_all(p)?;
+        }
+        std::fs::write(out, &blob_body).with_context(|| format!("writing {}", out.display()))?;
+        println!("wrote {}", out.display());
+        return Ok(0);
     }
-    if let Some(s) = &m.base_digest {
-        println!("Base digest: {}", s);
+
+    if a.json {
+        println!("{}", serde_json::to_string_pretty(&m)?);
+        return Ok(0);
     }
-    println!("SIF sha256:  {}", m.sif_sha256);
-    println!("SIF size:    {}", m.sif_size);
-    println!("Spec sha256: {}", m.spec_sha256);
-    println!("Built at:    {}", m.built_at);
-    if !m.requires.is_empty() {
-        println!("Requires:    {}", m.requires.join(", "));
-    }
-    if !m.provides.is_empty() {
-        println!("Provides:    {}", m.provides.join(", "));
-    }
-    if !m.conflicts.is_empty() {
-        println!("Conflicts:   {}", m.conflicts.join(", "));
-    }
+    print_meta_fields(&m);
     Ok(0)
 }
 
@@ -348,7 +504,7 @@ pub struct ReindexArgs {
 }
 
 pub fn reindex(a: ReindexArgs) -> Result<i32> {
-    let root = open_root(a.root)?;
+    let root = require_local_root(&a.root, "reindex")?;
     let _lock = util::FileLock::acquire(&root.lock_path())?;
     let idx = index_build::rebuild_all(&root)?;
     println!(
@@ -370,7 +526,7 @@ pub struct CheckArgs {
 }
 
 pub fn check(a: CheckArgs) -> Result<i32> {
-    let root = open_root(a.root)?;
+    let root = require_local_root(&a.root, "check")?;
     let out = check_mod::run(&root, a.deep)?;
     if out.errors > 0 {
         eprintln!(
@@ -397,7 +553,7 @@ pub struct GcArgs {
 }
 
 pub fn gc(a: GcArgs) -> Result<i32> {
-    let root = open_root(a.root)?;
+    let root = require_local_root(&a.root, "gc")?;
     let _lock = util::FileLock::acquire(&root.lock_path())?;
     let out = gc_mod::run(&root, a.dry_run, a.keep)?;
     let verb = if a.dry_run { "would remove" } else { "removed" };
@@ -440,8 +596,8 @@ pub struct SearchArgs {
 }
 
 pub fn search(a: SearchArgs) -> Result<i32> {
-    let root = open_root(a.root)?;
-    let index = read_index(&root)?;
+    let origin = resolve_origin(&a.root);
+    let index = read_index_from(&origin)?;
     let q = a.query.as_deref().map(str::to_lowercase);
     let limit = a.limit.unwrap_or(usize::MAX);
 
@@ -490,6 +646,9 @@ pub fn search(a: SearchArgs) -> Result<i32> {
         if versions.is_empty() {
             continue;
         }
+        // §5.2: newest first — тот же компаратор `ver_key`, что и в
+        // `pick_latest` / `rebuild_refs`.
+        versions.sort_by_cached_key(|v| std::cmp::Reverse(v.sort_key()));
         results.push((name, pkg, versions));
         if results.len() >= limit {
             break;
@@ -559,8 +718,10 @@ pub fn serve(a: ServeArgs) -> Result<i32> {
 #[derive(Debug, Args)]
 pub struct PushArgs {
     pub sif: Vec<PathBuf>,
+    /// Адрес сервера. Если не задан — берётся из `$APPSPEC_REPO`,
+    /// и только если там `http://…`.
     #[arg(long)]
-    pub to: String,
+    pub to: Option<String>,
     #[arg(long)]
     pub token_file: Option<PathBuf>,
     #[arg(long)]
@@ -575,6 +736,23 @@ pub fn push(a: PushArgs) -> Result<i32> {
     }
     let _ = a.force; // сервер вернёт 409, --force на клиенте не реализован в v1
 
+    // Приёмник: --to || $APPSPEC_REPO (только если URL).
+    let to = match &a.to {
+        Some(t) => t.clone(),
+        None => match std::env::var("APPSPEC_REPO").ok().filter(|s| !s.is_empty()) {
+            Some(s) if is_http_url(&s) => s,
+            Some(s) => bail!(
+                "no --to given and $APPSPEC_REPO=`{}` is not a URL; \
+                 pass --to http://host:port",
+                s
+            ),
+            None => bail!(
+                "no --to given and $APPSPEC_REPO is unset; \
+                 pass --to http://host:port"
+            ),
+        },
+    };
+
     let token = if let Some(tf) = &a.token_file {
         std::fs::read_to_string(tf)
             .with_context(|| format!("reading token file {}", tf.display()))?
@@ -583,16 +761,18 @@ pub fn push(a: PushArgs) -> Result<i32> {
     } else if let Ok(t) = std::env::var("APPSPEC_REPO_TOKEN") {
         t
     } else if let Some(t) = &a.token {
-        eprintln!("warning: --token exposes secrets in shell history; use --token-file or APPSPEC_REPO_TOKEN");
+        eprintln!(
+            "warning: --token exposes secrets in shell history; \
+             use --token-file or APPSPEC_REPO_TOKEN"
+        );
         t.clone()
     } else {
         bail!("no token: pass --token-file, APPSPEC_REPO_TOKEN, or --token");
     };
 
-    let mut ok = 0;
     let mut failed = 0;
     for sif in &a.sif {
-        match super::push::push_one(sif, &a.to, &token) {
+        match super::push::push_one(sif, &to, &token) {
             Ok(out) => {
                 let tag = if out.already_present {
                     "no-op"
@@ -606,7 +786,6 @@ pub fn push(a: PushArgs) -> Result<i32> {
                     out.version,
                     &out.sha256[..12.min(out.sha256.len())]
                 );
-                ok += 1;
             }
             Err(e) => {
                 eprintln!("error: {}: {:#}", sif.display(), e);
@@ -614,12 +793,7 @@ pub fn push(a: PushArgs) -> Result<i32> {
             }
         }
     }
-    if failed > 0 {
-        Ok(1)
-    } else {
-        let _ = ok;
-        Ok(0)
-    }
+    Ok(if failed > 0 { 1 } else { 0 })
 }
 
 // ---- pull ------------------------------------------------------------------
@@ -627,6 +801,8 @@ pub fn push(a: PushArgs) -> Result<i32> {
 #[derive(Debug, Args)]
 pub struct PullArgs {
     pub package_version: String,
+    /// Источник. Если не задан — берётся из `$APPSPEC_REPO`, и только
+    /// если там `http://…`. Для локального источника `--from` обязателен.
     #[arg(long)]
     pub from: Option<String>,
     #[arg(long)]
@@ -644,14 +820,40 @@ pub struct PullArgs {
 }
 
 pub fn pull(a: PullArgs) -> Result<i32> {
-    let root = open_root(a.root)?;
+    // Источник: --from || ($APPSPEC_REPO если URL).
+    // Если $APPSPEC_REPO — путь, pull по-прежнему требует явный --from
+    // (pull из локального репозитория в него же бессмыслен).
+    let from = a.from.clone().or_else(|| {
+        std::env::var("APPSPEC_REPO")
+            .ok()
+            .filter(|s| !s.is_empty() && is_http_url(s))
+    });
+
+    // Приёмник: --root || default_root().
+    // default_root() уже отсеивает URL ($APPSPEC_REPO=http://… →
+    // ~/.local/share/appspec/repo).
+    let local_root_path = a.root.clone().unwrap_or_else(default_root);
+    if is_http_url(&local_root_path.display().to_string()) {
+        bail!(
+            "--root должен быть путём, не URL: {}",
+            local_root_path.display()
+        );
+    }
+    if a.root.is_none() && from.as_deref().map(is_http_url).unwrap_or(false) {
+        eprintln!(
+            "[appspec] note: source is remote; saving into {}",
+            local_root_path.display()
+        );
+    }
+
+    let root = layout::RepoRoot::open(&local_root_path)?;
     let _lock = util::FileLock::acquire(&root.lock_path())?;
 
     super::pull::pull(
         &root,
         &a.package_version,
         super::pull::PullOpts {
-            from: a.from,
+            from,
             via: a.via,
             spec_only: a.spec_only,
             sif_out: a.sif_out,
@@ -676,7 +878,7 @@ pub struct SignArgs {
 }
 
 pub fn sign(a: SignArgs) -> Result<i32> {
-    let root = open_root(a.root)?;
+    let root = require_local_root(&a.root, "sign")?;
     let _lock = util::FileLock::acquire(&root.lock_path())?;
 
     let key_path = a.key.unwrap_or_else(super::sign::default_key_path);
@@ -706,8 +908,9 @@ pub fn sign(a: SignArgs) -> Result<i32> {
 
 #[derive(Debug, Args)]
 pub struct VerifyArgs {
-    /// Публичный ключ (`ed25519:<hex>`) или файл с ним. Если не задан —
-    /// берётся `[signing].pubkey` из config.toml.
+    /// Публичный ключ (`ed25519:<hex>`) или файл с ним. Если не задан:
+    /// — локальный репозиторий: берётся `[signing].pubkey` из config.toml;
+    /// — удалённый (`http://…`): обязателен.
     #[arg(long)]
     pub pubkey: Option<PathBuf>,
     #[arg(long)]
@@ -715,7 +918,38 @@ pub struct VerifyArgs {
 }
 
 pub fn verify(a: VerifyArgs) -> Result<i32> {
-    let root = open_root(a.root)?;
+    let origin = resolve_origin(&a.root);
+
+    // Удалённый: index.json — по HTTP, pubkey — только через --pubkey.
+    if is_http_url(&origin) {
+        eprintln!("\x1b[2m[appspec] repo: {}\x1b[0m", origin);
+        let url = format!("{}/index.json", origin.trim_end_matches('/'));
+        let (status, _h, body) = super::http::http_request(&url, "GET", &[], None)
+            .with_context(|| format!("GET {}", url))?;
+        if status != 200 {
+            bail!("GET {} returned {}", url, status);
+        }
+        let index_text = String::from_utf8(body).context("remote index.json is not valid UTF-8")?;
+
+        let pubkey = if let Some(p) = &a.pubkey {
+            let s = std::fs::read_to_string(p)
+                .with_context(|| format!("reading pubkey {}", p.display()))?;
+            super::sign::parse_pubkey(s.trim())?
+        } else {
+            bail!(
+                "no public key: pass --pubkey PATH \
+                 (удалённый `{}` не отдаёт [signing].pubkey)",
+                origin
+            );
+        };
+
+        super::sign::verify_index(&index_text, &pubkey)?;
+        println!("verify: OK");
+        return Ok(0);
+    }
+
+    // Локальный.
+    let root = layout::RepoRoot::open(Path::new(&origin))?;
     let index_text = std::fs::read_to_string(root.index_path())?;
 
     let pubkey = if let Some(p) = &a.pubkey {
