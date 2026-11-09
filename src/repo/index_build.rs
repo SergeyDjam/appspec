@@ -169,22 +169,16 @@ fn rebuild_refs(root: &RepoRoot, index: &mut IndexV1) -> Result<()> {
 }
 
 /// Сравнение `(version, release, epoch)` — §5.2.
-/// Не полный semver 2.0.0: `1.2` < `1.2.0` (префикс); для типичных
-/// единообразных версий этого достаточно.
-fn pick_latest(versions: &BTreeMap<String, IndexVersion>) -> Option<String> {
+/// Использует единый компаратор [`super::meta::ver_key`]
+/// (через [`IndexVersion::sort_key`]).
+///
+/// `pub` — используется из `commands::ls` для отображения `latest=…`
+/// в сводке пакета. Экспортируем, чтобы не дублировать логику.
+pub fn pick_latest(versions: &BTreeMap<String, IndexVersion>) -> Option<String> {
     versions
         .iter()
-        .max_by(|a, b| ver_key(a.1).cmp(&ver_key(b.1)))
+        .max_by(|a, b| a.1.sort_key().cmp(&b.1.sort_key()))
         .map(|(k, _)| k.clone())
-}
-
-fn ver_key(v: &IndexVersion) -> (Vec<i64>, String, i64) {
-    let nums: Vec<i64> = v
-        .version
-        .split('.')
-        .map(|s| s.parse().unwrap_or(0))
-        .collect();
-    (nums, v.release.clone(), v.epoch as i64)
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Default)]

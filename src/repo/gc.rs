@@ -56,7 +56,9 @@ pub fn run(root: &RepoRoot, dry_run: bool, keep: Option<usize>) -> Result<GcOutc
                     &meta_path,
                 )?)?);
             }
-            v.sort_by_key(|a| std::cmp::Reverse(ver_key(a)));
+            // §5.2: единый компаратор из `meta::ver_key`
+            // (через `MetaV1::sort_key`).
+            v.sort_by_key(|a| std::cmp::Reverse(a.sort_key()));
             per_pkg.insert(name, v);
         }
     }
@@ -92,13 +94,4 @@ pub fn run(root: &RepoRoot, dry_run: bool, keep: Option<usize>) -> Result<GcOutc
         referenced: referenced.len(),
         bytes_reclaimed: bytes,
     })
-}
-
-fn ver_key(m: &MetaV1) -> (Vec<i64>, String, i64) {
-    let nums: Vec<i64> = m
-        .version
-        .split('.')
-        .map(|s| s.parse().unwrap_or(0))
-        .collect();
-    (nums, m.release.clone(), m.epoch as i64)
 }

@@ -230,12 +230,14 @@ pub fn ls(a: LsArgs) -> Result<i32> {
                 println!("{}", serde_json::to_string_pretty(&index.packages)?);
             } else {
                 for (name, pkg) in &index.packages {
-                    let latest = pkg
-                        .versions
-                        .keys()
-                        .next()
-                        .map(String::as_str)
-                        .unwrap_or("-");
+                    // §5.2: latest — по `(version, release, epoch)`, а не
+                    // по лексикографическому порядку ключа BTreeMap.
+                    // `"2.2.0-1" < "2.2.6-1"` лексикографически, но
+                    // semver-максимум — "2.2.6-1"; `.keys().next()` даёт
+                    // именно старейшую версию. Используем тот же `pick_latest`,
+                    // что и `rebuild_refs` для `refs/latest`.
+                    let latest_owned = index_build::pick_latest(&pkg.versions);
+                    let latest = latest_owned.as_deref().unwrap_or("-");
                     println!(
                         "{:<24}  {} versions  latest={}",
                         name,

@@ -5,7 +5,7 @@
 
 [package]
 name    = "opencode-desktop"
-version = "2.2.0"
+version = "2.2.6"
 
 release     = "1"
 epoch       = 0
@@ -33,7 +33,7 @@ template = "full"
 
 [build.source]
 type = "deb"
-# Имя файла в релизе v2.2.0 для Linux amd64.
+# Имя файла в релизе v%{version} для Linux amd64.
 url  = "https://github.com/anomalyco/opencode/releases/download/v%{version}/opencode-desktop-linux-amd64.deb"
 
 # Зависимости .deb разрешаются через apt-get satisfy, но для GUI-сессии
@@ -84,8 +84,8 @@ HOME   = "/config/home"
 # runtime — instance mode (GUI)
 # -----------------------------------------------------------------------------
 [runtime]
-sif_file   = "opencode-desktop.sif"
-image_name = "opencode-desktop:latest"
+sif_file   = "%{name}-%{version}.sif"
+image_name = "%{name}:%{version}"
 template   = "default"
 mode       = "instance"
 # Не persist: закрыли окно — instance остановился.

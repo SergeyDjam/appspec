@@ -89,3 +89,62 @@ pub struct IndexVersion {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ipfs_cid: Option<String>,
 }
+
+// ===========================================================================
+// Сравнение версий (§5.2)
+// ===========================================================================
+
+/// Сравнение `(version, release, epoch)` — §5.2.
+///
+/// Не полный semver 2.0.0: `1.2` < `1.2.0` (префикс); для типичных
+/// единообразных версий этого достаточно.
+///
+/// Порядок:
+///   1. `version` — покомпонентно численно (`1.10` > `1.9`, не "10" < "9");
+///   2. `release` — лексикографически как tiebreak;
+///   3. `epoch`   — численно как финальный tiebreak.
+///
+/// Единый компаратор для `IndexVersion` и `MetaV1`: обе структуры имеют
+/// `version`, `release`, `epoch`, поэтому порядок должен быть идентичным
+/// во всех местах, где сортируются версии (`repo ls`, `repo gc`,
+/// `rebuild_refs`, будущие `repo promote` / `repo ls --sort`).
+pub fn ver_key(version: &str, release: &str, epoch: u32) -> (Vec<i64>, String, i64) {
+    let nums: Vec<i64> = version.split('.').map(|s| s.parse().unwrap_or(0)).collect();
+    (nums, release.to_string(), epoch as i64)
+}
+
+impl IndexVersion {
+    /// Ключ сортировки — см. [`ver_key`].
+    pub fn sort_key(&self) -> (Vec<i64>, String, i64) {
+        ver_key(&self.version, &self.release, self.epoch)
+    }
+}
+
+impl MetaV1 {
+    /// Ключ сортировки — см. [`ver_key`].
+    pub fn sort_key(&self) -> (Vec<i64>, String, i64) {
+        ver_key(&self.version, &self.release, self.epoch)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ver_key;
+
+    #[test]
+    fn ver_key_compares_version_numerically() {
+        // Покомпонентно численно: 10 > 9, а не "10" < "9".
+        assert!(ver_key("1.10.0", "1", 0) > ver_key("1.9.0", "1", 0));
+        assert!(ver_key("2.2.6", "1", 0) > ver_key("2.2.0", "1", 0));
+    }
+
+    #[test]
+    fn ver_key_uses_release_as_tiebreak() {
+        assert!(ver_key("1.2.31", "1.2", 0) > ver_key("1.2.31", "1", 0));
+    }
+
+    #[test]
+    fn ver_key_uses_epoch_as_final_tiebreak() {
+        assert!(ver_key("1.0", "1", 2) > ver_key("1.0", "1", 1));
+    }
+}
