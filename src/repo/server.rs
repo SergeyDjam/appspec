@@ -222,13 +222,9 @@ fn handle_push(req: &Request, state: &Arc<ServerState>) -> Response {
 
     let _guard = state.write_lock.lock().unwrap();
 
-    let root = match RepoRoot::open(&state.root_path) {
-        Ok(r) => r,
-        Err(e) => {
-            let _ = std::fs::remove_file(&tmp_path);
-            return Response::internal(&format!("open root: {e}"));
-        }
-    };
+    // ServerState уже держит Config в памяти — повторный discovery
+    // не нужен и может привести к race при hot-reload server config.
+    let root = RepoRoot::open_with_config(&state.root_path, state.config.clone());
 
     let result = super::add::add_one(
         &root,

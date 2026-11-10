@@ -1,0 +1,135 @@
+# =============================================================================
+# appspec spec: megasync (ROSA 2021.1)
+# =============================================================================
+
+[package]
+name    = "megasync"
+version = "6.7.0.3"
+
+release     = "1"
+epoch       = 0
+summary     = "MEGA Desktop App (official sync client)"
+description = """
+MEGAsync — официальный десктоп-клиент для синхронизации файлов с MEGA.
+Собран для платформы ROSA 2021.1 из официального репозитория MEGA.
+"""
+license  = "MEGA Limited Code Review Licence"
+url      = "https://mega.nz/sync"
+vendor   = "Mega Limited"
+packager = "appspec <appspec@example.invalid>"
+bin      = "megasync"
+
+# -----------------------------------------------------------------------------
+# build
+# -----------------------------------------------------------------------------
+[build]
+base     = "rosalab/rosa2021.1"
+arch     = "amd64"
+template = "rpm-ldd"
+
+[build.source]
+type    = "repo"
+package = "megasync"
+
+[build.apt]
+# Только то, что dnf install megasync не тянет, но нужно для GUI.
+# gtk3/mesa-libGL уже в шаблоне (тянут cairo, gdk-pixbuf, libEGL транзитивно).
+# libxcb-cursor0 — ROSA-имя (Fedora: libxcb-cursor).
+extra = [
+    "libxcb-cursor0",
+    "dbus",
+    "dbus-x11",
+    "procps-ng",
+    "psmisc",
+]
+
+[build.collect]
+binary = "%{_prefix}/bin/%{bin}"
+
+[build.scratch]
+workdir = "/config/home"
+cmd     = ["%{_prefix}/bin/%{bin}"]
+
+[build.scratch.env]
+LANG                  = "C.UTF-8"
+LC_ALL                = "C.UTF-8"
+HOME                  = "/config/home"
+FONTCONFIG_PATH       = "/etc/fonts"
+FONTCONFIG_FILE       = "/etc/fonts/fonts.conf"
+QT_QPA_PLATFORM       = "xcb"
+QT_OPENGL             = "software"
+QT_XCB_GL_INTEGRATION = "none"
+
+# -----------------------------------------------------------------------------
+# runtime — GUI (instance)
+# -----------------------------------------------------------------------------
+[runtime]
+sif_file   = "megasync.sif"
+# Версионированный тег — правильнее, чем latest.
+image_name = "%{name}:%{version}"
+template   = "default"
+mode       = "instance"
+persist    = false
+workdir    = "/config/home"
+
+env_passthrough = [
+    "DISPLAY",
+    "XAUTHORITY",
+    "XDG_RUNTIME_DIR",
+    "DBUS_SESSION_BUS_ADDRESS",
+]
+
+xauthority_auto = false
+pulse_auto      = true
+
+state_dirs = ["home", "log"]
+
+create_dirs = [
+    "$CONFIG_DIR/home/.config/megasync",
+    "$CONFIG_DIR/home/.local/share/data/Mega Limited/MEGAsync",
+]
+
+binds = [
+    "/tmp/.X11-unix:/tmp/.X11-unix",
+    "$XDG_RUNTIME_DIR/bus:$XDG_RUNTIME_DIR/bus",
+    "$CONFIG_DIR/home:/config/home",
+    "$CONFIG_DIR/log:/config/log",
+]
+
+optional_binds = [
+    "/dev/dri:/dev/dri",
+    "/dev/snd:/dev/snd",
+]
+
+setup = """
+export HOME=/config/home
+mkdir -p "$HOME/.config/megasync" \
+         "$HOME/.local/share/data/Mega Limited/MEGAsync" \
+         "$HOME/.cache/megasync" 2>/dev/null || true
+
+export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u 2>/dev/null || echo 1000)}"
+mkdir -p "$XDG_RUNTIME_DIR" && chmod 700 "$XDG_RUNTIME_DIR" 2>/dev/null || true
+
+if [ -z "${DBUS_SESSION_BUS_ADDRESS:-}" ]; then
+    export DBUS_SESSION_BUS_ADDRESS="unix:path=$HOME/.config/bus"
+    dbus-daemon --session --address="$DBUS_SESSION_BUS_ADDRESS" --fork 2>/dev/null || true
+fi
+
+export LANG=C.UTF-8
+export LC_ALL=C.UTF-8
+"""
+
+entry = 'exec %{_prefix}/bin/%{bin} "$@"'
+
+[runtime.vars]
+CONFIG_DIR = "$HOME/megasync_config"
+
+[install]
+scope         = "user"
+launcher_name = "megasync-container"
+desktop       = true
+categories    = ["Network", "FileTransfer"]
+comment       = "MEGA Desktop App (containerized, ROSA 2021.1)"
+wm_class      = "megasync"
+icon          = "icons/megasync.png"
+extra_files   = []

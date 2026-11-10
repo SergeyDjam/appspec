@@ -303,19 +303,22 @@ RUN set -eu ; \
         ln -sf /etc/ssl/certs/ca-certificates.crt /bundle/etc/ssl/cert.pem ; \
         ln -sf /etc/ssl/certs/ca-certificates.crt /bundle/etc/ssl/certs/cert.pem ; \
     fi ; \
-    # bash и dash — если есть в builder (не из busybox: bash там нет)
-    if [ -e /bin/bash ] && [ ! -e /bundle/bin/bash ] ; then \
+    # bash и dash + их .so (libtinfo, libncursesw и т.д.)
+    for sh in /bin/bash /bin/dash ; do \
+        [ -e "$sh" ] || continue ; \
+        real=$(readlink -f "$sh") ; \
+        base=$(basename "$sh") ; \
         mkdir -p /bundle/bin ; \
-        cp -L "$(readlink -f /bin/bash)" /bundle/bin/bash ; \
-        chmod 755 /bundle/bin/bash ; \
-        echo "  + /bundle/bin/bash" ; \
-    fi ; \
-    if [ -e /bin/dash ] && [ ! -e /bundle/bin/dash ] ; then \
-        mkdir -p /bundle/bin ; \
-        cp -L "$(readlink -f /bin/dash)" /bundle/bin/dash ; \
-        chmod 755 /bundle/bin/dash ; \
-        echo "  + /bundle/bin/dash" ; \
-    fi
+        cp -L "$real" "/bundle/bin/$base" ; \
+        chmod 755 "/bundle/bin/$base" ; \
+        ldd "$real" 2>/dev/null \
+            | awk '/=> \// {print $3} /^\// {print $1}' \
+            | while IFS= read -r lib ; do \
+                [ -f "$lib" ] || continue ; \
+                /usr/local/bin/bundle-copy.sh "$lib" ; \
+            done ; \
+        echo "  + /bundle/bin/$base (+deps)" ; \
+    done
 
 # --- gschemas / pixbuf / gio / mime / hicolor (уже скомпилированы в builder) ---
 RUN set -eu ; \
@@ -331,6 +334,17 @@ RUN set -eu ; \
             | while IFS= read -r f ; do \
                 /usr/local/bin/bundle-copy.sh "$f" ; \
             done ; \
+    done ; \
+    du -sh /bundle
+
+# Ресурсы, без которых GUI-приложение запускается с пустым окном:
+# fontconfig (конфиг), шрифты, xdg-конфиги, иконки приложения.
+RUN set -eu ; \
+    for d in /etc/fonts /usr/share/fonts /etc/xdg /usr/share/icons ; do \
+        [ -d "$d" ] || continue ; \
+        mkdir -p "/bundle$d" ; \
+        cp -a "$d/." "/bundle$d/" ; \
+        echo "  + resource dir: $d" ; \
     done ; \
     du -sh /bundle
 

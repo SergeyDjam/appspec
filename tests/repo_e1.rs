@@ -148,7 +148,6 @@ fn init_creates_expected_layout() {
         .stdout(predicate::str::contains("initialized repository"));
 
     for rel in [
-        "config.toml",
         "index.json",
         "blobs/sha256",
         "packages",
@@ -157,6 +156,10 @@ fn init_creates_expected_layout() {
     ] {
         assert!(root.join(rel).exists(), "missing: {rel}");
     }
+    assert!(
+        !root.join("config.toml").exists(),
+        "config.toml must not be created by init"
+    );
 }
 
 #[test]
@@ -453,14 +456,127 @@ fn unsupported_layout_is_rejected() {
         .assert()
         .success();
 
-    // подменяем layout на 2
-    let cfg_path = root.join("config.toml");
-    let cfg = fs::read_to_string(&cfg_path).unwrap();
-    fs::write(&cfg_path, cfg.replace("layout = 1", "layout = 2")).unwrap();
+    // Phase 1: init больше не пишет config.toml, поэтому legacy-файл
+    // создаём вручную — тест проверяет, что legacy layout=2 отвергается.
+    let legacy = r#"
+[repo]
+name = "x"
+description = ""
+created_at = "2026-01-01T00:00:00Z"
+generator = "test"
+layout = 2
+"#;
+    fs::write(root.join("config.toml"), legacy).unwrap();
 
     appspec()
+        .env("XDG_CONFIG_HOME", tmp.path().join("xdg"))
         .args(["repo", "ls", "--root", root.to_str().unwrap()])
         .assert()
         .failure()
         .stderr(predicate::str::contains("unsupported repository layout 2"));
+}
+
+#[test]
+fn ls_no_pkg_shows_semver_latest_not_first_btreemap_key() {
+    let f = Fixture::new("demo", "0.0.1", "amd64");
+    let root = f.root.to_str().unwrap();
+    let sif = f.sif.to_str().unwrap();
+
+    // Две версии: release="1" и release="1.2".
+    // BTreeMap order: "0.0.1-1" < "0.0.1-1.2" (prefix),
+    // поэтому `.keys().next()` = "0.0.1-1" (старейшая).
+    // `sort_key` по (version, release, epoch): [0,0,1]+"1.2" > [0,0,1]+"1"
+    // → latest = "0.0.1-1.2".
+    f.cmd()
+        .args(["repo", "add", "--root", root, sif])
+        .assert()
+        .success();
+    f.cmd()
+        .args(["repo", "add", "--root", root, "--release-suffix", "2", sif])
+        .assert()
+        .success();
+
+    let out = f
+        .cmd()
+        .args(["repo", "ls", "--root", root])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let s = String::from_utf8_lossy(&out);
+    assert!(
+        s.contains("latest=0.0.1-1.2"),
+        "expected `latest=0.0.1-1.2` (semver max), got:\n{s}"
+    );
+    // Регресс: `.keys().next()` дал бы именно `latest=0.0.1-1`.
+    assert!(
+        !s.contains("latest=0.0.1-1\n"),
+        "must not show first BTreeMap key as latest, got:\n{s}"
+    );
+}
+
+#[test]
+fn gc_keep_n_keeps_newest_version() {
+    let f = Fixture::new("demo", "0.0.1", "amd64");
+    let root = f.root.to_str().unwrap();
+    let sif1 = f.sif.to_str().unwrap();
+
+    // Вторая SIF с другими байтами → другой blob.
+    // Тот же label (`version="0.0.1"`, `release="1"`), но `--release-suffix 2`
+    // даёт `release="1.2"` → pkg dir `0.0.1-1.2`.
+    let tmp2 = TempDir::new().unwrap();
+    let sif2 = tmp2.path().join("fake2.sif");
+    fs::write(&sif2, b"fake sif bytes for E1 tests (v2)").unwrap();
+
+    f.cmd()
+        .args(["repo", "add", "--root", root, sif1])
+        .assert()
+        .success();
+    f.cmd()
+        .args([
+            "repo",
+            "add",
+            "--root",
+            root,
+            "--release-suffix",
+            "2",
+            sif2.to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+
+    let m1: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(f.root.join("packages/demo/0.0.1-1/meta.json")).unwrap(),
+    )
+    .unwrap();
+    let m2: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(f.root.join("packages/demo/0.0.1-1.2/meta.json")).unwrap(),
+    )
+    .unwrap();
+    let sha1 = m1["sif_sha256"].as_str().unwrap();
+    let sha2 = m2["sif_sha256"].as_str().unwrap();
+    assert_ne!(sha1, sha2, "versions must have distinct blobs");
+
+    let blob1 = f
+        .root
+        .join("blobs/sha256")
+        .join(&sha1[..2])
+        .join(&sha1[2..]);
+    let blob2 = f
+        .root
+        .join("blobs/sha256")
+        .join(&sha2[..2])
+        .join(&sha2[2..]);
+    assert!(blob1.is_file());
+    assert!(blob2.is_file());
+
+    // `--keep 1` → сохраняет только самую новую (0.0.1-1.2 по `sort_key`).
+    f.cmd()
+        .args(["repo", "gc", "--keep", "1", "--root", root])
+        .assert()
+        .success();
+
+    assert!(!blob1.is_file(), "older version's blob must be removed");
+    assert!(blob2.is_file(), "newest version's blob must be kept");
 }

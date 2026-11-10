@@ -324,3 +324,168 @@ ls -la foo.sif
 
 Решение. Перейти на более минималистичный шаблон: scratch для чистого
 CLI, static для CLI с shell, alpine для языковых тулчейнов.
+
+## `repo push`: `no destination: pass --to URL, --profile NAME, or set $APPSPEC_REPO to a URL/profile`
+
+**Симптом.** `APPSPEC_REPO_TOKEN=… appspec repo push pkg.sif` падает.
+
+**Причина.** `$APPSPEC_REPO_TOKEN` — это **токен**, не destination. `push` нужны три вещи: URL, токен, файл.
+
+**Решение.**
+
+```sh
+# 1. Явно
+APPSPEC_REPO_TOKEN=… appspec repo push pkg.sif --to http://127.0.0.1:8844
+
+# 2. Через env
+APPSPEC_REPO=http://127.0.0.1:8844 APPSPEC_REPO_TOKEN=… appspec repo push pkg.sif
+
+# 3. Через профиль (многоразово)
+appspec repo client init --profile local \
+    --source-url http://127.0.0.1:8844 \
+    --token-env APPSPEC_REPO_TOKEN --default
+APPSPEC_REPO_TOKEN=… appspec repo push pkg.sif
+```
+
+## `repo push --profile test`: `client config not found`
+
+**Симптом.** `appspec repo push pkg.sif --profile test` → `client config not found; looked in: ~/.config/appspec/repos.toml, /etc/appspec/repos.toml`.
+
+**Причина.** `test` — это имя **токена** (`repo token gen test`), а `--profile` ищет профиль в client config. Это разные сущности.
+
+**Решение.**
+
+```sh
+appspec repo client init --profile local \
+    --source-url http://127.0.0.1:8844 \
+    --token-env APPSPEC_REPO_TOKEN --default
+
+APPSPEC_REPO_TOKEN=… appspec repo push pkg.sif
+```
+
+Полный справочник — [`docs/repo-config.md`](repo-config.md#--profile-vs-имя-токена).
+
+## `repo ls` без флагов → `repository not initialized at ~/.local/share/appspec/repo`
+
+**Симптом.** `appspec repo ls` падает, хотя `~/.config/appspec/repo-server.toml` существует и `[repo].root` валиден.
+
+**Причина (одна из двух).**
+
+1. **Файл `repos.toml` битый** (не TOML). `search`/`ls`/`show`/`verify` в этом случае молча уходят в `default_root()` → `~/.local/share/appspec/repo`. Если там пусто — «not initialized».
+
+2. **`repos.toml` валиден, но `default` не задан, `$APPSPEC_REPO` не задан**, а `repo ls` смотрит в client config, не в server. Discovery `repo-server.toml` для `ls`/`search`/`show`/`verify` **не делается**.
+
+**Решение.**
+
+```sh
+# Проверить, что repos.toml — валидный TOML
+cat ~/.config/appspec/repos.toml
+# должно быть:
+#   schema = 1
+#   default = "local"
+#   [[repos]]
+#   name = "local"
+#   source = { url = "http://127.0.0.1:8844" }
+#   token = "env:APPSPEC_REPO_TOKEN"
+
+# Пересоздать, если битый
+rm ~/.config/appspec/repos.toml
+appspec repo client init --profile local \
+    --source-url http://127.0.0.1:8844 \
+    --token-env APPSPEC_REPO_TOKEN --default
+
+# Или явно без client config
+APPSPEC_REPO=http://127.0.0.1:8844 appspec repo ls
+```
+
+## `repos.toml` создан, но `repo ls` пишет `client config exists but could not be loaded`
+
+**Симптом.** После ручного редактирования `~/.config/appspec/repos.toml` любая команда падает.
+
+**Причина.** Файл содержит не TOML. Классика — скопировали вывод `repo client ls` (там `default: local`, `local url:…`), а это не синтаксис TOML.
+
+**Решение.**
+
+```sh
+rm ~/.config/appspec/repos.toml
+appspec repo client init --profile local \
+    --source-url http://127.0.0.1:8844 \
+    --token-env APPSPEC_REPO_TOKEN --default
+```
+
+Или вручную:
+
+```toml
+schema = 1
+default = "local"
+
+[[repos]]
+name = "local"
+source = { url = "http://127.0.0.1:8844" }
+token = "env:APPSPEC_REPO_TOKEN"
+```
+
+## `repo token gen ci --write-file /path --mode 400`: permission 0400 или 400?
+
+**Симптом.** `stat -c '%a'` показывает `400`, а тест ждёт `0o400` — или наоборот.
+
+**Причина.** `--mode` — **восьмеричный**, как `chmod`. `--mode 400` = `0o400 = 256` (r--------). `--mode 999` → ошибка `must be octal`.
+
+**Решение.** Писать `400`, `0400` или `0o400` — все три эквивалентны.
+
+Ошибки:
+
+* `--mode must be octal (e.g. 400, 0400, 0o400), got …` — ввели десятичное.
+* `--mode out of range: 1777 (allowed 0..=0777)` — ввели `1777`.
+
+## `repo serve --root ./repo` → `warning: server config … points to /abs/repo, not ./repo`
+
+**Симптом.** Warning, хотя `./repo` и `[repo].root` — один каталог.
+
+**Причина (v1).** `norm_path` сравнивает лексически после приведения к absolute от текущего CWD. Если CWD при `serve` и при создании конфига разные — пути не совпадут.
+
+**Решение.** Использовать `[repo].root` из конфига напрямую:
+
+```sh
+appspec repo serve --config ~/.config/appspec/repo-server.toml --listen 127.0.0.1:8844
+```
+
+Или создать конфиг с `--root`, совпадающим с реальным:
+
+```sh
+appspec repo server init --root "$(realpath ./repo)"
+```
+
+## `repo init` дважды: второй раз — `already initialized as 'test/a'`
+
+**Поведение.** `repo init <root> --name X` проверяет `index.json::repo`. Если репозиторий уже инициализирован с другим именем — ошибка. С тем же — no-op.
+
+**Что делать.** Если нужно сменить имя — пересоздать репозиторий:
+
+```sh
+mv /srv/repo /srv/repo.old
+appspec repo init /srv/repo --name test/b --config ~/.config/appspec/repo-server.toml
+```
+
+## Legacy `<root>/config.toml`: `warning: … is deprecated; run 'appspec repo migrate-config …'`
+
+**Причина.** Phase 1 не создаёт `<root>/config.toml`, но читает его для обратной совместимости. Warning — напоминание.
+
+**Решение.**
+
+```sh
+appspec repo migrate-config /srv/repo
+# → writes ~/.config/appspec/repo-server.toml
+# → renames /srv/repo/config.toml to .config.toml.migrated
+```
+
+После этого warning исчезнет.
+
+## `repo add` с `$APPSPEC_REPO=http://…`: `локальная операция, требует путь`
+
+**Причина.** `add`/`check`/`gc`/`reindex`/`sign`/`serve`/`publish-index`/`export-oci` работают с диском. `$APPSPEC_REPO` может быть URL только для `search`/`ls`/`show`/`verify`/`pull`/`push`.
+
+**Решение.**
+
+* Для локальной операции: `--root PATH` или `--config PATH` побеждает env.
+* Для публикации: `repo push --to <url>`.

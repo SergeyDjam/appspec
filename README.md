@@ -1,64 +1,77 @@
+[English](README.md) | [Русский](README_ru.md)
+
 # appspec
 
-Сборка Apptainer SIF из декларативного спека (TOML). Dockerfile и launcher
-генерируются через minijinja-шаблоны. Для составных окружений есть
-подсистема bundles — base SIF + компоненты + расширения. Для публикации,
-поиска и распространения SIF — подсистема `appspec repo` (локальный
-репозиторий, HTTP-сервер, IPFS, OCI export, ed25519-подписи).
+Apptainer SIF builder from a declarative TOML spec. Dockerfile and launcher
+are rendered from minijinja templates. Bundles provide composable
+environments — base SIF + components + extensions. `appspec repo` provides
+a local/remote SIF repository with publishing, search, signing, IPFS and
+OCI export.
 
-## Возможности
+## Features
 
-- **Один спек — все артефакты.** Dockerfile, run-скрипт, SIF, .desktop,
-  launcher — генерируются из *.appspec.
-- **Десять шаблонов сборки:** deb, tar, apt, generic, rpm, alpine,
+- **One spec — every artifact.** Dockerfile, run script, SIF, .desktop,
+  launcher — all generated from `*.appspec`.
+- **Ten build templates:** deb, tar, apt, generic, rpm, alpine,
   alpine-slim, full, static, scratch.
-- **Три движка сборки:** buildah (rootless, OCI-native), podman, docker.
-- **Composable bundles:** base SIF + компоненты (chroot/instance/both) +
-  расширения из файла / URL / IPFS / Open VSX / **локального репозитория**.
-- **RPM-style макросы:** name, version, bin, optional, default.
-- **Зависимости и воспроизводимость:** `[dependencies]` с requires/provides/
-  conflicts/replaces, `[build].base_digest` для пина base-образа.
-- **Локальный репозиторий SIF (`appspec repo`):** content-addressed blobs,
-  RPM-style метаданные, поиск, sign/verify (ed25519), HTTP-сервер,
-  push/pull, IPFS pin/pull, OCI export через `oras`.
-- **Пользовательские шаблоны:** поиск в 6 местах с предсказуемым приоритетом.
+- **Three build engines:** buildah (rootless, OCI-native), podman, docker.
+- **Composable bundles:** base SIF + components (chroot/instance/both) +
+  extensions from file / URL / IPFS / Open VSX / **local repository**.
+- **RPM-style macros:** name, version, bin, optional, default.
+- **Dependencies and reproducibility:** `[dependencies]` with
+  requires/provides/conflicts/replaces, `[build].base_digest` to pin the
+  base image.
+- **Local SIF repository (`appspec repo`):** content-addressed blobs,
+  RPM-style metadata, search, sign/verify (ed25519), HTTP server,
+  push/pull, IPFS pin/pull, OCI export via `oras`.
+- **Custom templates:** lookup in 6 places with a predictable priority.
+- **Shell completions:** bash, zsh, fish, elvish, powershell.
 
-## Установка
+## Installation
 
-```
+```sh
 git clone <repo> appspec
 cd appspec
 cargo build --release
 install -m755 target/release/appspec ~/.local/bin/
 ```
 
-Зависимости времени выполнения:
+Runtime dependencies:
 
-| Компонент | Когда нужен |
+| Component | When needed |
 |-----------|-------------|
-| apptainer | всегда (сборка SIF, inspect labels) |
-| buildah / podman / docker | хотя бы один (для build) |
-| ipfs | опционально (`repo --pin-ipfs`, `pull --via ipfs`) |
-| oras | опционально (`repo export-oci`, `pull --from oci://`) |
-| curl или wget | bundle-расширения по URL |
-| unzip | подготовка .vsix |
+| apptainer | always (SIF build, label inspection) |
+| buildah / podman / docker | at least one (for build) |
+| ipfs | optional (`repo --pin-ipfs`, `pull --via ipfs`) |
+| oras | optional (`repo export-oci`, `pull --from oci://`) |
+| curl or wget | bundle extensions by URL |
+| unzip | unpack `.vsix` / `.zip` / `.oxt` in bundles |
+| tar | unpack `.tar.gz` / `.tgz` in bundles |
+| zip | only for `cargo test` (generating test `.vsix`) |
 
 ### Bash completion
 
 ```sh
-# для текущего пользователя
+# per-user
 mkdir -p ~/.local/share/bash-completion/completions
 appspec completions bash > ~/.local/share/bash-completion/completions/appspec
 
-# или системно
+# or system-wide
 sudo appspec completions bash > /etc/bash_completion.d/appspec
 ```
 
-## Быстрый старт
+The same works for `zsh`, `fish`, `elvish`, `powershell`:
 
-Одиночное приложение:
-
+```sh
+appspec completions zsh  > ~/.zsh/completions/_appspec
+appspec completions fish > ~/.config/fish/completions/appspec.fish
 ```
+
+## Quick start
+
+Single application:
+
+```sh
 appspec gen    examples/strawberry.appspec
 appspec build  examples/strawberry.appspec
 appspec run    examples/strawberry.appspec
@@ -69,27 +82,40 @@ appspec clean  examples/strawberry.appspec
 
 Bundle:
 
-```
+```sh
 appspec bundle check examples/vscodium-bundle.appspec
 appspec bundle lock  examples/vscodium-bundle.appspec
 appspec bundle build examples/vscodium-bundle.appspec
 appspec run          examples/vscodium-bundle.appspec
 ```
 
-Репозиторий SIF:
+Bundle with extensions (`.vsix` for VSCodium, `.oxt` for LibreOffice):
 
+```sh
+# VSCodium: extensions are unpacked into directories, no install step
+appspec bundle build examples/vscodium-bundle.appspec
+
+# LibreOffice: .oxt is copied into mount_dir and installed via unopkg
+# (put a local .oxt into examples/extensions/ — see the README there)
+appspec build -f examples/libreoffice.appspec
+appspec bundle build examples/libreoffice-bundle.appspec
+appspec run          examples/libreoffice-bundle.appspec
 ```
+
+SIF repository:
+
+```sh
 appspec repo init
 appspec repo add examples/strawberry.sif
 appspec repo ls
 appspec repo show strawberry:1.2.31-1
 appspec repo search player
 
-# подписать и проверить
+# sign and verify
 appspec repo sign
 appspec repo verify --pubkey ~/.config/appspec/signing.key.pub
 
-# HTTP-сервер + publish
+# HTTP server + publish
 appspec repo serve --listen 127.0.0.1:8080 &
 APPSPEC_REPO_TOKEN=... appspec repo push --to http://127.0.0.1:8080 pkg.sif
 appspec repo pull pkg:1.0.0-1 --from http://127.0.0.1:8080 --trusted-key pub.txt
@@ -104,32 +130,32 @@ appspec repo export-oci --registry ghcr.io/user appspec-index
 appspec repo pull pkg:1.0.0-1 --from oci://ghcr.io/user/appspec-index:latest
 ```
 
-Справочник по repo — [`docs/repo.md`](docs/repo.md).
+See [`docs/repo.md`](docs/repo.md) for details.
 
-## Команды
+## Commands
 
-| Команда | Описание |
-|---------|----------|
-| `gen SPEC` | Сгенерировать Dockerfile и run-скрипт |
+| Command | Description |
+|---------|-------------|
+| `gen SPEC` | Generate Dockerfile and run script |
 | `build SPEC [-f]` | gen + image build + SIF |
-| `run SPEC` | Запустить launcher (SIF или bundle) |
-| `stop SPEC` | Остановить instance от `persist = true` |
+| `run SPEC` | Run launcher (SIF or bundle) |
+| `stop SPEC` | Stop instance left by `persist = true` |
 | `all SPEC [-f]` | build + run |
-| `clean SPEC` | Удалить Dockerfile, launcher, SIF, tar, кэш |
-| `install SPEC` | Установить SIF + launcher + .desktop |
-| `uninstall SPEC` | Удалить всё из манифеста |
-| `ipfs-publish SPEC` | Опубликовать SIF в IPFS |
-| `bundle {check,build,ls,add,remove,lock}` | Составные окружения |
-| `repo {init,add,ls,show,reindex,check,gc,search,sign,verify,serve,push,pull,publish-index,export-oci}` | Локальный / удалённый репозиторий SIF |
-| `completions <SHELL>` | Сгенерировать bash/zsh/fish/elvish/powershell-completion |
+| `clean SPEC` | Remove Dockerfile, launcher, SIF, tar, cache |
+| `install SPEC` | Install SIF + launcher + .desktop |
+| `uninstall SPEC` | Remove everything from the manifest |
+| `ipfs-publish SPEC` | Publish SIF to IPFS |
+| `bundle {check,build,ls,add,remove,lock}` | Composable environments |
+| `repo {init,add,ls,show,reindex,check,gc,search,sign,verify,serve,push,pull,publish-index,export-oci}` | Local / remote SIF repository |
+| `completions <SHELL>` | Generate bash/zsh/fish/elvish/powershell completion |
 
-## Спека *.appspec
+## Spec `*.appspec`
 
-TOML. Основные секции: `package`, `build`, `runtime`, `install`, `macros`,
-`dependencies`. Секция `build.source.type` определяет способ установки:
-`deb`, `rpm`, `tar`, `binary` или пустая строка (только apt-пакеты).
+TOML. Main sections: `package`, `build`, `runtime`, `install`, `macros`,
+`dependencies`. `build.source.type` determines the install method:
+`deb`, `rpm`, `tar`, `binary`, or empty string (apt/apk packages only).
 
-Минимальный спек:
+Minimal spec:
 
 ```toml
 [package]
@@ -164,13 +190,14 @@ provides  = ["music-player"]
 conflicts = ["strawberry-nightly"]
 ```
 
-Правила:
-- `requires` — `name [op ver]`, операторы `=`, `>=`, `<=`, `>`, `<`, без запятых;
-- `provides`/`conflicts`/`replaces` — голые имена пакетов.
+Rules:
+- `requires` — `name [op ver]`, operators `=`, `>=`, `<=`, `>`, `<`, no commas;
+- `provides` / `conflicts` / `replaces` — bare package names.
 
-Лейблы `org.appspec.dependencies.*` в SIF пишутся **только если непусто**
-(обратная совместимость). `appspec repo add` читает их в `meta.json.requires` /
-`.provides` / `.conflicts`, а `repo search --requires P` фильтрует по `provides`.
+Labels `org.appspec.dependencies.*` are written to the SIF **only if non-empty**
+(backwards compatible). `appspec repo add` reads them into `meta.json.requires`
+/ `.provides` / `.conflicts`, and `repo search --requires P` filters by
+`provides`.
 
 ### `[build].base_digest` (E7)
 
@@ -180,45 +207,45 @@ base        = "debian:trixie"
 base_digest = "sha256:<64 lowercase hex>"
 ```
 
-`appspec build` подменяет `base` на `<repo>@<digest>` (тег отбрасывается).
-Dockerfile получает `FROM debian@sha256:…`, что фиксирует base навсегда.
+`appspec build` replaces `base` with `<repo>@<digest>` (tag is stripped).
+Dockerfile gets `FROM debian@sha256:…`, which pins the base forever.
 
-Полный справочник — в [`docs/spec.md`](docs/spec.md).
+Full reference — in [`docs/spec.md`](docs/spec.md) (Russian).
 
-## Шаблоны
+## Templates
 
-| Шаблон | Base | Размер SIF | Когда использовать |
-|--------|------|------------|---------------------|
-| deb | Debian | 250 МБ | .deb + magicpak |
-| tar | Debian | 250 МБ | tar + magicpak |
-| apt | Debian | 250 МБ | только apt-пакеты |
-| generic | Debian | 250 МБ | пустой каркас |
-| rpm | RPM-based | 250 МБ | .rpm + magicpak |
-| alpine | Alpine | 30-150 МБ | apk --root (Go, Rust, Python) |
-| alpine-slim | Alpine | 8-50 МБ | apk + magicpak (dynamic ELF) |
-| full | Debian | 400-800 МБ | Electron, GUI с sandbox |
-| static | Alpine | 30 МБ | статический бинарник + busybox |
-| scratch | Alpine | 30 МБ | статический бинарник, CLI-only |
+| Template | Base | SIF size | When to use |
+|----------|------|----------|-------------|
+| deb | Debian | 250 MB | .deb + magicpak |
+| tar | Debian | 250 MB | tar + magicpak |
+| apt | Debian | 250 MB | apt packages only |
+| generic | Debian | 250 MB | empty skeleton |
+| rpm | RPM-based | 250 MB | .rpm + magicpak |
+| alpine | Alpine | 30-150 MB | apk --root (Go, Rust, Python) |
+| alpine-slim | Alpine | 8-50 MB | apk + magicpak (dynamic ELF) |
+| full | Debian | 400-800 MB | Electron, GUI with sandbox |
+| static | Alpine | 30 MB | static binary + busybox |
+| scratch | Alpine | 30 MB | static binary, CLI-only |
 
-Правило выбора — [`docs/templates.md`](docs/templates.md).
+How to choose — [`docs/templates.md`](docs/templates.md) (Russian).
 
-## Макросы
+## Macros
 
-Раскрываются в `load_spec` до парсинга TOML. Работают и в полях, и в
-многострочных `setup` и `entry`.
+Expanded in `load_spec` before TOML parsing. Work in fields and in
+multiline `setup` and `entry`.
 
-- `%{name}`, `%{version}`, `%{bin}` — из секции `package`.
-- `%{_prefix}`, `%{_bindir}`, `%{_sbindir}`, `%{_libdir}` — дистрибутив-специфичные.
-- `%{?optional}` — пусто, если не задан.
-- `%{name:default}` — значение по умолчанию.
-- `%%` — буквальный символ процента.
-- Пользовательские — из секции `[macros]`.
+- `%{name}`, `%{version}`, `%{bin}` — from `package`.
+- `%{_prefix}`, `%{_bindir}`, `%{_sbindir}`, `%{_libdir}` — distro-specific.
+- `%{?optional}` — empty if not set.
+- `%{name:default}` — default value.
+- `%%` — literal percent.
+- User macros — from `[macros]`.
 
-См. [`docs/macros.md`](docs/macros.md).
+See [`docs/macros.md`](docs/macros.md) (Russian).
 
 ## Bundles
 
-Bundle — составное окружение из base SIF + компонентов + расширений.
+A bundle is a composite environment: base SIF + components + extensions.
 
 ```toml
 [bundle]
@@ -234,23 +261,60 @@ provide = "git"
 name = "ms-azuretools.vscode-docker"
 ```
 
-Компоненты бывают трёх режимов: `chroot`, `instance`, `both`.
-Расширения — четырёх источников: file, cid, url, online (Open VSX).
+Components can be `chroot`, `instance`, or `both`. Extensions can come
+from file, cid, url, or online (Open VSX).
 
-### Типы расширений
+### Extension types
 
-`[[extensions]].type` — `vsix` (default, parse package.json), `file`
-(положить как есть, например `.oxt`/`.deb`/`.rpm`), `archive` (распаковать
-.zip/.tar.gz без разбора package.json), `auto` (по расширению файла/URL).
+`[[extensions]].type` — `vsix` (default), `file`, `archive`, `auto`.
+With `auto`, the type is detected from the URL/file suffix
+(`.vsix` → vsix, `.oxt`/`.deb`/`.rpm`/`.sh`/`.bin`/`.exe` → file,
+`.zip`/`.tar.gz`/`.tgz`/`.tar.xz`/`.tar.bz2`/`.tar` → archive;
+online without suffix → vsix).
 
-`[bundle.extensions].install` — shell-команда внутри base-инстанса.
-Плейсхолдеры: `{file}` — путь смонтированного расширения в `mount_dir`,
-`{name}`/`{id}` — ext.id, `{version}` — версия.
+Behaviour per type:
 
-`[bundle.extensions].mount_dir` — куда монтировать каталог
-`$BUNDLE_DIR/extensions` (по умолчанию `/config/home/.vscodium/extensions`).
+| `type` | What `bundle build` does | What is mounted | `[bundle.extensions].install` |
+|--------|---------------------------|------------------|-------------------------------|
+| `vsix` | unpacks the `.vsix` into a directory `<publisher>.<name>-<version>/` under `$BUNDLE_DIR/extensions/` | `$BUNDLE_DIR/extensions/` → `mount_dir` | **not executed** (VSCodium picks up directories from `--extensions-dir` on its own) |
+| `file` | copies the file as-is to `$BUNDLE_DIR/extensions/<basename>` | `$BUNDLE_DIR/extensions/` → `mount_dir` | **executed** via `yes yes \| …` (auto-accept EULA: `unopkg`, `.deb`-installers) |
+| `archive` | unpacks `.zip`/`.tar.gz` into `<name>-archive/` | `$BUNDLE_DIR/extensions/` → `mount_dir` | **not executed** (user decides what to do with the unpacked directory) |
 
-Пример для LibreOffice:
+`[bundle.extensions].mount_dir` — where to mount `$BUNDLE_DIR/extensions`
+inside the base instance. Default is `/config/home/.vscodium/extensions` —
+the `--extensions-dir` target of VSCodium. For LibreOffice extensions,
+override to `/opt/extensions` (see below).
+
+`[bundle.extensions].install` — shell command, executed **only for
+`type = "file"`**. Placeholders:
+
+| Placeholder | Value |
+|-------------|-------|
+| `{file}` | path inside `mount_dir` (`<mount_dir>/<basename>`) |
+| `{target}` | alias for `{file}` (backwards compat with old specs) |
+| `{name}` | `ext.id` (for `type = "file"` — `ext.name`) |
+| `{id}` | `ext.id` |
+| `{version}` | version (for `type = "file"` — `"1"`) |
+
+#### Example: VSCodium + `.vsix`
+
+```toml
+[bundle]
+name = "vscodium-dev"
+base = { spec = "./vscodium.appspec" }
+
+[[extensions]]
+name = "opentofu"
+file = "./extensions/opentofu-0.6.3.vsix"
+type = "vsix"
+
+[[extensions]]
+name = "ms-azuretools.vscode-docker"
+```
+- `mount_dir` is not set — default `/config/home/.vscodium/extensions` is used.
+- `install` is not needed — `.vsix` are unpacked into directories, VSCodium sees them directly.
+
+#### Example: LibreOffice + `.oxt`
 
 ```toml
 [bundle.extensions]
@@ -259,11 +323,25 @@ install   = "unopkg add --shared {file}"
 
 [[extensions]]
 name = "grammalecte"
-url  = "https://grammalecte.net/grammalecte-fr-v2.1.3.oxt"
+file = "./extensions/Grammalecte-fr-v2.1.3.oxt"
 type = "file"
 ```
+- `mount_dir = "/opt/extensions"` — dedicated path so it does not clash with VSCodium.
+- `install` runs as `yes yes 2>/dev/null | unopkg add --shared /opt/extensions/Grammalecte-fr-v2.1.3.oxt` (EULA accepted automatically).
 
-### `source = repo` и `bundle.lock` (E3)
+#### Extension sources
+
+`[[extensions]]` contains exactly one of `file` | `cid` | `url`, or none
+(online via Open VSX, only for `type = "vsix"`).
+
+- `file = "./path.vsix"` — local (relative to `bundle.appspec`).
+- `url = "https://…"` — downloaded to `$BUNDLE_DIR/extensions/<basename>` on `bundle build`. Direct URLs on many sites change per release; for reproducibility prefer `file =`.
+- `cid = "bafy…"` — IPFS, `ipfs get` into `$BUNDLE_DIR/extensions/<cid>.bin`.
+
+Full example with all types — `examples/libreoffice-bundle.appspec`.
+Instructions for local `.oxt`/`.vsix` — `examples/extensions/README.md`.
+
+### `source = repo` and `bundle.lock` (E3)
 
 ```toml
 [bundle]
@@ -276,141 +354,199 @@ repo    = "git:2.47.2"
 provide = "git"
 ```
 
-`repo = "name:ver"` — пятый источник наравне с `spec|sif|cid|manifest`.
-Резолвится через локальный `index.json` (`$APPSPEC_REPO`).
+`repo = "name:ver"` — the fifth source alongside `spec|sif|cid|manifest`.
+Resolved via local `index.json` (`$APPSPEC_REPO`).
 
-`appspec bundle lock` создаёт `bundle.lock.toml` с `sif_sha256` и `spec_sha256`
-каждого `repo`-компонента. `bundle build` сверяет `sif_sha256`: при дрейфе —
-warning, но идёт по свежему индексу.
+`appspec bundle lock` creates `bundle.lock.toml` with `sif_sha256` and
+`spec_sha256` for each `repo` component. `bundle build` verifies
+`sif_sha256`: on drift — warning, but goes with the fresh index.
 
-Полное описание — [`docs/bundles.md`](docs/bundles.md).
+Full description — [`docs/bundles.md`](docs/bundles.md) (Russian).
 
-## Репозиторий SIF (`appspec repo`)
+## SIF repository (`appspec repo`)
 
-Локальный репозиторий строится на метаданных, вкомпилированных в SIF при
-`appspec build` (лейблы `org.appspec.*`). SIF — источник истины; репозиторий —
-индекс поверх него.
+The local repository is built on metadata compiled into the SIF at
+`appspec build` time (labels `org.appspec.*`). The SIF is the source of
+truth; the repository is an index on top of it.
 
-Раскладка:
+### Configuration
 
+Phase 1: **two independent configs**, both outside the repository root.
+
+* **Server** (`repo-server.toml`) — one repository: `[repo].root`,
+  `[policy]`, `[signing]`, `[server]`, `[[server.tokens]]`, `[server.tls]`.
+* **Client** (`repos.toml`) — named source profiles:
+  `source = { path | url | ipfs }`, `token`, `trusted_keys`.
+
+Full reference — [`docs/repo-config.md`](docs/repo-config.md).
+
+```sh
+# Server: data-only root + external config
+appspec repo init /srv/repo --config ~/.config/appspec/repo-server.toml
+appspec repo server init --root /srv/repo      # if root already exists
+appspec repo migrate-config /srv/repo          # import legacy <root>/config.toml
+
+# Client: source profile
+appspec repo client init \
+    --profile corp \
+    --source-url http://repo.corp:8080 \
+    --token-env APPSPEC_REPO_TOKEN \
+    --default
+appspec repo client ls
 ```
-<root>/
-├── config.toml
-├── index.json              # кэш каталога
-├── blobs/sha256/<ab>/<…>   # content-addressed SIF'ы (immutable)
-├── packages/<name>/<ver>/  # meta.json + spec.appspec + sha256
-├── refs/<name>.toml        # latest / stable / произвольные теги
-└── .lock                   # flock на write-операции
-```
 
-Корень: `$APPSPEC_REPO` → `$XDG_DATA_HOME/appspec/repo` → `$HOME/.local/share/appspec/repo`.
+Repository root is **data-only** (`index.json`, `blobs/`, `packages/`,
+`refs/`, `.lock`). `config.toml` inside root is no longer created; legacy is
+supported with a warning and `migrate-config`.
 
-### Быстрый цикл
+### Quick cycle
 
-```
-appspec repo init
+```sh
+appspec repo init /srv/repo --config ~/.config/appspec/repo-server.toml
 appspec repo add pkg.sif
 appspec repo check [--deep]
 appspec repo gc [--dry-run] [--keep N]
-appspec repo search [Q] [--license L] [--arch A] [--requires P]
+appspec repo search demo --config ~/.config/appspec/repo-server.toml
 ```
 
-### Публикация
+### Tokens (server-side)
 
+```sh
+# Generate, plaintext shown once in stdout
+appspec repo token gen ci
+
+# Straight to file (for CI), octal mode like chmod
+appspec repo token gen ci --write-file /run/secrets/ci --mode 0400
+
+appspec repo token ls
+appspec repo token check ci --file /run/secrets/ci    # exit 0/1
+appspec repo token rm ci
 ```
-# HTTP-сервер (read + push)
-appspec repo serve --listen 127.0.0.1:8080
 
-# push (второй терминал)
-APPSPEC_REPO_TOKEN=... appspec repo push --to http://host:8080 pkg.sif
+`repo token gen` writes **only sha256** into server config. Plaintext is
+never persisted.
 
-# pull с проверкой подписи
-appspec repo pull pkg:1.0.0-1 --from http://host:8080 --trusted-key pub.txt
+### Publishing
+
+```sh
+# 1. Server
+appspec repo serve --listen 127.0.0.1:8844
+# (if ~/.config/appspec/repo-server.toml exists, --root/--config not needed)
+
+# 2. Push (three ways to set destination)
+APPSPEC_REPO_TOKEN=… appspec repo push pkg.sif --to http://127.0.0.1:8844
+APPSPEC_REPO=http://127.0.0.1:8844 APPSPEC_REPO_TOKEN=… appspec repo push pkg.sif
+APPSPEC_REPO_TOKEN=… appspec repo push pkg.sif    # if a default profile exists
+
+# 3. Pull with signature verification
+appspec repo pull pkg:1.0.0-1 --profile corp --trusted-key pub.txt
 ```
 
-**Fail-closed (§10.2):** если в `~/.config/appspec/trusted-keys.toml` есть
-хотя бы один ключ, `pull --from URL` **требует** валидную подпись `index.json`.
+**`$APPSPEC_REPO_TOKEN` is the token only**, not the destination. If only
+that is set, `push` returns `no destination`.
 
-### Подписи (E5)
+**`--profile NAME`** is a client-config profile, not a token name. Do not
+confuse with `repo token gen NAME`.
 
-```
-appspec repo sign                      # → ed25519, печатает pubkey
+**Fail-closed:** if `~/.config/appspec/trusted-keys.toml` has at least one
+key, `pull --from URL` requires a valid `index.json` signature.
+
+### Signatures (E5)
+
+```sh
+appspec repo sign                           # pubkey is written back to server config
+appspec repo sign --config /etc/appspec/repo-server.toml
 appspec repo verify --pubkey pub.txt
 ```
 
-Схема: ed25519 над JCS-канонизацией (RFC 8785) `index.json` без поля `signature`.
-Приватный ключ: `$XDG_CONFIG_HOME/appspec/signing.key` (0600).
+Scheme: ed25519 over JCS canonicalisation (RFC 8785) of `index.json`
+without the `signature` field. Private key: `[signing].key` (server config)
+→ `--key` → `$APPSPEC_SIGNING_KEY` → `~/.config/appspec/signing.key`.
 
-### IPFS (E6)
+### IPFS (E6) and OCI (E8)
 
-```
+Unchanged from v0.3.x:
+
+```sh
 appspec repo add --pin-ipfs pkg.sif
 appspec repo publish-index --pin
 appspec repo pull pkg:1.0.0-1 --via ipfs
-appspec repo pull pkg:1.0.0-1 --from ipfs://<index-cid>
-```
 
-### OCI export (E8)
-
-```
-appspec repo export-oci --registry ghcr.io/user --dry-run appspec-index
 appspec repo export-oci --registry ghcr.io/user appspec-index
+appspec repo pull pkg:1.0.0-1 --from oci://ghcr.io/user/appspec-index:latest
 ```
 
-Требует `oras` в `PATH`. Формат:
+### Discovery
 
-- `<registry>/<target>:latest` — artifact manifest, `artifactType = application/vnd.appspec.index.v1+json`
-- `<registry>/<name>:<ver>` — artifact manifest, `artifactType = application/vnd.appspec.sif.v1+json`
+* `repo-server.toml`: `--config`/`-c` → `$APPSPEC_REPO_SERVER_CONFIG` → XDG
+  → `/etc` → legacy `<root>/config.toml` (warning).
+* `repos.toml`: `--client-config` → `$APPSPEC_REPO_CLIENT_CONFIG` → XDG → `/etc`.
 
-Полный справочник — [`docs/repo.md`](docs/repo.md).
+`repo serve` with no flags works if a server config is found: `[repo].root`
+becomes the "current repository".
+## Environment variables
 
-## Переменные окружения
-
-| Переменная | Значение |
-|------------|----------|
+| Variable | Meaning |
+|---|---|
 | `APPSPEC_ENGINE` | docker / podman / buildah |
 | `BUILDAH_ISOLATION` | oci (default) / chroot |
-| `APPSPEC_DEV` | 1 — поиск шаблонов в workspace/templates/ |
-| `APPSPEC_TEMPLATE_PATH` | Доп. каталоги шаблонов |
-| `APPSPEC_CONFIG_PATH` | Доп. каталоги конфигов |
-| `APPSPEC_BUNDLE_CACHE` | Каталог кэша bundles |
-| `APPSPEC_BUNDLE_HOME` | Каталог state bundles |
-| `APPSPEC_REPO` | Корень локального репозитория SIF |
-| `APPSPEC_REPO_TOKEN` | Токен для `repo push` |
-| `APPSPEC_SIGNING_KEY` | Путь к приватному ed25519-ключу |
-| `APPSPEC_APPTAINER` | Бинарь `apptainer` (для моков) |
-| `APPSPEC_IPFS` | Бинарь `ipfs` (для моков) |
-| `APPSPEC_ORAS` | Бинарь `oras` (для моков) |
-| `XDG_CONFIG_HOME`, `XDG_DATA_HOME`, `XDG_DATA_DIRS` | Стандартные XDG |
+| `APPSPEC_DEV` | 1 — look for templates in workspace/templates/ |
+| `APPSPEC_TEMPLATE_PATH` | Extra template directories |
+| `APPSPEC_CONFIG_PATH` | Extra config directories |
+| `APPSPEC_BUNDLE_CACHE` | Bundle cache directory |
+| `APPSPEC_BUNDLE_HOME` | Bundle state directory |
+| `APPSPEC_REPO` | Path \| URL \| profile name. Local commands need a path; read/pull/push also accept URL or profile name |
+| `APPSPEC_REPO_TOKEN` | Token only, for `repo push`. Not the destination. |
+| `APPSPEC_REPO_SERVER_CONFIG` | Path to `repo-server.toml` (after `--config`) |
+| `APPSPEC_REPO_CLIENT_CONFIG` | Path to `repos.toml` |
+| `APPSPEC_SIGNING_KEY` | Private ed25519 key (after `[signing].key`) |
+| `APPSPEC_APPTAINER` | `apptainer` binary (for mocks) |
+| `APPSPEC_IPFS` | `ipfs` binary (for mocks) |
+| `APPSPEC_ORAS` | `oras` binary (for mocks) |
+| `XDG_CONFIG_HOME`, `XDG_DATA_HOME`, `XDG_DATA_DIRS` | Standard XDG |
+## Tests
 
-## Тесты
-
+```sh
+cargo test --release                 # unit + integration
+cargo test --release --bin appspec   # only unit tests of the bin crate
+./scripts/smoke-e2e.sh               # e2e (auto: full if possible, else mock)
+./scripts/smoke-e2e.sh --full        # requires apptainer + build-engine
+./scripts/smoke-e2e.sh --mock        # no external dependencies
 ```
-cargo test --release                 # 76 тестов
-./scripts/smoke-e2e.sh               # e2e (auto: full если возможно, иначе mock)
-./scripts/smoke-e2e.sh --full        # требуются apptainer + build-engine
-./scripts/smoke-e2e.sh --mock        # без внешних зависимостей
-```
 
-Покрытие:
+Coverage:
+- `tests/cli.rs` — CLI wrapper (help, gen, spec errors);
 - `tests/repo_e1.rs` — init/add/ls/show/reindex/check/gc/search;
 - `tests/e3.rs` — bundle `source=repo` + `bundle lock`;
 - `tests/e4.rs` — HTTP server/client/push;
 - `tests/e5.rs` — ed25519 + JCS, fail-closed pull;
-- `tests/e6.rs` — IPFS (мок `ipfs`);
+- `tests/e6.rs` — IPFS (mock `ipfs`);
 - `tests/e7.rs` — `[dependencies]` + `base_digest`;
-- `tests/e8.rs` — OCI export (мок `oras`).
+- `tests/e8.rs` — OCI export (mock `oras`);
+- `tests/e9.rs` — `pull --from oci://` (mock `oras`);
+- `tests/e10.rs` — TLS for `repo serve`;
+- `tests/bundle_extensions.rs` — bundle extensions: `{file}`/`{target}` substitution, `.vsix` unpacking into a directory (install not executed), `type = "file"` + `yes yes | …`, bind to `mount_dir`.
 
-## Документация
+Unit tests inside `src/bundle/loader.rs`, `src/bundle/model.rs`,
+`src/bundle/codegen.rs` (run with `cargo test --release --bin appspec`):
 
-- [`docs/spec.md`](docs/spec.md) — справочник по *.appspec.
-- [`docs/templates.md`](docs/templates.md) — шаблоны, выбор, свои.
-- [`docs/bundles.md`](docs/bundles.md) — составные окружения.
-- [`docs/macros.md`](docs/macros.md) — макросы.
-- [`docs/engines.md`](docs/engines.md) — buildah/podman/docker.
-- [`docs/troubleshooting.md`](docs/troubleshooting.md) — типичные проблемы.
-- [`docs/repo.md`](docs/repo.md) — локальный и удалённый репозиторий SIF.
+- `prepare_vsix_extracts_to_dir` — `.vsix` is unpacked into `<id>-<ver>/`, source is untouched;
+- `prepare_vsix_idempotent_with_same_fingerprint` — repeated build with same fingerprint is a no-op;
+- `prepare_vsix_refreshes_dir_when_fingerprint_differs` — directory is recreated when fingerprint changes;
+- `prepare_file_skips_copy_when_src_equals_target` — for `type = "file"` via URL/CID, no copy-in-place (regression `copy → copy: ENOENT`);
+- `rel_path_*` — basename for vsix/file/archive;
+- `install_command_substitutes_*` — placeholders `{file}`/`{target}`/`{name}`/`{id}`/`{version}` in the install command.
 
-## Лицензия
+## Documentation
+
+- [`docs/spec.md`](docs/spec.md) — `*.appspec` reference (Russian).
+- [`docs/templates.md`](docs/templates.md) — templates, choice, custom (Russian).
+- [`docs/bundles.md`](docs/bundles.md) — composite environments (Russian).
+- [`docs/macros.md`](docs/macros.md) — macros (Russian).
+- [`docs/engines.md`](docs/engines.md) — buildah/podman/docker (Russian).
+- [`docs/troubleshooting.md`](docs/troubleshooting.md) — common problems (Russian).
+- [`docs/repo.md`](docs/repo.md) — local and remote SIF repository (Russian).
+
+## License
 
 MIT.
