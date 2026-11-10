@@ -22,6 +22,44 @@ appspec repo show strawberry:1.2.31-1
 appspec repo search player
 ```
 
+## Конфигурация
+
+Phase 1: server и client config **разделены** и живут вне repository root.
+
+* `repo-server.toml` — один репозиторий: `[repo].root`, `[policy]`,
+  `[signing]`, `[server]`, `[[server.tokens]]`, `[server.tls]`.
+* `repos.toml` — именованные профили источников:
+  `source = { path | url | ipfs }`, `token`, `trusted_keys`.
+
+Полный справочник — [`docs/repo-config.md`](repo-config.md).
+
+Repository root — **data-only** (`index.json`, `blobs/`, `packages/`,
+`refs/`, `.lock`). `config.toml` внутри root **не создаётся**; legacy —
+через `repo migrate-config`.
+
+Флаги:
+
+| Флаг | Где | Что |
+|---|---|---|
+| `--config PATH`, `-c PATH` | `serve`, `sign`, `pull`, `publish-index`, `export-oci`, `token *`, `server init`, `migrate-config`, `init` | Путь к `repo-server.toml` (alias: `--server-config`) |
+| `--profile NAME` | `pull`, `push` | Профиль из `repos.toml` |
+| `--client-config PATH` | `client init`, `client ls` | Путь к `repos.toml` |
+| `--root PATH` | локальные команды | Переопределяет `[repo].root` |
+
+Новые команды:
+
+| Команда | Что делает |
+|---|---|
+| `repo token gen NAME [--config PATH] [--write-file PATH] [--mode OCTAL]` | Сгенерировать, записать sha256 в server config |
+| `repo token ls [--config PATH]` | Список (sha256-префиксы) |
+| `repo token check NAME (--value \| --file \| stdin) [--config PATH]` | Exit 0/1 |
+| `repo token rm NAME [--config PATH]` | Удалить |
+| `repo client init --profile N (--source-path P \| --source-url U) [--token-env VAR] [--token-file P] [--default]` | Создать профиль |
+| `repo client ls [--json]` | Список профилей |
+| `repo server init --root PATH [--config PATH]` | Создать server config |
+| `repo migrate-config <root> [--config PATH]` | Legacy → `repo-server.toml` |
+
+
 ## Раскладка
 
 ```
@@ -217,15 +255,16 @@ spec_sha256 = "a1b2c3…"
 
 ## Переменные окружения
 
-| Переменная | Назначение |
+| Переменная | Значение |
 |---|---|
-| `APPSPEC_REPO` | Корень локального репозитория |
-| `APPSPEC_REPO_TOKEN` | Токен для `repo push` |
-| `APPSPEC_SIGNING_KEY` | Путь к приватному ed25519-ключу |
-| `APPSPEC_APPTAINER` | Бинарь `apptainer` (для моков) |
-| `APPSPEC_IPFS` | Бинарь `ipfs` (для моков) |
-| `APPSPEC_ORAS` | Бинарь `oras` (для моков) |
-
+| `APPSPEC_REPO` | Path \| URL \| profile name. Порядок: `--profile` → `--root`/`--to`/`--from` → `$APPSPEC_REPO` → `default` |
+| `APPSPEC_REPO_TOKEN` | **Только токен** для `push`. Не destination. |
+| `APPSPEC_REPO_SERVER_CONFIG` | Путь к `repo-server.toml` (после `--config`) |
+| `APPSPEC_REPO_CLIENT_CONFIG` | Путь к `repos.toml` |
+| `APPSPEC_SIGNING_KEY` | Приватный ключ (после `[signing].key`) |
+| `XDG_CONFIG_HOME` | discovery `repo-server.toml` / `repos.toml` |
+| `XDG_DATA_HOME` | fallback `default_root()` |
+| `APPSPEC_APPTAINER`, `APPSPEC_IPFS`, `APPSPEC_ORAS` | Моки для тестов |
 ## Ограничения v1
 
 - HTTP только, без TLS. Используйте reverse proxy.

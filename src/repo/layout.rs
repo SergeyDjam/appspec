@@ -1,6 +1,6 @@
-use anyhow::{bail, Context, Result};
+use anyhow::{bail, Result};
 use serde::{Deserialize, Serialize};
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 pub const LAYOUT_VERSION: u32 = 1;
 
@@ -132,41 +132,115 @@ fn default_ipfs_gateway() -> String {
     "https://ipfs.io/ipfs".into()
 }
 
+// ===========================================================================
+// RepoRoot
+// ===========================================================================
+
 pub struct RepoRoot {
     pub path: PathBuf,
     pub config: Config,
+    /// Путь к server config, если он был загружен из файла. `None` —
+    /// default-конфиг (data-only репо, config не найден) или legacy.
+    /// Используется `repo sign` (сохраняет `pubkey` обратно в файл) и
+    /// `repo serve` (warn, если config не найден).
+    pub server_config_path: Option<PathBuf>,
+    /// Путь к приватному ключу из `[signing].key` (если был в конфиге).
+    /// Fallback `repo sign`: `--key` → `signing_key_path` → `$APPSPEC_SIGNING_KEY`
+    /// → `~/.config/appspec/signing.key`.
+    pub signing_key_path: Option<PathBuf>,
 }
 
 impl RepoRoot {
+    /// Открыть data-директорию по пути.
+    ///
+    /// Порядок:
+    ///   1. `<root>/config.toml` (legacy) → warning + чтение.
+    ///   2. discovery (XDG/env/etc); если `[repo].root` совпадает с `root` — использовать.
+    ///   3. discovery нашёл, но `[repo].root` ≠ `root` — warning + defaults.
+    ///   4. discovery ничего не нашёл — defaults (data-only репо).
+    ///
+    /// Всегда требует наличия `<root>/index.json`.
     pub fn open(root: &Path) -> Result<Self> {
-        let cfg_path = root.join("config.toml");
-        if !cfg_path.is_file() {
+        if !root.join("index.json").is_file() {
             bail!(
-                "repository not initialized at {} (missing config.toml); \
-                 run `appspec repo init {}`",
+                "repository not initialized at {} (missing index.json); \
+                 run `appspec repo init {}` or `appspec repo server init --root {}`",
+                root.display(),
                 root.display(),
                 root.display()
             );
         }
-        let text = std::fs::read_to_string(&cfg_path)
-            .with_context(|| format!("reading {}", cfg_path.display()))?;
-        let config: Config =
-            toml::from_str(&text).with_context(|| format!("parsing {}", cfg_path.display()))?;
 
-        eprintln!("\x1b[2m[appspec] repo: {}\x1b[0m", root.display());
-
-        if config.repo.layout != LAYOUT_VERSION {
-            bail!(
-                "unsupported repository layout {} (this client supports {}); \
-                 upgrade appspec or use a compatible repository",
-                config.repo.layout,
-                LAYOUT_VERSION
-            );
+        // `find_server_config_with_legacy` инкапсулирует порядок:
+        //   1. discovery (env / XDG / /etc) — `Some((path, cfg))`;
+        //   2. legacy `<root>/config.toml` — warning + `Some((path, cfg))`;
+        //   3. ничего нет — `None`;
+        //   4. legacy есть, но layout ≠ LAYOUT_VERSION — `Err`.
+        // `?` пробрасывает «невалидный конфиг» наружу — `RepoRoot::open`
+        // не должен молча падать в defaults, если конфиг битый.
+        match crate::repo::config::find_server_config_with_legacy(None, Some(root))? {
+            Some((sc_path, sc)) => {
+                if norm_path(&sc.repo.root) != norm_path(root) {
+                    eprintln!(
+                        "warning: server config {} points to {}, not {}; \
+                         using defaults",
+                        sc_path.display(),
+                        sc.repo.root.display(),
+                        root.display()
+                    );
+                    return Ok(Self::with_default_config(root));
+                }
+                let signing_key_path = sc.signing.key.clone();
+                let layout_cfg = sc.into_layout();
+                Ok(RepoRoot {
+                    path: root.to_path_buf(),
+                    config: layout_cfg,
+                    server_config_path: Some(sc_path),
+                    signing_key_path,
+                })
+            }
+            None => Ok(Self::with_default_config(root)),
         }
-        Ok(RepoRoot {
+    }
+
+    /// Data-only репо без конфига: `add`, `check`, `gc`, `reindex`
+    /// работают с разумными дефолтами. `serve` без конфига — работает,
+    /// но `push` не пройдёт (нет токенов).
+    pub fn with_default_config(root: &Path) -> Self {
+        RepoRoot {
+            path: root.to_path_buf(),
+            config: default_layout_config(),
+            server_config_path: None,
+            signing_key_path: None,
+        }
+    }
+
+    /// Собрать `RepoRoot` из явного `ServerConfig` (используется, когда
+    /// пользователь передал `--server-config`).
+    pub fn from_server_config(
+        data_root: PathBuf,
+        config_path: PathBuf,
+        sc: crate::repo::config::ServerConfig,
+    ) -> Self {
+        let signing_key_path = sc.signing.key.clone();
+        RepoRoot {
+            path: data_root,
+            config: sc.into_layout(),
+            server_config_path: Some(config_path),
+            signing_key_path,
+        }
+    }
+
+    /// `RepoRoot` из уже загруженного `Config` — для `server.rs::handle_push`,
+    /// который держит `ServerState.config` в памяти и не хочет повторно
+    /// гонять discovery.
+    pub fn open_with_config(root: &Path, config: Config) -> Self {
+        RepoRoot {
             path: root.to_path_buf(),
             config,
-        })
+            server_config_path: None,
+            signing_key_path: None,
+        }
     }
 
     pub fn blobs_dir(&self) -> PathBuf {
@@ -183,5 +257,40 @@ impl RepoRoot {
     }
     pub fn lock_path(&self) -> PathBuf {
         self.path.join(".lock")
+    }
+}
+
+/// Лексическая нормализация. Для сравнения `[repo].root` с `--root`
+/// в `RepoRoot::open`. Не разрешает симлинки.
+pub(crate) fn norm_path(p: &Path) -> PathBuf {
+    let mut out = PathBuf::new();
+    for c in p.components() {
+        match c {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                out.pop();
+            }
+            other => out.push(other),
+        }
+    }
+    if out.as_os_str().is_empty() {
+        out.push(".");
+    }
+    out
+}
+
+fn default_layout_config() -> Config {
+    Config {
+        repo: RepoMeta {
+            name: "local/appspec-repo".into(),
+            description: String::new(),
+            created_at: String::new(),
+            generator: format!("appspec {}", env!("CARGO_PKG_VERSION")),
+            layout: LAYOUT_VERSION,
+        },
+        policy: Default::default(),
+        signing: Default::default(),
+        server: Default::default(),
+        ipfs: Default::default(),
     }
 }

@@ -148,7 +148,6 @@ fn init_creates_expected_layout() {
         .stdout(predicate::str::contains("initialized repository"));
 
     for rel in [
-        "config.toml",
         "index.json",
         "blobs/sha256",
         "packages",
@@ -157,6 +156,10 @@ fn init_creates_expected_layout() {
     ] {
         assert!(root.join(rel).exists(), "missing: {rel}");
     }
+    assert!(
+        !root.join("config.toml").exists(),
+        "config.toml must not be created by init"
+    );
 }
 
 #[test]
@@ -453,12 +456,20 @@ fn unsupported_layout_is_rejected() {
         .assert()
         .success();
 
-    // подменяем layout на 2
-    let cfg_path = root.join("config.toml");
-    let cfg = fs::read_to_string(&cfg_path).unwrap();
-    fs::write(&cfg_path, cfg.replace("layout = 1", "layout = 2")).unwrap();
+    // Phase 1: init больше не пишет config.toml, поэтому legacy-файл
+    // создаём вручную — тест проверяет, что legacy layout=2 отвергается.
+    let legacy = r#"
+[repo]
+name = "x"
+description = ""
+created_at = "2026-01-01T00:00:00Z"
+generator = "test"
+layout = 2
+"#;
+    fs::write(root.join("config.toml"), legacy).unwrap();
 
     appspec()
+        .env("XDG_CONFIG_HOME", tmp.path().join("xdg"))
         .args(["repo", "ls", "--root", root.to_str().unwrap()])
         .assert()
         .failure()

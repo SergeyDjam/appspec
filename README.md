@@ -369,83 +369,125 @@ The local repository is built on metadata compiled into the SIF at
 `appspec build` time (labels `org.appspec.*`). The SIF is the source of
 truth; the repository is an index on top of it.
 
-Layout:
+### Configuration
 
-```
-<root>/
-├── config.toml
-├── index.json              # cached catalogue
-├── blobs/sha256/<ab>/<…>   # content-addressed SIFs (immutable)
-├── packages/<name>/<ver>/  # meta.json + spec.appspec + sha256
-├── refs/<name>.toml        # latest / stable / arbitrary tags
-└── .lock                   # flock on write operations
+Phase 1: **two independent configs**, both outside the repository root.
+
+* **Server** (`repo-server.toml`) — one repository: `[repo].root`,
+  `[policy]`, `[signing]`, `[server]`, `[[server.tokens]]`, `[server.tls]`.
+* **Client** (`repos.toml`) — named source profiles:
+  `source = { path | url | ipfs }`, `token`, `trusted_keys`.
+
+Full reference — [`docs/repo-config.md`](docs/repo-config.md).
+
+```sh
+# Server: data-only root + external config
+appspec repo init /srv/repo --config ~/.config/appspec/repo-server.toml
+appspec repo server init --root /srv/repo      # if root already exists
+appspec repo migrate-config /srv/repo          # import legacy <root>/config.toml
+
+# Client: source profile
+appspec repo client init \
+    --profile corp \
+    --source-url http://repo.corp:8080 \
+    --token-env APPSPEC_REPO_TOKEN \
+    --default
+appspec repo client ls
 ```
 
-Root: `$APPSPEC_REPO` → `$XDG_DATA_HOME/appspec/repo` → `$HOME/.local/share/appspec/repo`.
+Repository root is **data-only** (`index.json`, `blobs/`, `packages/`,
+`refs/`, `.lock`). `config.toml` inside root is no longer created; legacy is
+supported with a warning and `migrate-config`.
 
 ### Quick cycle
 
 ```sh
-appspec repo init
+appspec repo init /srv/repo --config ~/.config/appspec/repo-server.toml
 appspec repo add pkg.sif
 appspec repo check [--deep]
 appspec repo gc [--dry-run] [--keep N]
-appspec repo search [Q] [--license L] [--arch A] [--requires P]
+appspec repo search demo --config ~/.config/appspec/repo-server.toml
 ```
+
+### Tokens (server-side)
+
+```sh
+# Generate, plaintext shown once in stdout
+appspec repo token gen ci
+
+# Straight to file (for CI), octal mode like chmod
+appspec repo token gen ci --write-file /run/secrets/ci --mode 0400
+
+appspec repo token ls
+appspec repo token check ci --file /run/secrets/ci    # exit 0/1
+appspec repo token rm ci
+```
+
+`repo token gen` writes **only sha256** into server config. Plaintext is
+never persisted.
 
 ### Publishing
 
 ```sh
-# HTTP server (read + push)
-appspec repo serve --listen 127.0.0.1:8080
+# 1. Server
+appspec repo serve --listen 127.0.0.1:8844
+# (if ~/.config/appspec/repo-server.toml exists, --root/--config not needed)
 
-# push (second terminal)
-APPSPEC_REPO_TOKEN=... appspec repo push --to http://host:8080 pkg.sif
+# 2. Push (three ways to set destination)
+APPSPEC_REPO_TOKEN=… appspec repo push pkg.sif --to http://127.0.0.1:8844
+APPSPEC_REPO=http://127.0.0.1:8844 APPSPEC_REPO_TOKEN=… appspec repo push pkg.sif
+APPSPEC_REPO_TOKEN=… appspec repo push pkg.sif    # if a default profile exists
 
-# pull with signature verification
-appspec repo pull pkg:1.0.0-1 --from http://host:8080 --trusted-key pub.txt
+# 3. Pull with signature verification
+appspec repo pull pkg:1.0.0-1 --profile corp --trusted-key pub.txt
 ```
 
-**Fail-closed (§10.2):** if `~/.config/appspec/trusted-keys.toml` has at
-least one key, `pull --from URL` **requires** a valid `index.json` signature.
+**`$APPSPEC_REPO_TOKEN` is the token only**, not the destination. If only
+that is set, `push` returns `no destination`.
+
+**`--profile NAME`** is a client-config profile, not a token name. Do not
+confuse with `repo token gen NAME`.
+
+**Fail-closed:** if `~/.config/appspec/trusted-keys.toml` has at least one
+key, `pull --from URL` requires a valid `index.json` signature.
 
 ### Signatures (E5)
 
 ```sh
-appspec repo sign                      # → ed25519, prints pubkey
+appspec repo sign                           # pubkey is written back to server config
+appspec repo sign --config /etc/appspec/repo-server.toml
 appspec repo verify --pubkey pub.txt
 ```
 
 Scheme: ed25519 over JCS canonicalisation (RFC 8785) of `index.json`
-without the `signature` field. Private key: `$XDG_CONFIG_HOME/appspec/signing.key` (0600).
+without the `signature` field. Private key: `[signing].key` (server config)
+→ `--key` → `$APPSPEC_SIGNING_KEY` → `~/.config/appspec/signing.key`.
 
-### IPFS (E6)
+### IPFS (E6) and OCI (E8)
+
+Unchanged from v0.3.x:
 
 ```sh
 appspec repo add --pin-ipfs pkg.sif
 appspec repo publish-index --pin
 appspec repo pull pkg:1.0.0-1 --via ipfs
-appspec repo pull pkg:1.0.0-1 --from ipfs://<index-cid>
-```
 
-### OCI export (E8)
-
-```sh
-appspec repo export-oci --registry ghcr.io/user --dry-run appspec-index
 appspec repo export-oci --registry ghcr.io/user appspec-index
+appspec repo pull pkg:1.0.0-1 --from oci://ghcr.io/user/appspec-index:latest
 ```
 
-Requires `oras` in `PATH`. Format:
+### Discovery
 
-- `<registry>/<target>:latest` — artifact manifest, `artifactType = application/vnd.appspec.index.v1+json`
-- `<registry>/<name>:<ver>` — artifact manifest, `artifactType = application/vnd.appspec.sif.v1+json`
+* `repo-server.toml`: `--config`/`-c` → `$APPSPEC_REPO_SERVER_CONFIG` → XDG
+  → `/etc` → legacy `<root>/config.toml` (warning).
+* `repos.toml`: `--client-config` → `$APPSPEC_REPO_CLIENT_CONFIG` → XDG → `/etc`.
 
-Full reference — [`docs/repo.md`](docs/repo.md) (Russian).
-
+`repo serve` with no flags works if a server config is found: `[repo].root`
+becomes the "current repository".
 ## Environment variables
 
 | Variable | Meaning |
-|----------|---------|
+|---|---|
 | `APPSPEC_ENGINE` | docker / podman / buildah |
 | `BUILDAH_ISOLATION` | oci (default) / chroot |
 | `APPSPEC_DEV` | 1 — look for templates in workspace/templates/ |
@@ -453,14 +495,15 @@ Full reference — [`docs/repo.md`](docs/repo.md) (Russian).
 | `APPSPEC_CONFIG_PATH` | Extra config directories |
 | `APPSPEC_BUNDLE_CACHE` | Bundle cache directory |
 | `APPSPEC_BUNDLE_HOME` | Bundle state directory |
-| `APPSPEC_REPO` | Local SIF repository root |
-| `APPSPEC_REPO_TOKEN` | Token for `repo push` |
-| `APPSPEC_SIGNING_KEY` | Path to ed25519 private key |
+| `APPSPEC_REPO` | Path \| URL \| profile name. Local commands need a path; read/pull/push also accept URL or profile name |
+| `APPSPEC_REPO_TOKEN` | Token only, for `repo push`. Not the destination. |
+| `APPSPEC_REPO_SERVER_CONFIG` | Path to `repo-server.toml` (after `--config`) |
+| `APPSPEC_REPO_CLIENT_CONFIG` | Path to `repos.toml` |
+| `APPSPEC_SIGNING_KEY` | Private ed25519 key (after `[signing].key`) |
 | `APPSPEC_APPTAINER` | `apptainer` binary (for mocks) |
 | `APPSPEC_IPFS` | `ipfs` binary (for mocks) |
 | `APPSPEC_ORAS` | `oras` binary (for mocks) |
 | `XDG_CONFIG_HOME`, `XDG_DATA_HOME`, `XDG_DATA_DIRS` | Standard XDG |
-
 ## Tests
 
 ```sh

@@ -2,13 +2,13 @@
 //!
 //! Модель данных и контракты — по ТЗ `appspec SIF Repository` v1.1.0.
 //! Реализовано: init, add, ls, show, reindex, check, gc, search, serve,
-//! push, pull (--from PATH|URL, --spec-only, --sif-out, --trusted-key),
-//! sign/verify (ed25519 + JCS).
-//! Не реализовано: ipfs (E6), export-oci (E8).
+//! push, pull, sign/verify (ed25519 + JCS), config-разделение
+//! (server / client), token lifecycle, migrate-config.
 
 pub mod add;
 pub mod check;
 pub mod commands;
+pub mod config;
 pub mod gc;
 pub mod http;
 pub mod index_build;
@@ -27,9 +27,11 @@ pub mod util;
 use anyhow::Result;
 use clap::Subcommand;
 
+pub use config::RepoProfile;
+
 #[derive(Debug, Subcommand)]
 pub enum RepoCommand {
-    /// Создать новый локальный репозиторий
+    /// Создать новый локальный репозиторий (data-only).
     Init(commands::InitArgs),
     /// Добавить SIF в репозиторий
     Add(commands::AddArgs),
@@ -59,6 +61,17 @@ pub enum RepoCommand {
     ExportOci(commands::ExportOciArgs),
     /// Проверить подпись index.json
     Verify(commands::VerifyArgs),
+    /// Управление токенами сервера
+    #[command(subcommand)]
+    Token(commands::TokenCommand),
+    /// Перенести legacy `<root>/config.toml` в `repo-server.toml`
+    MigrateConfig(commands::MigrateConfigArgs),
+    /// Создать/обновить server config
+    #[command(subcommand)]
+    Server(commands::ServerCommand),
+    /// Управление client config (профили источников)
+    #[command(subcommand)]
+    Client(commands::ClientCommand),
 }
 
 pub fn run(cmd: RepoCommand) -> Result<i32> {
@@ -78,16 +91,32 @@ pub fn run(cmd: RepoCommand) -> Result<i32> {
         RepoCommand::PublishIndex(a) => commands::publish_index(a),
         RepoCommand::ExportOci(a) => commands::export_oci(a),
         RepoCommand::Verify(a) => commands::verify(a),
+        RepoCommand::Token(c) => commands::token(c),
+        RepoCommand::MigrateConfig(a) => commands::migrate_config(a),
+        RepoCommand::Server(c) => commands::server(c),
+        RepoCommand::Client(c) => commands::client(c),
     }
 }
 
 pub fn default_root() -> std::path::PathBuf {
     if let Ok(v) = std::env::var("APPSPEC_REPO") {
-        // $APPSPEC_REPO может быть URL сервера — это не путь.
-        // Для локальных операций (init, serve, add, check, gc, reindex,
-        // sign, bundle-lock) нужен путь на диске.
-        if !v.is_empty() && !v.starts_with("http://") && !v.starts_with("https://") {
-            return std::path::PathBuf::from(v);
+        if !v.is_empty() {
+            if v.starts_with("http://") || v.starts_with("https://") || v.starts_with("ipfs://") {
+                // URL — не путь; локальные команды используют XDG.
+            } else if v.starts_with('/') || v.starts_with('~') || v.starts_with('.') {
+                return config::expand_user_path(std::path::Path::new(&v));
+            } else {
+                // Может быть профилем.
+                if let Ok((_, cc)) = config::find_client_config(None) {
+                    if let Some(p) = cc.profile(&v) {
+                        if let Some(path) = &p.source.path {
+                            return path.clone();
+                        }
+                        // URL/IPFS-профиль — не для локальных команд.
+                    }
+                }
+                return config::expand_user_path(std::path::Path::new(&v));
+            }
         }
     }
     if let Ok(v) = std::env::var("XDG_DATA_HOME") {
