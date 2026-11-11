@@ -1182,7 +1182,7 @@ mod content_tests {
         let fr = FileRef {
             to: "/tmp/empty".into(),
             from: None,
-            content: Some(String::new()),    // ← было None
+            content: Some(String::new()), // ← было None
             mode: None,
             scope: None,
         };
@@ -1204,10 +1204,7 @@ mod content_tests {
             scope: None,
         };
         let err = resolve_file(&fr, "test", tmp.path(), "test").unwrap_err();
-        assert!(
-            err.to_string().contains("ровно одно"),
-            "unexpected: {err}"
-        );
+        assert!(err.to_string().contains("ровно одно"), "unexpected: {err}");
     }
 
     /// Многострочный inline-контент (типичный `setup`-скрипт) должен
