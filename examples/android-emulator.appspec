@@ -1,0 +1,39 @@
+[package]
+name    = "android-emulator"
+version = "11.0"
+
+[build]
+base         = "budtmo/docker-android:emulator_11.0"
+template     = "android-x11"
+template_dir = "../templates"
+
+[build.source]
+type = ""
+url  = ""
+
+[build.collect]
+binary = "/opt/android/emulator/emulator"
+
+[build.scratch]
+workdir = "/tmp"
+cmd     = ["/opt/start-x11-emulator.sh"]
+
+[runtime]
+mode       = "instance"
+persist    = false
+workdir    = "/tmp"
+sif_file   = "android-emulator.sif"
+image_name = "%{name}:%{version}"
+
+env_passthrough = ["DISPLAY", "XAUTHORITY"]
+xauthority_auto = false
+pulse_auto      = false
+
+binds = [
+    "/tmp/.X11-unix:/tmp/.X11-unix",
+    "/dev/kvm:/dev/kvm",
+]
+
+optional_binds = ["/dev/dri:/dev/dri"]
+
+entry = 'exec /opt/start-x11-emulator.sh'

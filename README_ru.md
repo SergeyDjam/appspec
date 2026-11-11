@@ -547,4 +547,4 @@ Unit-тесты внутри `src/bundle/loader.rs`, `src/bundle/model.rs`,
 
 ## Лицензия
 
-MIT.
+GPL-2.0-or-later. See [LICENSE](LICENSE) for the full text.

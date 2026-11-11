@@ -1,0 +1,27 @@
+[package]
+name    = "fdroid-carrier"
+version = "1.0.0"
+
+[build]
+base     = "alpine:3.21"
+template = "alpine"
+
+[build.source]
+type = ""
+url  = ""
+
+[build.apt]
+extra = []
+
+[build.collect]
+binary = "/bin/true"
+
+[build.scratch]
+cmd = ["/bin/true"]
+
+[runtime]
+mode    = "cli"
+command = "/bin/true"
+
+sif_file   = "fdroid-carrier.sif"
+image_name = "%{name}:%{version}"

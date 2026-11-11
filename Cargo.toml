@@ -1,10 +1,10 @@
 [package]
 name        = "appspec"
-version     = "0.4.0"
+version     = "0.4.2"
 edition     = "2021"
 rust-version = "1.74"
 description = "Apptainer SIF builder from TOML spec + composable bundles"
-license     = "MIT"
+license     = "GPL-2.0-or-later"
 readme      = "README.md"
 repository  = "https://example.invalid/appspec"   # поправьте под свой remote
 keywords    = ["apptainer", "singularity", "sif", "container", "build"]

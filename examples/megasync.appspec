@@ -1,17 +1,15 @@
 # =============================================================================
-# appspec spec: megasync (ROSA 2021.1)
+# appspec spec: megasync (ROSA 13)
 # =============================================================================
 
 [package]
 name    = "megasync"
 version = "6.7.0.3"
-
 release     = "1"
 epoch       = 0
 summary     = "MEGA Desktop App (official sync client)"
 description = """
 MEGAsync — официальный десктоп-клиент для синхронизации файлов с MEGA.
-Собран для платформы ROSA 2021.1 из официального репозитория MEGA.
 """
 license  = "MEGA Limited Code Review Licence"
 url      = "https://mega.nz/sync"
@@ -23,9 +21,10 @@ bin      = "megasync"
 # build
 # -----------------------------------------------------------------------------
 [build]
-base     = "rosalab/rosa2021.1"
+base     = "rosalab/rosa13:latest"
 arch     = "amd64"
 template = "rpm-ldd"
+template_dir = "../templates"
 
 [build.source]
 type    = "repo"
@@ -34,13 +33,13 @@ package = "megasync"
 [build.apt]
 # Только то, что dnf install megasync не тянет, но нужно для GUI.
 # gtk3/mesa-libGL уже в шаблоне (тянут cairo, gdk-pixbuf, libEGL транзитивно).
-# libxcb-cursor0 — ROSA-имя (Fedora: libxcb-cursor).
 extra = [
-    "libxcb-cursor0",
-    "dbus",
-    "dbus-x11",
-    "procps-ng",
-    "psmisc",
+     "megasync",
+#    "libxcb-cursor0",
+#    "dbus",
+#    "dbus-x11",
+#    "procps-ng",
+#    "psmisc",
 ]
 
 [build.collect]
@@ -64,8 +63,7 @@ QT_XCB_GL_INTEGRATION = "none"
 # runtime — GUI (instance)
 # -----------------------------------------------------------------------------
 [runtime]
-sif_file   = "megasync.sif"
-# Версионированный тег — правильнее, чем latest.
+sif_file   = "%{name}-%{version}.sif"
 image_name = "%{name}:%{version}"
 template   = "default"
 mode       = "instance"
@@ -129,7 +127,7 @@ scope         = "user"
 launcher_name = "megasync-container"
 desktop       = true
 categories    = ["Network", "FileTransfer"]
-comment       = "MEGA Desktop App (containerized, ROSA 2021.1)"
+comment       = "MEGA Desktop App (containerized, ROSA 13)"
 wm_class      = "megasync"
 icon          = "icons/megasync.png"
 extra_files   = []
