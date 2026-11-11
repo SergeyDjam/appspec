@@ -321,9 +321,16 @@ pub fn resolve_file(
         if !p.is_file() {
             bail!("{label}: файл не найден: {}", p.display());
         }
-        (std::fs::read_to_string(&p)?, format!("file:{}", f))
+        // CHANGED: read (байты) вместо read_to_string (UTF-8).
+        // Позволяет доставлять через [[components.files]] бинарники:
+        // .apk, .jar, .vsix, .p12, .png, произвольные blob.
+        (std::fs::read(&p)?, format!("file:{}", f))
     } else {
-        (fr.content.clone().unwrap_or_default(), "inline".into())
+        // CHANGED: inline-контент в TOML — всегда текст, конвертируем в байты.
+        (
+            fr.content.clone().unwrap_or_default().into_bytes(),
+            "inline".into(),
+        )
     };
     Ok(ResolvedFile {
         to: fr.to.clone(),
@@ -1113,5 +1120,149 @@ mod tests {
         let p = prepare_as_archive(&ext, &src, "new-fp", &ext_dir, "t".into(), true).unwrap();
         assert!(!p.path.join("MARKER").exists(), "stale dir must be removed");
         assert!(p.path.join("package.json").is_file());
+    }
+}
+
+// ===========================================================================
+// Регресс-тесты для `String → Vec<u8>` в `ResolvedFile.content`.
+// ===========================================================================
+
+#[cfg(test)]
+mod content_tests {
+    use super::*;
+    use crate::bundle::model::FileRef;
+
+    /// `.bin` (256 байт, невалидный UTF-8) должен читаться как Vec<u8>
+    /// без искажений — регресс на `read_to_string`.
+    #[test]
+    fn resolve_file_reads_binary_bytes_exactly() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let bin = tmp.path().join("blob.bin");
+        // 0x00..=0xFF — гарантированно невалидный UTF-8
+        let bytes: Vec<u8> = (0u16..=255).map(|b| b as u8).collect();
+        std::fs::write(&bin, &bytes).unwrap();
+
+        let fr = FileRef {
+            to: "/tmp/blob.bin".into(),
+            from: Some("blob.bin".into()),
+            content: None,
+            mode: None,
+            scope: None,
+        };
+        let r = resolve_file(&fr, "test", tmp.path(), "test").unwrap();
+        assert_eq!(r.content, bytes, "binary content must not be altered");
+        assert_eq!(r.content.len(), 256);
+        assert_eq!(r.source, "file:blob.bin");
+    }
+
+    /// Inline-контент (`content = "..."`) в TOML должен конвертироваться
+    /// в Vec<u8> через `.into_bytes()` — байт-в-байт.
+    #[test]
+    fn resolve_file_inline_content_roundtrips_utf8() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let fr = FileRef {
+            to: "/tmp/inline.txt".into(),
+            from: None,
+            content: Some("hello, world\n".into()),
+            mode: Some(0o600),
+            scope: None,
+        };
+        let r = resolve_file(&fr, "test", tmp.path(), "test").unwrap();
+        assert_eq!(r.content, b"hello, world\n");
+        assert_eq!(r.mode, 0o600);
+        assert_eq!(r.source, "inline");
+    }
+
+    /// Пустой inline-контент (`content = ""`) → пустой Vec<u8>, не паника.
+    /// NB: `content: None, from: None` — невалидный FileRef (validate
+    /// отвергает), поэтому проверяем именно `content: Some("")`.
+    #[test]
+    fn resolve_file_empty_inline_is_empty_bytes() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let fr = FileRef {
+            to: "/tmp/empty".into(),
+            from: None,
+            content: Some(String::new()),    // ← было None
+            mode: None,
+            scope: None,
+        };
+        let r = resolve_file(&fr, "test", tmp.path(), "test").unwrap();
+        assert!(r.content.is_empty());
+        assert_eq!(r.source, "inline");
+    }
+
+    /// Дополнительно: `content: None, from: None` — это ошибка валидации,
+    /// а не пустой файл. Регресс на `validate`.
+    #[test]
+    fn resolve_file_rejects_no_source() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let fr = FileRef {
+            to: "/tmp/x".into(),
+            from: None,
+            content: None,
+            mode: None,
+            scope: None,
+        };
+        let err = resolve_file(&fr, "test", tmp.path(), "test").unwrap_err();
+        assert!(
+            err.to_string().contains("ровно одно"),
+            "unexpected: {err}"
+        );
+    }
+
+    /// Многострочный inline-контент (типичный `setup`-скрипт) должен
+    /// сохранять \n как байты 0x0A.
+    #[test]
+    fn resolve_file_multiline_inline_preserves_newlines() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let body = "#!/bin/sh\nset -eu\necho hi\n";
+        let fr = FileRef {
+            to: "/tmp/script.sh".into(),
+            from: None,
+            content: Some(body.into()),
+            mode: Some(0o755),
+            scope: None,
+        };
+        let r = resolve_file(&fr, "test", tmp.path(), "test").unwrap();
+        assert_eq!(r.content, body.as_bytes());
+        assert_eq!(r.content.iter().filter(|b| **b == b'\n').count(), 3);
+        assert_eq!(r.mode, 0o755);
+    }
+
+    /// Каталог в `from` — ошибка (не паника), `is_file()` в резолвере.
+    #[test]
+    fn resolve_file_rejects_directory() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let dir = tmp.path().join("somedir");
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let fr = FileRef {
+            to: "/tmp/x".into(),
+            from: Some("somedir".into()),
+            content: None,
+            mode: None,
+            scope: None,
+        };
+        let err = resolve_file(&fr, "test", tmp.path(), "test").unwrap_err();
+        assert!(err.to_string().contains("файл не найден"));
+    }
+
+    /// Файл, содержащий NUL (0x00) — `read_to_string` бы упал,
+    /// `read` — нет. Регресс на «один битый байт ломает весь bundle».
+    #[test]
+    fn resolve_file_tolerates_embedded_nul() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let bin = tmp.path().join("nul.bin");
+        std::fs::write(&bin, b"abc\x00def\x00ghi").unwrap();
+
+        let fr = FileRef {
+            to: "/tmp/nul.bin".into(),
+            from: Some("nul.bin".into()),
+            content: None,
+            mode: None,
+            scope: None,
+        };
+        let r = resolve_file(&fr, "test", tmp.path(), "test").unwrap();
+        assert_eq!(r.content, b"abc\x00def\x00ghi");
     }
 }

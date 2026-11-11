@@ -1,0 +1,21 @@
+[bundle]
+name        = "android-fdroid"
+description = "Android emulator with F-Droid pre-installed via adb"
+strict      = false
+
+[bundle.base]
+spec  = "./android-emulator.appspec"
+entry = 'exec /opt/start-x11-emulator.sh'
+
+[[components]]
+name    = "fdroid-carrier"
+spec    = "./fdroid-carrier.appspec"
+mode    = "chroot"
+provide = "fdroid-carrier"
+mounts  = ["/dev/kvm"]
+
+[[components.files]]
+to    = "/opt/extensions/F-Droid.apk"
+from  = "./extensions/F-Droid.apk"
+scope = "base"
+mode  = 0o644

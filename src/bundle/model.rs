@@ -309,7 +309,7 @@ impl FileRef {
 #[derive(Debug, Clone)]
 pub struct ResolvedFile {
     pub to: String,
-    pub content: String,
+    pub content: Vec<u8>,
     pub mode: u32,
     pub source: String,
     pub scopes: Vec<FileScope>,

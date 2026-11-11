@@ -175,7 +175,8 @@ fn emit_files_for(
     let w = &mut s;
     let _ = writeln!(w, "# ---- {banner} ----");
     for f in filtered {
-        let encoded = b64.encode(f.content.as_bytes());
+        // CHANGED: content: Vec<u8> — base64 над байтами, не над строкой.
+        let encoded = b64.encode(&f.content);
         let t = match prefix_var {
             Some(v) => format!("\"{}{}\"", v, f.to),
             None => dq(&f.to),
@@ -199,8 +200,9 @@ fn instance_storage_fp(files: &[ResolvedFile]) -> u64 {
         for b in f.to.bytes() {
             h = h.wrapping_mul(33).wrapping_add(b as u64);
         }
-        for b in f.content.bytes() {
-            h = h.wrapping_mul(33).wrapping_add(b as u64);
+        // CHANGED: f.content теперь Vec<u8> — итерируем по &Vec<u8>.
+        for b in &f.content {
+            h = h.wrapping_mul(33).wrapping_add(*b as u64);
         }
     }
     h
@@ -351,7 +353,8 @@ fn emit_instance_prepare(c: &Component, files: &[ResolvedFile]) -> String {
         use base64::Engine as _;
         let b64 = base64::engine::general_purpose::STANDARD;
         for f in files {
-            let encoded = b64.encode(f.content.as_bytes());
+            // CHANGED: content: Vec<u8> — base64 над байтами.
+            let encoded = b64.encode(&f.content);
             let rel = f.to.trim_start_matches('/');
             let _ = writeln!(
                 w,
@@ -599,8 +602,6 @@ pub fn render_launcher(
 ) -> Result<String> {
     let b = &file.bundle;
 
-    // Куда монтировать подготовленные расширения внутри base-инстанса.
-    // Default — путь VSCodium (обратная совместимость для старых бандлов).
     let ext_mount_dir: String = b
         .extensions
         .as_ref()
@@ -608,7 +609,6 @@ pub fn render_launcher(
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| "/config/home/.vscodium/extensions".into());
 
-    // Шаблон install-команды: {file}/{target}, {name}, {id}, {version}.
     let ext_install_tpl: Option<&str> = b
         .extensions
         .as_ref()
@@ -695,6 +695,8 @@ pub fn render_launcher(
                 .iter()
                 .any(|f| f.to == "/root/.config/containers/containers.conf");
             if !has_user_conf {
+                // CHANGED: content: Vec<u8>. `From<&str> for Vec<u8>` даёт
+                // побайтовый UTF-8 — семантика та же, что была при String.
                 ifiles.push(ResolvedFile {
                     to: "/root/.config/containers/containers.conf".into(),
                     content: concat!(
@@ -715,7 +717,8 @@ pub fn render_launcher(
             let wrapper_path = "/opt/appspec/podman-daemon-wrapper.sh";
             ifiles.push(ResolvedFile {
                 to: wrapper_path.into(),
-                content: wrapper_content,
+                // CHANGED: content: Vec<u8> — String требует явной конверсии.
+                content: wrapper_content.into_bytes(),
                 mode: 0o755,
                 source: "generated:podman-daemon-wrapper".into(),
                 scopes: vec![FileScope::Instance],
@@ -1025,23 +1028,11 @@ pub fn render_launcher(
         }
         if let Some(tpl) = ext_install_tpl {
             for e in prepared_exts {
-                // install исполняется ТОЛЬКО для type=file (.oxt/.deb/.rpm):
-                // unopkg и подобные требуют явного вызова.
-                //
-                // Для type=vsix расширение уже распаковано в каталог
-                // <id>-<version>/ в $BUNDLE_DIR/extensions, который bind'ится
-                // в целевой --extensions-dir VSCodium. VSCodium подхватывает
-                // каталоги сам — codium --install-extension не нужен
-                // (и без X-сервера он бы завис в GUI-режиме).
-                //
-                // Для type=archive — пользователь сам решает, что делать
-                // с распакованным каталогом; install не исполняем.
                 if e.kind != ExtensionKind::File {
                     continue;
                 }
                 let cmd = build_install_command(tpl, &ext_mount_dir, e);
                 writeln!(w, "echo '  install: {}' >&2", sh_quote(&cmd))?;
-                // yes yes — auto-accept EULA-промптов (unopkg).
                 writeln!(w, "yes yes 2>/dev/null | {}", cmd)?;
             }
         }
@@ -1059,6 +1050,10 @@ pub fn render_launcher(
 
     Ok(s)
 }
+
+// ===========================================================================
+// Tests
+// ===========================================================================
 
 #[cfg(test)]
 mod install_command_tests {
@@ -1127,5 +1122,92 @@ mod install_command_tests {
         let b = build_install_command("cmd {file}", "/opt/extensions", &ext);
         assert_eq!(a, b);
         assert_eq!(a, "cmd /opt/extensions/x.oxt");
+    }
+}
+
+#[cfg(test)]
+mod content_tests {
+    use super::*;
+    use crate::bundle::model::{FileScope, ResolvedFile};
+
+    /// base64-кодирование `Vec<u8>` в `emit_files_for` должно давать
+    /// то же, что `base64 -d` восстановит побайтово.
+    /// Регресс на `String → Vec<u8>` (бинарные `.apk`, `.jar`, `.p12`).
+    #[test]
+    fn emit_files_for_roundtrips_binary_via_base64() {
+        let bytes: Vec<u8> = (0u16..=255).map(|b| b as u8).collect();
+        let files = vec![ResolvedFile {
+            to: "/tmp/blob.bin".into(),
+            content: bytes.clone(),
+            mode: 0o644,
+            source: "test".into(),
+            scopes: vec![FileScope::Base],
+            component: "t".into(),
+        }];
+        let sh = emit_files_for(&files, FileScope::Base, None, "test");
+
+        // Извлекаем base64 из `printf %s <b64> | base64 -d > "/tmp/blob.bin"`
+        let b64 = sh
+            .split("printf %s ")
+            .nth(1)
+            .and_then(|s| s.split(' ').next())
+            .expect("base64 token");
+        use base64::Engine as _;
+        let decoded = base64::engine::general_purpose::STANDARD
+            .decode(b64)
+            .expect("base64 decode");
+        assert_eq!(decoded, bytes, "binary content must roundtrip");
+    }
+
+    /// Тот же тест для sandbox-scope и prefix_var — другая ветка кода
+    /// в `emit_files_for` (t вычисляется как `"$PREFIX/to"`).
+    #[test]
+    fn emit_files_for_prefix_var_roundtrips_binary() {
+        let bytes = b"\x00\x01\x02\xff\xfe\xfd".to_vec();
+        let files = vec![ResolvedFile {
+            to: "/etc/foo.bin".into(),
+            content: bytes.clone(),
+            mode: 0o600,
+            source: "test".into(),
+            scopes: vec![FileScope::Sandbox],
+            component: "t".into(),
+        }];
+        let sh = emit_files_for(&files, FileScope::Sandbox, Some("$SANDBOX_DIR"), "test");
+        let b64 = sh
+            .split("printf %s ")
+            .nth(1)
+            .and_then(|s| s.split(' ').next())
+            .expect("base64 token");
+        use base64::Engine as _;
+        let decoded = base64::engine::general_purpose::STANDARD
+            .decode(b64)
+            .expect("base64 decode");
+        assert_eq!(decoded, bytes);
+        assert!(sh.contains("\"$SANDBOX_DIR/etc/foo.bin\""));
+        assert!(sh.contains("chmod 600"));
+    }
+
+    /// `instance_storage_fp` должен работать на `&[u8]` (раньше — `.bytes()`
+    /// на `String`). Два прогона на одних данных → одинаковый fp;
+    /// изменение байта → другой fp.
+    #[test]
+    fn instance_storage_fp_works_on_bytes() {
+        let a = ResolvedFile {
+            to: "/a".into(),
+            content: vec![1, 2, 3, 4],
+            mode: 0o644,
+            source: "t".into(),
+            scopes: vec![FileScope::Instance],
+            component: "c".into(),
+        };
+        let b = ResolvedFile {
+            content: vec![1, 2, 3, 5],
+            ..a.clone()
+        };
+        let fp_a1 = instance_storage_fp(std::slice::from_ref(&a));
+        let fp_a2 = instance_storage_fp(std::slice::from_ref(&a));
+        let fp_b = instance_storage_fp(std::slice::from_ref(&b));
+        assert_eq!(fp_a1, fp_a2);
+        assert_ne!(fp_a1, fp_b);
     }
 }

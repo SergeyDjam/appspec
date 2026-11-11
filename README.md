@@ -549,4 +549,4 @@ Unit tests inside `src/bundle/loader.rs`, `src/bundle/model.rs`,
 
 ## License
 
-MIT.
+GPL-2.0-or-later. See [LICENSE](LICENSE) for the full text.
