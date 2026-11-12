@@ -4,6 +4,22 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+## [0.4.6] - 2026-11-12
+
+### Fixed
+
+- **`appspec install`**: `templates/launcher.sh.j2` did not emit
+  `[runtime.vars]` before `bind_lines` / `create_dirs`. Installed
+  launchers for specs that reference `$CONFIG_DIR`, `$MUSIC_DIR`, etc.
+  in `binds` / `create_dirs` failed at runtime with
+  `unbound variable` under `set -eu` (regression vs. `appspec run`).
+
+  Fix: `launcher.sh.j2` now renders `runtime.vars` (same loop as
+  `run.sh.j2`), then overrides `CONFIG_DIR="$STATE"` so the
+  install-scope state directory wins over the spec's `$HOME/...`
+  default. Regression tests added to `src/templates.rs`.
+
+
 ## [0.4.5] - 2026-11-13
 
 ### Added

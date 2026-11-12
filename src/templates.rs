@@ -868,3 +868,112 @@ pub fn render_desktop(
         },
     )
 }
+
+// ===========================================================================
+// Regression (0.4.6): `appspec install` must emit `[runtime.vars]`.
+// ===========================================================================
+// Symptom (0.4.5): installed launcher failed with `unbound variable` on
+// `$MUSIC_DIR` / `$CONFIG_DIR` because `templates/launcher.sh.j2` did not
+// render `runtime.vars` (unlike `run.sh.j2`).
+#[cfg(test)]
+mod installed_launcher_tests {
+    use super::*;
+    use crate::install::Scope;
+    use std::path::Path;
+
+    #[test]
+    fn installed_launcher_emits_runtime_vars() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let spec_path = tmp.path().join("demo.appspec");
+        std::fs::write(
+            &spec_path,
+            r#"
+[package]
+name    = "demo"
+version = "0.0.1"
+
+[build]
+base     = "alpine:3.21"
+template = "alpine"
+
+[runtime]
+sif_file = "demo.sif"
+binds    = ["$CONFIG_DIR/home:/config/home", "$MUSIC_DIR:/music:ro"]
+
+[runtime.vars]
+CONFIG_DIR = "$HOME/demo_config"
+MUSIC_DIR  = "${MUSIC_DIR:-$HOME/Music}"
+"#,
+        )
+        .unwrap();
+        let spec = crate::load_spec(&spec_path).expect("load_spec");
+        let out = render_installed_launcher(
+            &spec,
+            Path::new("/srv/demo.sif"),
+            Path::new("/srv/setup.sh"),
+            Path::new("/srv/state"),
+            Scope::User,
+        )
+        .expect("render_installed_launcher");
+
+        assert!(
+            out.contains(r#"CONFIG_DIR="$HOME/demo_config""#),
+            "CONFIG_DIR from [runtime.vars] missing:\n{out}"
+        );
+        assert!(
+            out.contains(r#"MUSIC_DIR="${MUSIC_DIR:-$HOME/Music}""#),
+            "MUSIC_DIR from [runtime.vars] missing:\n{out}"
+        );
+        assert!(
+            out.contains(r#"CONFIG_DIR="$STATE""#),
+            "CONFIG_DIR override missing:\n{out}"
+        );
+
+        let vars_pos = out.find("MUSIC_DIR=").expect("MUSIC_DIR assignment");
+        let bind_pos = out.find("--bind").expect("first --bind");
+        assert!(
+            vars_pos < bind_pos,
+            "runtime.vars must precede bind_lines (vars={vars_pos}, bind={bind_pos}):\n{out}"
+        );
+    }
+
+    #[test]
+    fn installed_launcher_without_runtime_vars_still_renders() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let spec_path = tmp.path().join("demo.appspec");
+        std::fs::write(
+            &spec_path,
+            r#"
+[package]
+name    = "demo"
+version = "0.0.1"
+
+[build]
+base     = "alpine:3.21"
+template = "alpine"
+
+[runtime]
+sif_file = "demo.sif"
+"#,
+        )
+        .unwrap();
+        let spec = crate::load_spec(&spec_path).expect("load_spec");
+        let out = render_installed_launcher(
+            &spec,
+            Path::new("/srv/demo.sif"),
+            Path::new("/srv/setup.sh"),
+            Path::new("/srv/state"),
+            Scope::User,
+        )
+        .expect("render_installed_launcher");
+
+        assert!(
+            out.contains(r#"CONFIG_DIR="$STATE""#),
+            "CONFIG_DIR override missing:\n{out}"
+        );
+        assert!(
+            !out.contains("user variables from [runtime.vars]"),
+            "no [runtime.vars] block expected when [runtime.vars] is absent:\n{out}"
+        );
+    }
+}

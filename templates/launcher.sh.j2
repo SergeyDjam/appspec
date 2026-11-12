@@ -7,6 +7,17 @@ SIF="{{ sif_path }}"
 SETUP="{{ setup_path }}"
 STATE="{{ state_dir }}"
 
+{% if runtime.vars %}
+# --- user variables from [runtime.vars] (spec defaults) ---
+{% for k, v in runtime.vars | items -%}
+{{ k }}="{{ v }}"
+{% endfor %}
+{% endif %}
+
+# --- install scope: CONFIG_DIR always points to the installer-managed
+# --- state directory, regardless of what the spec's [runtime.vars] says.
+CONFIG_DIR="$STATE"
+
 if [ ! -f "$SIF" ]; then
     echo "SIF missing: $SIF" >&2
     echo "Reinstall with: appspec install <spec.toml>" >&2
