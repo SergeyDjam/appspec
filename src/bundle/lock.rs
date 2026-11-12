@@ -70,13 +70,30 @@ pub fn default_path(spec_path: &Path) -> PathBuf {
 
 /// Сгенерировать lock по текущему индексу для всех `repo`-компонентов.
 /// Компоненты без `repo` пропускаются (у них другая природа: spec/sif/cid/manifest).
-pub fn generate(file: &BundleFile, _spec_path: &Path) -> Result<LockFile> {
-    use crate::repo::{default_root, layout::RepoRoot};
-
-    let root = RepoRoot::open(&default_root()).map_err(|e| anyhow!("repo not available: {e:#}"))?;
+pub fn generate(
+    file: &BundleFile,
+    _spec_path: &Path,
+    root: &crate::repo::layout::RepoRoot,
+    trusted: &[crate::repo::sign::TrustedKey],
+    allow_unsigned: bool,
+) -> Result<LockFile> {
+    let has_repo = file.bundle.base.source.repo.is_some()
+        || file.components.iter().any(|c| c.source.repo.is_some());
+    if !has_repo {
+        return Ok(LockFile {
+            bundle: LockBundle {
+                name: file.bundle.name.clone(),
+                locked_at: crate::repo::util::now_iso8601(),
+            },
+            components: Vec::new(),
+        });
+    }
+    let index_text = std::fs::read_to_string(root.index_path())
+        .with_context(|| format!("reading {}", root.index_path().display()))?;
+    crate::repo::sign::verify_remote_index(&index_text, trusted, allow_unsigned)
+        .with_context(|| format!("verifying {}", root.index_path().display()))?;
     let index: crate::repo::meta::IndexV1 =
-        serde_json::from_str(&std::fs::read_to_string(root.index_path())?)
-            .context("parsing repo index.json")?;
+        serde_json::from_str(&index_text).context("parsing repo index.json")?;
 
     let mut components = Vec::new();
     for c in &file.components {
@@ -116,15 +133,23 @@ pub fn generate(file: &BundleFile, _spec_path: &Path) -> Result<LockFile> {
 
 /// Сверить lock с текущим индексом. Возвращает список warning'ов
 /// (дрейф). Не ошибка: `bundle build` идёт по индексу.
-pub fn check_drift(lock: &LockFile) -> Result<Vec<String>> {
-    use crate::repo::{default_root, layout::RepoRoot};
+pub fn check_drift(
+    lock: &LockFile,
+    root: &crate::repo::layout::RepoRoot,
+    trusted: &[crate::repo::sign::TrustedKey],
+    allow_unsigned: bool,
+) -> Result<Vec<String>> {
+    if lock.components.is_empty() {
+        return Ok(Vec::new());
+    }
+    let index_text = std::fs::read_to_string(root.index_path())
+        .with_context(|| format!("reading {}", root.index_path().display()))?;
+    crate::repo::sign::verify_remote_index(&index_text, trusted, allow_unsigned)
+        .with_context(|| format!("verifying {}", root.index_path().display()))?;
+    let index: crate::repo::meta::IndexV1 =
+        serde_json::from_str(&index_text).context("parsing repo index.json")?;
 
     let mut warns = Vec::new();
-    let root = RepoRoot::open(&default_root()).map_err(|e| anyhow!("repo not available: {e:#}"))?;
-    let index: crate::repo::meta::IndexV1 =
-        serde_json::from_str(&std::fs::read_to_string(root.index_path())?)
-            .context("parsing repo index.json")?;
-
     for c in &lock.components {
         let Some((n, v)) = c.repo.split_once(':') else {
             continue;

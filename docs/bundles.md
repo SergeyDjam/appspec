@@ -173,3 +173,43 @@ NAME/
 Fingerprint — простая пара size-mtime. Если SIF пересобран с тем же
 размером и mtime, sandbox не обновится. Для большинства сценариев
 этого достаточно.
+
+### Trust и выбор репозитория (0.4.5)
+
+С 0.4.5 `bundle build|check|ls|lock` принимают:
+
+| Флаг | Default | Что |
+|---|---|---|
+| `--repo PATH` | `$APPSPEC_REPO` → XDG | Путь к локальному репозиторию |
+| `--trusted-key PATH` | — | ed25519 pubkey для проверки `index.json`. Repeatable. Мержится с `~/.config/appspec/trusted-keys.toml` |
+| `--allow-unsigned` | `false` | Осознанный opt-out: принять неподписанный индекс (warning) |
+
+Поведение при `source = repo`:
+
+- `trusted_keys` пуст и `--allow-unsigned` не задан → warning
+  "no trusted keys configured; index signature not verified".
+- `trusted_keys` непуст → **fail-closed**: подпись `index.json`
+  обязательна и валидна. Невалидная подпись → `bundle build` / `bundle check`
+  / `bundle lock` падает с exit != 0.
+- `bundle lock` проверяет подпись **до** записи lock'а. Lock нельзя
+  снять с подменённого индекса.
+
+Пример:
+
+```sh
+# Обычный build — репо из $APPSPEC_REPO
+appspec bundle build vscodium-bundle.appspec
+
+# Явный репо + проверка подписи (fail-closed)
+appspec bundle build vscodium-bundle.appspec \
+    --repo /srv/appspec-repo \
+    --trusted-key ~/.config/appspec/trusted-keys.toml
+
+# Локальный репо без подписи — осознанный opt-out
+appspec bundle build vscodium-bundle.appspec \
+    --repo /srv/appspec-repo \
+    --allow-unsigned
+```
+
+`bundle.lock.toml` пишется через `bundle lock --repo PATH`, что гарантирует
+согласованность lock'а и подписанного индекса на момент создания.

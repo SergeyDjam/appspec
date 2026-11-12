@@ -4,6 +4,43 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+## [0.4.5] - 2026-11-13
+
+### Added
+
+- **`bundle {build,check,ls,lock} --repo PATH`**: explicit repository root.
+  Default: `$APPSPEC_REPO` → `$XDG_DATA_HOME/appspec/repo`.
+- **`bundle {build,check,lock} --trusted-key PATH`** (repeatable): ed25519
+  public keys for `index.json` verification. Merged with
+  `~/.config/appspec/trusted-keys.toml`.
+- **`bundle {build,check,lock} --allow-unsigned`**: explicit opt-out for
+  unsigned indices (warning emitted).
+
+### Changed
+
+- **`bundle build` / `bundle check` / `bundle lock`** now verify the
+  `index.json` signature when repo sources are used. Fail-closed:
+  configured `--trusted-key` + invalid signature → exit != 0.
+  Empty trusted keys → warning (behaviour matches `repo pull`).
+- **`bundle lock`** uses `--repo`; verifies the index signature before
+  writing the lock, so a locked bundle cannot be created from a
+  compromised index.
+- **`bundle build` with `bundle.lock.toml`** verifies the signature in
+  `check_drift` as well. Signature failure in lock check is a warning
+  (build proceeds to `resolve_all`, which is fail-closed).
+
+### Not verified in this release
+
+- `scripts/smoke-e2e.sh --full`: requires `apptainer` + `buildah|podman|docker`.
+  Not run in the 0.4.5 build environment.
+
+### Migration
+
+- Old CLI invocations without `--repo` keep working: default resolution is
+  unchanged (`$APPSPEC_REPO` → XDG).
+- Old `repos.toml` and `repo-server.toml` parse without changes.
+
+
 ## [0.4.4] - 2026-11-12
 
 ### Added

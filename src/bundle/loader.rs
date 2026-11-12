@@ -100,12 +100,16 @@ pub fn load_bundle(path: &Path) -> Result<BundleFile> {
     Ok(file)
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn resolve_source(
     src: &SourceSpec,
     cache_dir: &Path,
     base_dir: &Path,
     allow_build: bool,
     label: &str,
+    root: &crate::repo::layout::RepoRoot,
+    trusted: &[crate::repo::sign::TrustedKey],
+    allow_unsigned: bool,
 ) -> Result<ResolvedSource> {
     src.validate(label)?;
 
@@ -199,13 +203,18 @@ pub fn resolve_source(
         });
     }
     if let Some(r) = &src.repo {
-        return resolve_repo_source(r, label);
+        return resolve_repo_source(r, label, root, trusted, allow_unsigned);
     }
     unreachable!()
 }
 
-fn resolve_repo_source(pv: &str, label: &str) -> Result<ResolvedSource> {
-    use crate::repo::{default_root, layout::RepoRoot};
+fn resolve_repo_source(
+    pv: &str,
+    label: &str,
+    root: &crate::repo::layout::RepoRoot,
+    trusted: &[crate::repo::sign::TrustedKey],
+    allow_unsigned: bool,
+) -> Result<ResolvedSource> {
     let (name, ver) = pv.split_once(':').ok_or_else(|| {
         anyhow!(
             "{label}: repo source must be `NAME:VERSION-RELEASE`, got `{}`",
@@ -213,10 +222,10 @@ fn resolve_repo_source(pv: &str, label: &str) -> Result<ResolvedSource> {
         )
     })?;
     let name = name.to_ascii_lowercase();
-    let root = RepoRoot::open(&default_root())
-        .map_err(|e| anyhow!("{label}: repo not available: {e:#}"))?;
     let index_text = std::fs::read_to_string(root.index_path())
         .with_context(|| format!("reading {}", root.index_path().display()))?;
+    crate::repo::sign::verify_remote_index(&index_text, trusted, allow_unsigned)
+        .with_context(|| format!("{label}: verifying {}", root.index_path().display()))?;
     let index: crate::repo::meta::IndexV1 =
         serde_json::from_str(&index_text).with_context(|| "parsing repo index.json".to_string())?;
     let pkg = index
@@ -230,7 +239,7 @@ fn resolve_repo_source(pv: &str, label: &str) -> Result<ResolvedSource> {
     let sif = crate::repo::util::blob_path(&root.path, &v.sif_sha256);
     if !sif.is_file() {
         bail!(
-            "{label}: SIF blob missing: {} (run `appspec repo add` или `appspec repo pull`)",
+            "{label}: SIF blob missing: {} (run `appspec repo add` or `appspec repo pull`)",
             sif.display()
         );
     }
@@ -258,8 +267,20 @@ pub fn resolve_base(
     cache_dir: &Path,
     base_dir: &Path,
     allow_build: bool,
+    root: &crate::repo::layout::RepoRoot,
+    trusted: &[crate::repo::sign::TrustedKey],
+    allow_unsigned: bool,
 ) -> Result<ResolvedBase> {
-    let r = resolve_source(&base.source, cache_dir, base_dir, allow_build, "base")?;
+    let r = resolve_source(
+        &base.source,
+        cache_dir,
+        base_dir,
+        allow_build,
+        "base",
+        root,
+        trusted,
+        allow_unsigned,
+    )?;
     let raw_setup = r.setup.as_deref().or(base.setup.as_deref()).unwrap_or("");
     let split = split_setup_at_final_exec(raw_setup);
     let entry = split.entry.or_else(|| base.entry.clone()).ok_or_else(|| {
