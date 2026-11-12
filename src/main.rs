@@ -455,6 +455,9 @@ fn cmd_gen_bundle(bundle_path: &Path) -> Result<()> {
         output: None,
         no_build: true,
         no_lock: false,
+        repo: None,
+        trusted_keys: Vec::new(),
+        allow_unsigned: false,
     };
     let code = bundle::commands::build(args)?;
     if code != 0 {
@@ -639,6 +642,9 @@ fn cmd_build_bundle(bundle_path: &Path) -> Result<()> {
         output: None,
         no_build: false,
         no_lock: false,
+        repo: None,
+        trusted_keys: Vec::new(),
+        allow_unsigned: false,
     };
     let code = bundle::commands::build(args)?;
     if code != 0 {
@@ -700,6 +706,9 @@ fn cmd_run_bundle(bundle_path: &Path) -> Result<()> {
         output: None,
         no_build: false,
         no_lock: false,
+        repo: None,
+        trusted_keys: Vec::new(),
+        allow_unsigned: false,
     };
     let code = bundle::commands::build(args)?;
     if code != 0 {

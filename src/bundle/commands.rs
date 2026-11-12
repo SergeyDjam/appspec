@@ -16,16 +16,43 @@ pub struct BuildArgs {
     /// Игнорировать bundle.lock.toml (даже если он есть)
     #[arg(long)]
     pub no_lock: bool,
+    /// Path to the repository root. Default: $APPSPEC_REPO / XDG.
+    #[arg(long)]
+    pub repo: Option<PathBuf>,
+    /// Trusted signing key(s) for index.json verification. Repeatable.
+    #[arg(long = "trusted-key")]
+    pub trusted_keys: Vec<PathBuf>,
+    /// Accept unsigned index.json (explicit opt-out).
+    #[arg(long)]
+    pub allow_unsigned: bool,
 }
 #[derive(Debug, Args)]
 pub struct LsArgs {
     pub spec: String,
     #[arg(long)]
     pub json: bool,
+    /// Path to the repository root. Default: $APPSPEC_REPO / XDG.
+    #[arg(long)]
+    pub repo: Option<PathBuf>,
+    /// Trusted signing key(s) for index.json verification. Repeatable.
+    #[arg(long = "trusted-key")]
+    pub trusted_keys: Vec<PathBuf>,
+    /// Accept unsigned index.json (explicit opt-out).
+    #[arg(long)]
+    pub allow_unsigned: bool,
 }
 #[derive(Debug, Args)]
 pub struct CheckArgs {
     pub spec: String,
+    /// Path to the repository root. Default: $APPSPEC_REPO / XDG.
+    #[arg(long)]
+    pub repo: Option<PathBuf>,
+    /// Trusted signing key(s) for index.json verification. Repeatable.
+    #[arg(long = "trusted-key")]
+    pub trusted_keys: Vec<PathBuf>,
+    /// Accept unsigned index.json (explicit opt-out).
+    #[arg(long)]
+    pub allow_unsigned: bool,
 }
 #[derive(Debug, Args)]
 pub struct AddArgs {
@@ -48,6 +75,15 @@ pub struct LockArgs {
     pub spec: String,
     #[arg(long, short)]
     pub output: Option<PathBuf>,
+    /// Path to the repository root. Default: $APPSPEC_REPO / XDG.
+    #[arg(long)]
+    pub repo: Option<PathBuf>,
+    /// Trusted signing key(s) for index.json verification. Repeatable.
+    #[arg(long = "trusted-key")]
+    pub trusted_keys: Vec<PathBuf>,
+    /// Accept unsigned index.json (explicit opt-out).
+    #[arg(long)]
+    pub allow_unsigned: bool,
 }
 
 fn print_issues(issues: &[validate::Issue]) {
@@ -62,6 +98,28 @@ fn print_issues(issues: &[validate::Issue]) {
             eprintln!("       {}", i.detail);
         }
     }
+}
+
+fn open_repo_root(a: Option<PathBuf>) -> Result<crate::repo::layout::RepoRoot> {
+    let root_path = a
+        .or_else(|| {
+            std::env::var_os("APPSPEC_REPO")
+                .map(PathBuf::from)
+                .filter(|p| !p.as_os_str().is_empty())
+        })
+        .unwrap_or_else(crate::repo::default_root);
+    crate::repo::layout::RepoRoot::open(&root_path)
+        .with_context(|| format!("opening repository at {}", root_path.display()))
+}
+
+fn load_trusted_all(extras: &[PathBuf]) -> Result<Vec<crate::repo::sign::TrustedKey>> {
+    let mut out = crate::repo::sign::load_trusted_keys(None)?;
+    for k in extras {
+        out.extend(crate::repo::sign::load_trusted_keys(Some(k.as_path()))?);
+    }
+    let mut seen = std::collections::HashSet::new();
+    out.retain(|(_, k)| seen.insert(k.to_bytes()));
+    Ok(out)
 }
 
 fn load(spec: &str) -> Result<(model::BundleFile, PathBuf, PathBuf)> {
@@ -96,8 +154,19 @@ fn resolve_all(
     base_dir: &std::path::Path,
     cache: &std::path::Path,
     allow_fetch: bool,
+    repo_root: &crate::repo::layout::RepoRoot,
+    trusted: &[crate::repo::sign::TrustedKey],
+    allow_unsigned: bool,
 ) -> Result<Resolved> {
-    let base = loader::resolve_base(&file.bundle.base, cache, base_dir, allow_fetch)?;
+    let base = loader::resolve_base(
+        &file.bundle.base,
+        cache,
+        base_dir,
+        allow_fetch,
+        repo_root,
+        trusted,
+        allow_unsigned,
+    )?;
 
     let mut comps: Vec<(model::Component, PathBuf)> = Vec::new();
     let mut files: Vec<ResolvedFile> = Vec::new();
@@ -108,6 +177,9 @@ fn resolve_all(
             base_dir,
             allow_fetch,
             &format!("component `{}`", c.name),
+            repo_root,
+            trusted,
+            allow_unsigned,
         )?;
         comps.push((c.clone(), r.sif));
         for fr in &c.files {
@@ -196,10 +268,30 @@ fn entry_hint(file: &model::BundleFile) -> Option<&str> {
     None
 }
 
+fn open_repo_root_for(
+    file: &model::BundleFile,
+    a: Option<PathBuf>,
+) -> Result<crate::repo::layout::RepoRoot> {
+    let has_repo = file.bundle.base.source.repo.is_some()
+        || file.components.iter().any(|c| c.source.repo.is_some());
+    let explicit = a.is_some() || std::env::var_os("APPSPEC_REPO").is_some();
+    if has_repo || explicit {
+        return open_repo_root(a);
+    }
+    // Bundle has no `repo:` sources and no explicit --repo/$APPSPEC_REPO.
+    // Return a stub root; never read because resolve_repo_source is not
+    // called (no `repo:` source in any component or base).
+    Ok(crate::repo::layout::RepoRoot::with_default_config(
+        &PathBuf::from("/nonexistent-appspec-repo"),
+    ))
+}
+
 pub fn build(a: BuildArgs) -> Result<i32> {
     let (file, spec_path, cache) = load(&a.spec)?;
     let base_dir = spec_base_dir(&spec_path);
     let allow_fetch = !a.no_build;
+    let repo_root = open_repo_root_for(&file, a.repo)?;
+    let trusted = load_trusted_all(&a.trusted_keys)?;
 
     let static_issues = validate::validate_static(
         &file.bundle.base.source,
@@ -208,7 +300,14 @@ pub fn build(a: BuildArgs) -> Result<i32> {
         &file.extensions,
         file.bundle.strict,
     );
-    let preflight_issues = validate::preflight(&file, &base_dir, &cache);
+    let preflight_issues = validate::preflight(
+        &file,
+        &base_dir,
+        &cache,
+        &repo_root,
+        &trusted,
+        a.allow_unsigned,
+    );
 
     print_issues(&static_issues);
     print_issues(&preflight_issues);
@@ -220,7 +319,7 @@ pub fn build(a: BuildArgs) -> Result<i32> {
     let lock_path = super::lock::default_path(&spec_path);
     if !a.no_lock && lock_path.is_file() {
         match super::lock::LockFile::load(&lock_path) {
-            Ok(lk) => match super::lock::check_drift(&lk) {
+            Ok(lk) => match super::lock::check_drift(&lk, &repo_root, &trusted, a.allow_unsigned) {
                 Ok(warns) => {
                     for w in warns {
                         eprintln!("warning: {w}");
@@ -232,7 +331,15 @@ pub fn build(a: BuildArgs) -> Result<i32> {
         }
     }
 
-    let r = resolve_all(&file, &base_dir, &cache, allow_fetch)?;
+    let r = resolve_all(
+        &file,
+        &base_dir,
+        &cache,
+        allow_fetch,
+        &repo_root,
+        &trusted,
+        a.allow_unsigned,
+    )?;
     let resolved_issues =
         validate::validate_resolved(&r.base, &r.comps, &r.exts, file.bundle.strict);
     print_issues(&resolved_issues);
@@ -292,7 +399,9 @@ pub fn lock(a: LockArgs) -> Result<i32> {
         anyhow::bail!("bundle spec не найден: {}", spec_path.display());
     }
     let file = loader::load_bundle(&spec_path)?;
-    let lk = super::lock::generate(&file, &spec_path)?;
+    let repo_root = open_repo_root_for(&file, a.repo)?;
+    let trusted = load_trusted_all(&a.trusted_keys)?;
+    let lk = super::lock::generate(&file, &spec_path, &repo_root, &trusted, a.allow_unsigned)?;
     let out = a
         .output
         .unwrap_or_else(|| super::lock::default_path(&spec_path));
@@ -308,6 +417,8 @@ pub fn lock(a: LockArgs) -> Result<i32> {
 pub fn check(a: CheckArgs) -> Result<i32> {
     let (file, spec_path, cache) = load(&a.spec)?;
     let base_dir = spec_base_dir(&spec_path);
+    let repo_root = open_repo_root_for(&file, a.repo)?;
+    let trusted = load_trusted_all(&a.trusted_keys)?;
 
     let static_issues = validate::validate_static(
         &file.bundle.base.source,
@@ -316,7 +427,14 @@ pub fn check(a: CheckArgs) -> Result<i32> {
         &file.extensions,
         file.bundle.strict,
     );
-    let preflight_issues = validate::preflight(&file, &base_dir, &cache);
+    let preflight_issues = validate::preflight(
+        &file,
+        &base_dir,
+        &cache,
+        &repo_root,
+        &trusted,
+        a.allow_unsigned,
+    );
 
     print_issues(&static_issues);
     print_issues(&preflight_issues);
@@ -324,7 +442,15 @@ pub fn check(a: CheckArgs) -> Result<i32> {
         eprintln!("check: FAILED");
         return Ok(2);
     }
-    match resolve_all(&file, &base_dir, &cache, false) {
+    match resolve_all(
+        &file,
+        &base_dir,
+        &cache,
+        false,
+        &repo_root,
+        &trusted,
+        a.allow_unsigned,
+    ) {
         Ok(r) => {
             let ri = validate::validate_resolved(&r.base, &r.comps, &r.exts, file.bundle.strict);
             print_issues(&ri);
@@ -342,6 +468,8 @@ pub fn check(a: CheckArgs) -> Result<i32> {
 pub fn ls(a: LsArgs) -> Result<i32> {
     let (file, spec_path, cache) = load(&a.spec)?;
     let base_dir = spec_base_dir(&spec_path);
+    let repo_root = open_repo_root_for(&file, a.repo)?;
+    let trusted = load_trusted_all(&a.trusted_keys)?;
 
     let static_issues = validate::validate_static(
         &file.bundle.base.source,
@@ -350,7 +478,14 @@ pub fn ls(a: LsArgs) -> Result<i32> {
         &file.extensions,
         file.bundle.strict,
     );
-    let preflight_issues = validate::preflight(&file, &base_dir, &cache);
+    let preflight_issues = validate::preflight(
+        &file,
+        &base_dir,
+        &cache,
+        &repo_root,
+        &trusted,
+        a.allow_unsigned,
+    );
     print_issues(&static_issues);
     print_issues(&preflight_issues);
 

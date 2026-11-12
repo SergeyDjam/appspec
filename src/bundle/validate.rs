@@ -43,13 +43,38 @@ pub fn has_errors(issues: &[Issue]) -> bool {
     issues.iter().any(|i| i.level == "error")
 }
 
-pub fn preflight(file: &BundleFile, base_dir: &Path, cache: &Path) -> Vec<Issue> {
+pub fn preflight(
+    file: &BundleFile,
+    base_dir: &Path,
+    cache: &Path,
+    repo_root: &crate::repo::layout::RepoRoot,
+    trusted: &[crate::repo::sign::TrustedKey],
+    allow_unsigned: bool,
+) -> Vec<Issue> {
     let mut out = Vec::new();
-    check_source("base", &file.bundle.base.source, base_dir, cache, &mut out);
+    check_source(
+        "base",
+        &file.bundle.base.source,
+        base_dir,
+        cache,
+        &mut out,
+        repo_root,
+        trusted,
+        allow_unsigned,
+    );
 
     for c in &file.components {
         let scope = format!("component:{}", c.name);
-        check_source(&scope, &c.source, base_dir, cache, &mut out);
+        check_source(
+            &scope,
+            &c.source,
+            base_dir,
+            cache,
+            &mut out,
+            repo_root,
+            trusted,
+            allow_unsigned,
+        );
         for fr in &c.files {
             if let Err(e) = fr.validate(&scope) {
                 out.push(Issue::error(&scope, format!("{:#}", e)));
@@ -131,12 +156,16 @@ pub fn preflight(file: &BundleFile, base_dir: &Path, cache: &Path) -> Vec<Issue>
     out
 }
 
+#[allow(clippy::too_many_arguments)]
 fn check_source(
     scope: &str,
     src: &SourceSpec,
     base_dir: &Path,
     cache: &Path,
     out: &mut Vec<Issue>,
+    root: &crate::repo::layout::RepoRoot,
+    trusted: &[crate::repo::sign::TrustedKey],
+    allow_unsigned: bool,
 ) {
     if src.kind_count() != 1 {
         out.push(
@@ -190,12 +219,18 @@ fn check_source(
             ));
         }
     } else if let Some(r) = &src.repo {
-        check_repo_source(scope, r, out);
+        check_repo_source(scope, r, out, root, trusted, allow_unsigned);
     }
 }
 
-fn check_repo_source(scope: &str, pv: &str, out: &mut Vec<Issue>) {
-    use crate::repo::{default_root, layout::RepoRoot};
+fn check_repo_source(
+    scope: &str,
+    pv: &str,
+    out: &mut Vec<Issue>,
+    root: &crate::repo::layout::RepoRoot,
+    trusted: &[crate::repo::sign::TrustedKey],
+    allow_unsigned: bool,
+) {
     let Some((name, ver)) = pv.split_once(':') else {
         out.push(Issue::error(
             scope,
@@ -204,17 +239,14 @@ fn check_repo_source(scope: &str, pv: &str, out: &mut Vec<Issue>) {
         return;
     };
     let name = name.to_ascii_lowercase();
-    let Ok(root) = RepoRoot::open(&default_root()) else {
-        out.push(Issue::error(
-            scope,
-            "repo not initialized (run `appspec repo init`)".to_string(),
-        ));
-        return;
-    };
     let Ok(text) = std::fs::read_to_string(root.index_path()) else {
         out.push(Issue::error(scope, "index.json not readable".to_string()));
         return;
     };
+    if let Err(e) = crate::repo::sign::verify_remote_index(&text, trusted, allow_unsigned) {
+        out.push(Issue::error(scope, format!("index.json signature: {e:#}")));
+        return;
+    }
     let Ok(index) = serde_json::from_str::<crate::repo::meta::IndexV1>(&text) else {
         out.push(Issue::error(scope, "index.json not parseable".to_string()));
         return;
@@ -238,7 +270,7 @@ fn check_repo_source(scope: &str, pv: &str, out: &mut Vec<Issue>) {
         out.push(Issue::warn(
             scope,
             format!(
-                "blob {} missing (run `appspec repo add` или `appspec repo pull`)",
+                "blob {} missing (run `appspec repo add` or `appspec repo pull`)",
                 blob.display()
             ),
         ));
