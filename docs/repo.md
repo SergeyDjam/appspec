@@ -287,3 +287,113 @@ spec_sha256 = "a1b2c3…"
 - `tests/e8.rs` — OCI export (мок `oras`).
 
 End-to-end: `scripts/smoke-e2e.sh`.
+## IPNS
+
+IPNS — mutable-имя репозитория. В отличие от `ipfs://<cid>` (immutable),
+`ipns://<name>` резолвится в текущий index CID, что позволяет публиковать
+обновления `index.json` без смены URL.
+
+### Server config
+
+```toml
+[ipfs]
+pin       = true
+ipns_key  = "appspec-corp"          # имя в `ipfs key list`
+ipns_name = "k51qzi5uqu5d..."       # кеш, обновляется при publish
+```
+
+- `ipns_key` — имя ключа в локальном `ipfs` keystore. Создать ключ:
+  ```sh
+  ipfs key gen appspec-corp
+  ```
+- `ipns_name` — производное от pubkey ключа. Кешируется в config для
+  отображения; источник истины — DHT.
+
+IPNS-ключ и signing-ключ по умолчанию **независимы**:
+
+- IPNS = «я контролирую это имя сейчас» (mutable);
+- Signing = «я выпустил этот index» (immutable).
+
+Опционально можно связать их: `ipfs key import appspec-corp signing.key`.
+
+### Публикация
+
+```sh
+appspec repo publish --ipns                   # publish + ipfs name publish
+appspec repo publish --no-ipns                # publish без IPNS
+appspec repo publish                          # IPNS, если ipns_key задан
+appspec repo publish-index --ipns             # алиас, работает так же
+```
+
+`--ipns` без `[ipfs].ipns_key` — ошибка с подсказкой про `ipfs key gen`.
+
+Вывод:
+
+```
+bafkrei...                          (index CID, stdout)
+published: k51... (index bafkrei...) (IPNS name, stderr)
+```
+
+### Резолв
+
+```sh
+appspec repo resolve k51qzi5uqu5d...      # → index CID (только чтение)
+appspec repo resolve k51... --timeout-secs 60
+```
+
+### Использование в pull
+
+Через `--from`:
+
+```sh
+appspec repo pull pkg:1.0.0-1 --from ipns://k51... --trusted-key pub.txt
+```
+
+Через профиль (fallback chain `ipns → url`):
+
+```toml
+[[repos]]
+name   = "corp"
+source = { ipns = "k51qzi5uqu5d...", url = "http://repo.corp:8080" }
+trusted_keys = ["file:~/.config/appspec/trusted-keys.toml"]
+```
+
+```sh
+appspec repo pull pkg:1.0.0-1 --profile corp
+```
+
+При недоступности IPNS (timeout, daemon down) — падение в HTTP.
+При недоступности обоих — агрегированная ошибка с двумя причинами.
+
+### Latency
+
+- `ipfs name publish` на локальном узле — секунды;
+- `ipfs name resolve` с чужой машины — 1–3 минуты на первом резолве
+  (DHT walk), потом кеш;
+- `resolve --timeout-secs 30` по умолчанию; `pull` идёт с hard-timeout
+  30 s и падает в fallback.
+
+### Fail-closed
+
+Подпись index проверяется независимо от транспорта. `trusted_keys`
+в профиле работает и для `ipns://`, и для `http://`.
+
+### Миграция: ipfs_cid в meta.json
+
+С 0.4.4 `ipfs_cid` пишется в `meta.json` **всегда** (не только с
+`--pin-ipfs`). Для legacy-пакетов:
+
+```sh
+appspec repo reindex --backfill-cid
+```
+
+Заполняет `ipfs_cid` из `sif_sha256` для старых записей.
+
+### Ограничение CIDv1/raw
+
+`cid_v1_from_sha256` даёт CIDv1/raw/sha2-256. Это совпадает с `ipfs add`
+для файлов ≤ 256 KB (один блок). Для больших SIF `ipfs add` возвращает
+dag-pb root, чей CID не выводится из sha256. `--pin-ipfs` на таком
+файле упадёт с «CID mismatch» — защита от молчаливой поломки
+`pull --via ipfs`.
+

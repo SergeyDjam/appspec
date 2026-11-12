@@ -113,9 +113,11 @@ fn is_http_url(s: &str) -> bool {
 }
 
 fn is_url_like(s: &str) -> bool {
-    s.starts_with("http://") || s.starts_with("https://") || s.starts_with("ipfs://")
+    s.starts_with("http://")
+        || s.starts_with("https://")
+        || s.starts_with("ipfs://")
+        || s.starts_with("ipns://")
 }
-
 // ===========================================================================
 // origin resolution (search / ls / show / verify)
 // ===========================================================================
@@ -166,11 +168,14 @@ fn expand_origin(s: &str) -> String {
 }
 
 fn profile_origin(p: &super::RepoProfile) -> Result<String> {
+    if let Some(url) = &p.source.url {
+        return Ok(url.clone());
+    }
     if let Some(path) = &p.source.path {
         return Ok(path.display().to_string());
     }
-    if let Some(url) = &p.source.url {
-        return Ok(url.clone());
+    if let Some(ipns) = &p.source.ipns {
+        return Ok(format!("ipns://{}", ipns));
     }
     if let Some(ipfs) = &p.source.ipfs {
         return Ok(format!("ipfs://{}", ipfs));
@@ -178,6 +183,25 @@ fn profile_origin(p: &super::RepoProfile) -> Result<String> {
     bail!("profile `{}`: no source", p.name)
 }
 
+fn profile_sources(p: &super::RepoProfile) -> Result<Vec<String>> {
+    let mut v = Vec::new();
+    if let Some(ipns) = &p.source.ipns {
+        v.push(format!("ipns://{}", ipns));
+    }
+    if let Some(url) = &p.source.url {
+        v.push(url.clone());
+    }
+    if let Some(path) = &p.source.path {
+        v.push(path.display().to_string());
+    }
+    if v.is_empty() {
+        bail!(
+            "profile `{}`: no source (expected path | url | ipns)",
+            p.name
+        );
+    }
+    Ok(v)
+}
 fn read_index_from(origin: &str) -> Result<meta::IndexV1> {
     if is_http_url(origin) {
         eprintln!("\x1b[2m[appspec] repo: {}\x1b[0m", origin);
@@ -197,10 +221,9 @@ fn read_index_from(origin: &str) -> Result<meta::IndexV1> {
         }
         return Ok(index);
     }
-    if origin.starts_with("ipfs://") {
+    if origin.starts_with("ipfs://") || origin.starts_with("ipns://") {
         bail!(
-            "ipfs:// origins are not supported in v1 for read commands; \
-               use `repo pull --from ipfs://…`"
+            "ipfs:// and ipns:// origins are not supported in v1 for read commands;              use `repo pull --profile NAME` or `--from URL|PATH`"
         );
     }
     let root = layout::RepoRoot::open(Path::new(origin))?;
@@ -464,13 +487,21 @@ pub fn add(a: AddArgs) -> Result<i32> {
 
 #[derive(Debug, Args)]
 pub struct ReindexArgs {
+    /// Backfill `ipfs_cid` for packages added before 0.4.4.
+    #[arg(long)]
+    pub backfill_cid: bool,
     #[arg(long)]
     pub root: Option<PathBuf>,
 }
-
 pub fn reindex(a: ReindexArgs) -> Result<i32> {
     let root = require_local_root(a.root, None, "reindex")?;
     let _lock = util::FileLock::acquire(&root.lock_path())?;
+    if a.backfill_cid {
+        let n = backfill_ipfs_cid(&root)?;
+        if n > 0 {
+            eprintln!("backfilled ipfs_cid for {} package(s)", n);
+        }
+    }
     let idx = index_build::rebuild_all(&root)?;
     println!(
         "reindexed: {} packages, updated={}",
@@ -480,6 +511,40 @@ pub fn reindex(a: ReindexArgs) -> Result<i32> {
     Ok(0)
 }
 
+fn backfill_ipfs_cid(root: &layout::RepoRoot) -> Result<usize> {
+    let mut count = 0usize;
+    let pkg_root = root.packages_dir();
+    if !pkg_root.exists() {
+        return Ok(0);
+    }
+    for name_entry in std::fs::read_dir(&pkg_root)? {
+        let name_entry = name_entry?;
+        if !name_entry.file_type()?.is_dir() {
+            continue;
+        }
+        for ver_entry in std::fs::read_dir(name_entry.path())? {
+            let ver_entry = ver_entry?;
+            if !ver_entry.file_type()?.is_dir() {
+                continue;
+            }
+            let meta_path = ver_entry.path().join("meta.json");
+            if !meta_path.is_file() {
+                continue;
+            }
+            let text = std::fs::read_to_string(&meta_path)?;
+            let mut meta: meta::MetaV1 = serde_json::from_str(&text)?;
+            if meta.ipfs_cid.is_some() {
+                continue;
+            }
+            let cid = util::cid_v1_from_sha256(&meta.sif_sha256)
+                .with_context(|| format!("computing CID for {}", meta_path.display()))?;
+            meta.ipfs_cid = Some(cid);
+            util::atomic_write(&meta_path, &serde_json::to_vec_pretty(&meta)?)?;
+            count += 1;
+        }
+    }
+    Ok(count)
+}
 #[derive(Debug, Args)]
 pub struct CheckArgs {
     #[arg(long)]
@@ -1006,6 +1071,8 @@ fn resolve_push_token(a: &PushArgs, profile: Option<&str>) -> Result<String> {
 #[derive(Debug, Args)]
 pub struct PullArgs {
     pub package_version: String,
+    /// Source: PATH | http://... | ipns://NAME | ipfs://CID | oci://...
+    /// If set -- fallback chain is not used (explicit choice).
     #[arg(long)]
     pub from: Option<String>,
     #[arg(long)]
@@ -1032,19 +1099,19 @@ pub fn pull(a: PullArgs) -> Result<i32> {
     let sink = open_root(a.root.clone(), a.server_config.clone())?;
     let _lock = util::FileLock::acquire(&sink.lock_path())?;
 
-    // Source: --from, --profile, $APPSPEC_REPO, default profile.
-    let from = resolve_pull_source(&a)?;
-
-    if from.is_none() {
-        bail!("no source: pass --from PATH|URL, --profile NAME, or set $APPSPEC_REPO");
+    let sources = resolve_pull_sources(&a)?;
+    if sources.is_empty() {
+        bail!(
+            "no source: pass --from PATH|URL|ipns://, --profile NAME,              or set $APPSPEC_REPO"
+        );
     }
-    if let Some(f) = &from {
+    if sources.len() == 1 {
+        let f = &sources[0];
         if f.starts_with('/') || f.starts_with('~') || f.starts_with('.') {
             let src = config::expand_user_path(Path::new(f));
             if layout::norm_path(&src) == layout::norm_path(&sink.path) {
                 eprintln!(
-                    "warning: source and sink are the same directory; \
-                     pull will be a no-op"
+                    "warning: source and sink are the same directory;                      pull will be a no-op"
                 );
             }
         }
@@ -1054,7 +1121,7 @@ pub fn pull(a: PullArgs) -> Result<i32> {
         &sink,
         &a.package_version,
         super::pull::PullOpts {
-            from,
+            sources,
             via: a.via,
             spec_only: a.spec_only,
             sif_out: a.sif_out,
@@ -1064,10 +1131,9 @@ pub fn pull(a: PullArgs) -> Result<i32> {
     )?;
     Ok(0)
 }
-
-fn resolve_pull_source(a: &PullArgs) -> Result<Option<String>> {
+fn resolve_pull_sources(a: &PullArgs) -> Result<Vec<String>> {
     if let Some(f) = &a.from {
-        return Ok(Some(f.clone()));
+        return Ok(vec![f.clone()]);
     }
     if let Some(pname) = &a.profile {
         let (_, cc) = config::find_client_config(None)
@@ -1075,32 +1141,29 @@ fn resolve_pull_source(a: &PullArgs) -> Result<Option<String>> {
         let p = cc
             .profile(pname)
             .ok_or_else(|| anyhow!("unknown profile `{}`", pname))?;
-        return Ok(Some(profile_origin(p)?));
+        return profile_sources(p);
     }
     if let Ok(v) = std::env::var("APPSPEC_REPO") {
         if !v.is_empty() {
             if is_url_like(&v) {
-                return Ok(Some(v));
+                return Ok(vec![v]);
             }
             if let Ok((_, cc)) = config::find_client_config(None) {
                 if let Some(p) = cc.profile(&v) {
-                    return Ok(Some(profile_origin(p)?));
+                    return profile_sources(p);
                 }
             }
-            // Не URL и не профиль — значит, вероятно, тот же локальный путь,
-            // что и sink. Пропускаем — пусть pull скажет "no source".
         }
     }
     if let Ok((_, cc)) = config::find_client_config(None) {
         if let Some(def) = &cc.default {
             if let Some(p) = cc.profile(def) {
-                return Ok(Some(profile_origin(p)?));
+                return profile_sources(p);
             }
         }
     }
-    Ok(None)
+    Ok(Vec::new())
 }
-
 // ===========================================================================
 // sign / verify
 // ===========================================================================
@@ -1241,11 +1304,27 @@ pub fn verify(a: VerifyArgs) -> Result<i32> {
 pub struct PublishIndexArgs {
     #[arg(long)]
     pub pin: bool,
+    /// Опубликовать по IPNS (`ipfs name publish`). Требует `[ipfs].ipns_key`
+    /// в server config. По умолчанию включается, если `ipns_key` задан.
+    #[arg(long, conflicts_with = "no_ipns")]
+    pub ipns: bool,
+    /// Не публиковать по IPNS, даже если `[ipfs].ipns_key` задан.
+    #[arg(long, conflicts_with = "ipns")]
+    pub no_ipns: bool,
     #[arg(long)]
     pub root: Option<PathBuf>,
     /// Путь к `repo-server.toml`. Алиас `--server-config` — deprecated.
     #[arg(short = 'c', long = "config", alias = "server-config")]
     pub server_config: Option<PathBuf>,
+}
+
+#[derive(Debug, Args)]
+pub struct ResolveArgs {
+    /// IPNS name (`k51…`, `12D3Koo…` или другой libp2p-key CID).
+    pub ipns_name: String,
+    /// Таймаут резолва (сек). Использует `timeout` из PATH, если доступен.
+    #[arg(long, default_value_t = 30)]
+    pub timeout_secs: u64,
 }
 
 pub fn publish_index(a: PublishIndexArgs) -> Result<i32> {
@@ -1256,8 +1335,67 @@ pub fn publish_index(a: PublishIndexArgs) -> Result<i32> {
     }
     let cid = super::ipfs::add_file(&index_path, a.pin)?;
     super::ipfs::validate_cid(&cid)?;
+
+    // Локальный кеш CID — для отладки и скриптов.
     let cid_path = root.path.join("ipfs-index.cid");
     std::fs::write(&cid_path, format!("{}\n", cid))?;
+
+    // IPNS: явно (--ipns), явно выключено (--no-ipns), либо default
+    // из конфига (ipns_key.is_some()).
+    let want_ipns = if a.ipns {
+        true
+    } else if a.no_ipns {
+        false
+    } else {
+        root.config.ipfs.ipns_key.is_some()
+    };
+
+    if want_ipns {
+        let key = root.config.ipfs.ipns_key.as_ref().ok_or_else(|| {
+            anyhow!(
+                "`--ipns` requires `[ipfs].ipns_key` in server config;                  run `ipfs key gen <name>` and add `[ipfs].ipns_key = \"<name>\"`"
+            )
+        })?;
+        let ipns_name = super::ipfs::name_publish(key, &cid)
+            .with_context(|| format!("ipfs name publish (key={})", key))?;
+
+        // Обновить [ipfs].ipns_name в server config — это кеш для
+        // отображения; источник истины — DHT. Если путь к конфигу
+        // неизвестен (data-only репо) — предупреждаем, но не падаем.
+        match &root.server_config_path {
+            Some(sc_path) => match config::ServerConfig::load(sc_path) {
+                Ok(mut sc) => {
+                    if sc.ipfs.ipns_name.as_deref() != Some(&ipns_name) {
+                        sc.ipfs.ipns_name = Some(ipns_name.clone());
+                        if let Err(e) = sc.save(sc_path) {
+                            eprintln!(
+                                "warning: cannot update [ipfs].ipns_name in {}: {e:#}",
+                                sc_path.display()
+                            );
+                        }
+                    }
+                }
+                Err(e) => {
+                    eprintln!("warning: cannot reload {}: {e:#}", sc_path.display());
+                }
+            },
+            None => {
+                eprintln!(
+                    "warning: no server config path;                      [ipfs].ipns_name is not persisted (ipns={}, index={})",
+                    ipns_name, cid
+                );
+            }
+        }
+
+        eprintln!("published: {} (index {})", ipns_name, cid);
+    }
+
+    println!("{}", cid);
+    Ok(0)
+}
+
+pub fn resolve(a: ResolveArgs) -> Result<i32> {
+    let cid = super::ipfs::name_resolve(&a.ipns_name, a.timeout_secs)?;
     println!("{}", cid);
     Ok(0)
 }
@@ -1639,26 +1777,22 @@ pub enum ClientCommand {
 pub struct ClientInitArgs {
     #[arg(long)]
     pub profile: String,
-    #[arg(long, conflicts_with = "source_url")]
+    #[arg(long, conflicts_with_all = ["source_url", "source_ipns"])]
     pub source_path: Option<PathBuf>,
     #[arg(long, conflicts_with = "source_path")]
     pub source_url: Option<String>,
-    /// Имя env-переменной, из которой брать токен (сохраняется как
-    /// `token = "env:NAME"`).
+    /// IPNS name. Combines with `--source-url` for fallback chain: ipns -> url.
+    #[arg(long, conflicts_with = "source_path")]
+    pub source_ipns: Option<String>,
     #[arg(long)]
     pub token_env: Option<String>,
-    /// Путь к файлу с токеном (сохраняется как `token = "file:PATH"`).
     #[arg(long)]
     pub token_file: Option<PathBuf>,
-    /// Сделать этот профиль дефолтным.
     #[arg(long)]
     pub default: bool,
-    /// Явный путь к client config. Если не задан — discovery или
-    /// создание в `$XDG_CONFIG_HOME/appspec/repos.toml`.
     #[arg(long)]
     pub client_config: Option<PathBuf>,
 }
-
 #[derive(Debug, Args)]
 pub struct ClientLsArgs {
     #[arg(long)]
@@ -1674,27 +1808,34 @@ pub fn client(cmd: ClientCommand) -> Result<i32> {
     }
 }
 
+fn build_source_table(a: &ClientInitArgs) -> Result<config::RepoSourceTable> {
+    let path = a.source_path.as_ref();
+    let url = a.source_url.as_ref();
+    let ipns = a.source_ipns.as_ref();
+    if path.is_some() && (url.is_some() || ipns.is_some()) {
+        bail!("--source-path cannot be combined with --source-url/--source-ipns");
+    }
+    if path.is_none() && url.is_none() && ipns.is_none() {
+        bail!("pass at least one of --source-path, --source-url, --source-ipns");
+    }
+    let mut table = config::RepoSourceTable::default();
+    if let Some(p) = path {
+        table.path = Some(config::expand_user_path(p));
+    }
+    if let Some(u) = url {
+        if !u.starts_with("http://") && !u.starts_with("https://") {
+            bail!("--source-url must start with http:// or https://, got `{u}`");
+        }
+        table.url = Some(u.clone());
+    }
+    if let Some(i) = ipns {
+        table.ipns = Some(i.clone());
+    }
+    table.validate("--source-*")?;
+    Ok(table)
+}
 fn client_init(a: ClientInitArgs) -> Result<i32> {
-    let source = match (a.source_path, a.source_url) {
-        (Some(p), None) => config::RepoSourceTable {
-            path: Some(config::expand_user_path(&p)),
-            ..Default::default()
-        },
-        (None, Some(u)) => {
-            if !u.starts_with("http://") && !u.starts_with("https://") {
-                bail!("--source-url must start with http:// or https://, got `{u}`");
-            }
-            config::RepoSourceTable {
-                url: Some(u),
-                ..Default::default()
-            }
-        }
-        (None, None) => {
-            bail!("exactly one of --source-path or --source-url is required")
-        }
-        (Some(_), Some(_)) => unreachable!(),
-    };
-
+    let source = build_source_table(&a)?;
     let token = match (a.token_env, a.token_file) {
         (Some(v), None) => Some(format!("env:{}", v)),
         (None, Some(f)) => Some(format!("file:{}", config::expand_user_path(&f).display())),

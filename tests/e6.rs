@@ -191,7 +191,7 @@ fn make_index_with_ipfs_cid(
 
 fn default_opts() -> pull::PullOpts {
     pull::PullOpts {
-        from: None,
+        sources: Vec::new(),
         via: None,
         spec_only: false,
         sif_out: None,
@@ -337,7 +337,7 @@ fn pull_from_ipfs_index_with_invalid_json_fails_parsing() {
 
     let root_obj = layout::RepoRoot::open(&root).unwrap();
     let mut opts = default_opts();
-    opts.from = Some("ipfs://QmIndexCID".into());
+    opts.sources = vec!["ipfs://QmIndexCID".into()];
     let err = pull::pull(&root_obj, "demo:0.0.1-1", opts).unwrap_err();
     let msg = format!("{err:#}");
     assert!(msg.contains("parsing"), "expected parse error, got: {msg}");
@@ -352,7 +352,7 @@ fn pull_from_and_via_mutually_exclusive() {
 
     let root_obj = layout::RepoRoot::open(&root).unwrap();
     let mut opts = default_opts();
-    opts.from = Some("ipfs://QmX".into());
+    opts.sources = vec!["ipfs://QmX".into()];
     opts.via = Some("ipfs".into());
     let err = pull::pull(&root_obj, "demo:0.0.1-1", opts).unwrap_err();
     assert!(

@@ -116,3 +116,116 @@ pub fn validate_cid(cid: &str) -> Result<()> {
     }
     Ok(())
 }
+
+// ===========================================================================
+// IPNS: publish / resolve
+// ===========================================================================
+//
+// IPNS-ключ живёт в keystore локального `ipfs` daemon. Создаётся через
+// `ipfs key gen <name>` или `ipfs key import <name> <key-file>`. Клиент
+// передаёт имя ключа (`[ipfs].ipns_key` в server config), а не сам ключ.
+//
+// `ipfs name publish --key=<name> /ipfs/<cid>` публикует маппинг
+//   <ipns-name> -> /ipfs/<cid>
+// в DHT. Латентность — секунды на локальном узле, 1–3 минуты на первом
+// резолве с другой машины (DHT walk), потом кеш.
+
+/// `ipfs name publish --key=<key> /ipfs/<cid>` → IPNS name (`k51…` или
+/// `12D3Koo…` для RSA-ключей).
+///
+/// Парсит stdout `Published to <name>: /ipfs/<cid>`.
+pub fn name_publish(key: &str, cid: &str) -> Result<String> {
+    let bin = ipfs_bin();
+    if !which_ipfs() {
+        bail!(
+            "`{}` not found in PATH; required for `repo publish --ipns` \
+             (set APPSPEC_IPFS to override)",
+            bin
+        );
+    }
+    let path = format!("/ipfs/{}", cid);
+    let out = Command::new(&bin)
+        .args(["name", "publish", "--key", key, &path])
+        .output()
+        .with_context(|| format!("spawning {} name publish", bin))?;
+    if !out.status.success() {
+        bail!(
+            "{} name publish failed for key `{}`: {}",
+            bin,
+            key,
+            String::from_utf8_lossy(&out.stderr).trim()
+        );
+    }
+    let stdout = String::from_utf8(out.stdout).context("ipfs name publish stdout is not UTF-8")?;
+    let tokens: Vec<&str> = stdout.split_whitespace().collect();
+    let name = tokens
+        .iter()
+        .position(|t| *t == "Published")
+        .and_then(|i| tokens.get(i + 2))
+        .map(|s| s.trim_end_matches(':').to_string())
+        .ok_or_else(|| {
+            anyhow!(
+                "unexpected `ipfs name publish` output (want `Published to <name>: …`): {}",
+                stdout.trim()
+            )
+        })?;
+    if name.is_empty() {
+        bail!("`ipfs name publish` returned empty name");
+    }
+    Ok(name)
+}
+
+/// `ipfs name resolve <name>` → index CID.
+///
+/// stdout: `/ipfs/<cid>`. Если `timeout` есть в PATH — обёртка с
+/// таймаутом (`timeout <secs> ipfs name resolve <name>`), иначе
+/// запускаем без таймаута, полагаясь на daemon.
+pub fn name_resolve(name: &str, timeout_secs: u64) -> Result<String> {
+    let bin = ipfs_bin();
+    if !which_ipfs() {
+        bail!("`{}` not found in PATH; required for IPNS sources", bin);
+    }
+    let out = if which_tool("timeout") {
+        Command::new("timeout")
+            .arg(timeout_secs.to_string())
+            .arg(&bin)
+            .args(["name", "resolve", name])
+            .output()
+            .with_context(|| format!("spawning timeout {} name resolve", bin))?
+    } else {
+        Command::new(&bin)
+            .args(["name", "resolve", name])
+            .output()
+            .with_context(|| format!("spawning {} name resolve", bin))?
+    };
+    if !out.status.success() {
+        let err = String::from_utf8_lossy(&out.stderr).trim().to_string();
+        let hint = if out.status.code() == Some(124) {
+            format!(" (timeout after {}s)", timeout_secs)
+        } else {
+            String::new()
+        };
+        bail!("ipfs name resolve `{}` failed{}: {}", name, hint, err);
+    }
+    let stdout = String::from_utf8(out.stdout).context("ipfs name resolve stdout is not UTF-8")?;
+    let cid = stdout
+        .trim()
+        .strip_prefix("/ipfs/")
+        .ok_or_else(|| {
+            anyhow!(
+                "unexpected `ipfs name resolve` output (want `/ipfs/<cid>`): {}",
+                stdout.trim()
+            )
+        })?
+        .to_string();
+    validate_cid(&cid)?;
+    Ok(cid)
+}
+
+fn which_tool(name: &str) -> bool {
+    if name.contains('/') {
+        return Path::new(name).is_file();
+    }
+    std::env::var_os("PATH")
+        .is_some_and(|p| std::env::split_paths(&p).any(|d| d.join(name).is_file()))
+}

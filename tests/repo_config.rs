@@ -436,3 +436,73 @@ fn client_init_rejects_two_sources() {
         .assert()
         .failure();
 }
+
+#[test]
+fn client_init_with_ipns() {
+    let tmp = TempDir::new().unwrap();
+    let xdg = isolated(&tmp);
+    appspec()
+        .env("XDG_CONFIG_HOME", &xdg)
+        .args([
+            "repo",
+            "client",
+            "init",
+            "--profile",
+            "ipns-only",
+            "--source-ipns",
+            "k51qzi5uqu5dtest",
+            "--default",
+        ])
+        .assert()
+        .success();
+    let text = fs::read_to_string(xdg.join("appspec/repos.toml")).unwrap();
+    assert!(
+        text.contains("ipns = \"k51qzi5uqu5dtest\""),
+        "ipns not saved:\n{text}"
+    );
+}
+
+#[test]
+fn client_init_url_and_ipns_together() {
+    let tmp = TempDir::new().unwrap();
+    let xdg = isolated(&tmp);
+    appspec()
+        .env("XDG_CONFIG_HOME", &xdg)
+        .args([
+            "repo",
+            "client",
+            "init",
+            "--profile",
+            "both",
+            "--source-ipns",
+            "k51qzi5uqu5dtest",
+            "--source-url",
+            "http://repo.example:8080",
+        ])
+        .assert()
+        .success();
+    let text = fs::read_to_string(xdg.join("appspec/repos.toml")).unwrap();
+    assert!(text.contains("ipns ="));
+    assert!(text.contains("url = \"http://repo.example:8080\""));
+}
+
+#[test]
+fn client_init_rejects_path_and_ipns() {
+    let tmp = TempDir::new().unwrap();
+    let xdg = isolated(&tmp);
+    appspec()
+        .env("XDG_CONFIG_HOME", &xdg)
+        .args([
+            "repo",
+            "client",
+            "init",
+            "--profile",
+            "x",
+            "--source-path",
+            "/a",
+            "--source-ipns",
+            "k51qzi5uqu5dkt",
+        ])
+        .assert()
+        .failure();
+}

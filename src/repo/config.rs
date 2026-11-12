@@ -118,6 +118,18 @@ impl ServerConfig {
         if self.repo.name.trim().is_empty() {
             bail!("server config: [repo].name is required");
         }
+        if let Some(key) = &self.ipfs.ipns_key {
+            if key.trim().is_empty() || key.chars().any(|c| c.is_whitespace()) {
+                bail!("server config: [ipfs].ipns_key must be non-empty and contain no whitespace");
+            }
+        }
+        if let Some(name) = &self.ipfs.ipns_name {
+            if name.trim().is_empty() || name.chars().any(|c| c.is_whitespace()) {
+                bail!(
+                    "server config: [ipfs].ipns_name must be non-empty and contain no whitespace"
+                );
+            }
+        }
         Ok(())
     }
 
@@ -197,29 +209,56 @@ pub struct RepoSourceTable {
     pub path: Option<PathBuf>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub url: Option<String>,
+    /// IPNS name (`k51...` для ed25519 или `12D3Koo...` для RSA).
+    /// Может комбинироваться с `url` как fallback chain: `ipns -> url`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ipns: Option<String>,
+    /// Legacy-поле из v1 (сырой index-CID). При чтении выдаёт warning.
+    /// Новые конфиги должны использовать `ipns`. Удаляется в v2.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ipfs: Option<String>,
 }
 
 impl RepoSourceTable {
+    #[allow(dead_code)]
     pub fn kind_count(&self) -> usize {
-        [self.path.is_some(), self.url.is_some(), self.ipfs.is_some()]
-            .into_iter()
-            .filter(|b| *b)
-            .count()
+        [
+            self.path.is_some(),
+            self.url.is_some(),
+            self.ipns.is_some(),
+            self.ipfs.is_some(),
+        ]
+        .into_iter()
+        .filter(|b| *b)
+        .count()
     }
 
     pub fn validate(&self, ctx: &str) -> Result<()> {
-        let n = self.kind_count();
-        if n != 1 {
+        if self.path.is_some() && (self.url.is_some() || self.ipns.is_some() || self.ipfs.is_some())
+        {
             bail!(
-                "{ctx}: source must contain exactly one of \
-                 `path` | `url` | `ipfs` (found {n})"
+                "{ctx}: source.path cannot be combined with url/ipns/ipfs                  (path is a local repository)"
+            );
+        }
+        if self.path.is_none() && self.url.is_none() && self.ipns.is_none() && self.ipfs.is_none() {
+            bail!(
+                "{ctx}: source must contain `path`, or at least one of                  `url` | `ipns` (found none)"
             );
         }
         if let Some(u) = &self.url {
             if !u.starts_with("http://") && !u.starts_with("https://") {
                 bail!("{ctx}: source.url must start with http:// or https://, got `{u}`");
+            }
+        }
+        if let Some(i) = &self.ipns {
+            validate_ipns_name(i).with_context(|| format!("{ctx}: source.ipns"))?;
+        }
+        if let Some(i) = &self.ipfs {
+            crate::log(format!(
+                "warning: {ctx}: source.ipfs is deprecated; use source.ipns"
+            ));
+            if i.trim().is_empty() {
+                bail!("{ctx}: source.ipfs must not be empty (legacy field)");
             }
         }
         Ok(())
@@ -229,16 +268,35 @@ impl RepoSourceTable {
         if let Some(p) = &self.path {
             return format!("path:{}", p.display());
         }
+        if let Some(i) = &self.ipns {
+            return format!("ipns:{}", i);
+        }
         if let Some(u) = &self.url {
             return format!("url:{}", u);
         }
         if let Some(i) = &self.ipfs {
-            return format!("ipfs:{}", i);
+            return format!("ipfs:{} (legacy)", i);
         }
         "?".into()
     }
 }
 
+fn validate_ipns_name(s: &str) -> Result<()> {
+    let t = s.trim();
+    if t.is_empty() {
+        bail!("empty IPNS name");
+    }
+    if t.chars().any(|c| c.is_whitespace() || c.is_control()) {
+        bail!("IPNS name contains whitespace/control chars: `{}`", s);
+    }
+    if !(t.starts_with("k51") || t.starts_with("12D3Koo")) {
+        bail!(
+            "IPNS name must start with `k51` (ed25519) or `12D3Koo` (RSA), got `{}`",
+            s
+        );
+    }
+    Ok(())
+}
 impl ClientConfig {
     pub fn load(path: &Path) -> Result<Self> {
         let text =
@@ -712,14 +770,48 @@ source = { path = "/b" }
     }
 
     #[test]
-    fn client_source_must_be_exactly_one() {
+    fn client_source_path_is_exclusive() {
         let text = r#"schema = 1
 [[repos]]
 name = "x"
 source = { path = "/a", url = "http://h" }
 "#;
         let cfg: ClientConfig = toml::from_str(text).unwrap();
-        assert!(format!("{:#}", cfg.validate().unwrap_err()).contains("exactly one"));
+        assert!(format!("{:#}", cfg.validate().unwrap_err())
+            .contains("cannot be combined with url/ipns"));
+    }
+
+    #[test]
+    fn client_source_url_and_ipns_allowed() {
+        let text = r#"schema = 1
+[[repos]]
+name = "x"
+source = { url = "http://h", ipns = "k51qzi5uqu5dtest" }
+"#;
+        let cfg: ClientConfig = toml::from_str(text).unwrap();
+        cfg.validate().unwrap();
+    }
+
+    #[test]
+    fn client_source_empty_rejected() {
+        let text = r#"schema = 1
+[[repos]]
+name = "x"
+source = {}
+"#;
+        let cfg: ClientConfig = toml::from_str(text).unwrap();
+        assert!(format!("{:#}", cfg.validate().unwrap_err()).contains("at least one"));
+    }
+
+    #[test]
+    fn client_source_bad_ipns_rejected() {
+        let text = r#"schema = 1
+[[repos]]
+name = "x"
+source = { ipns = "not-an-ipns-name" }
+"#;
+        let cfg: ClientConfig = toml::from_str(text).unwrap();
+        assert!(format!("{:#}", cfg.validate().unwrap_err()).contains("must start with `k51`"));
     }
 
     #[test]

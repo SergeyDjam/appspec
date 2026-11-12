@@ -273,7 +273,7 @@ fn pull_from_oci_writes_blob() {
 
     let root_obj = layout::RepoRoot::open(&root).unwrap();
     let opts = pull::PullOpts {
-        from: Some("oci://ghcr.io/user/appspec-index:latest".into()),
+        sources: vec!["oci://ghcr.io/user/appspec-index:latest".into()],
         via: None,
         spec_only: false,
         sif_out: None,
@@ -307,7 +307,7 @@ fn pull_from_oci_sha_mismatch_fails() {
 
     let root_obj = layout::RepoRoot::open(&root).unwrap();
     let opts = pull::PullOpts {
-        from: Some("oci://ghcr.io/user/appspec-index:latest".into()),
+        sources: vec!["oci://ghcr.io/user/appspec-index:latest".into()],
         via: None,
         spec_only: false,
         sif_out: None,
@@ -334,7 +334,7 @@ fn pull_from_oci_missing_package_errors() {
 
     let root_obj = layout::RepoRoot::open(&root).unwrap();
     let opts = pull::PullOpts {
-        from: Some("oci://ghcr.io/user/appspec-index:latest".into()),
+        sources: vec!["oci://ghcr.io/user/appspec-index:latest".into()],
         via: None,
         spec_only: false,
         sif_out: None,
@@ -368,7 +368,7 @@ fn pull_from_oci_sif_out_copies_without_meta() {
     let out = mock._tmp.path().join("out.sif");
     let root_obj = layout::RepoRoot::open(&root).unwrap();
     let opts = pull::PullOpts {
-        from: Some("oci://ghcr.io/user/appspec-index:latest".into()),
+        sources: vec!["oci://ghcr.io/user/appspec-index:latest".into()],
         via: None,
         spec_only: false,
         sif_out: Some(out.clone()),
@@ -390,7 +390,7 @@ fn pull_from_oci_oras_missing_errors() {
     let (_tmp, root) = make_min_repo();
     let root_obj = layout::RepoRoot::open(&root).unwrap();
     let opts = pull::PullOpts {
-        from: Some("oci://ghcr.io/user/appspec-index:latest".into()),
+        sources: vec!["oci://ghcr.io/user/appspec-index:latest".into()],
         via: None,
         spec_only: false,
         sif_out: None,
