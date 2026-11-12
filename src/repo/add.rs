@@ -7,7 +7,8 @@ use super::inspect;
 use super::layout::RepoRoot;
 use super::meta::MetaV1;
 use super::util::{
-    atomic_write, blob_path, create_exclusive, now_iso8601, sha256_file, sha256_hex,
+    atomic_write, blob_path, cid_v1_from_sha256, create_exclusive, now_iso8601, sha256_file,
+    sha256_hex,
 };
 
 pub struct AddParams<'a> {
@@ -143,15 +144,27 @@ pub fn add_one(root: &RepoRoot, p: AddParams) -> Result<AddOutcome> {
     atomic_write(&pkg_dir.join("spec.appspec"), &spec_bytes)?;
     atomic_write(&pkg_dir.join("sha256"), sif_sha.as_bytes())?;
 
-    // 8. IPFS (E6): только при явном --pin-ipfs.
-    let ipfs_cid = if p.pin_ipfs {
-        let cid = super::ipfs::add_file(&blob, true)
+    // 8. IPFS CID: вычисляется локально из sif_sha256 (I1).
+    //
+    //    --pin-ipfs теперь — чистый пиннинг, а не способ узнать CID.
+    //    Для файлов <= 256 KB `ipfs add` возвращает тот же CID, что мы
+    //    посчитали. Для больших — dag-pb root, проверка ниже упадёт с
+    //    внятной ошибкой (защита от молчаливой поломки pull --via ipfs).
+    let ipfs_cid = cid_v1_from_sha256(&sif_sha)
+        .with_context(|| format!("computing IPFS CID for {}", sif_sha))?;
+
+    if p.pin_ipfs {
+        let actual = super::ipfs::add_file(&blob, true)
             .with_context(|| format!("pinning blob {} to IPFS", blob.display()))?;
-        super::ipfs::validate_cid(&cid)?;
-        Some(cid)
-    } else {
-        None
-    };
+        if actual != ipfs_cid {
+            bail!(
+                "ipfs add returned {} but expected {} — CID mismatch for {};                  SIF likely >256KB and would be chunked into dag-pb.                  See apply-steps-1-3.sh header for the workaround.",
+                actual,
+                ipfs_cid,
+                blob.display()
+            );
+        }
+    }
 
     let mut raw_labels = BTreeMap::new();
     for (k, v) in &labels.raw {
@@ -195,7 +208,7 @@ pub fn add_one(root: &RepoRoot, p: AddParams) -> Result<AddOutcome> {
         requires: parse_json_array(labels.get("org.appspec.dependencies.requires")),
         provides: parse_json_array(labels.get("org.appspec.dependencies.provides")),
         conflicts: parse_json_array(labels.get("org.appspec.dependencies.conflicts")),
-        ipfs_cid: ipfs_cid.clone(),
+        ipfs_cid: Some(ipfs_cid.clone()),
         raw_labels,
     };
     atomic_write(&meta_path, &serde_json::to_vec_pretty(&meta)?)?;
@@ -208,7 +221,7 @@ pub fn add_one(root: &RepoRoot, p: AddParams) -> Result<AddOutcome> {
         arch,
         sif_sha256: sif_sha,
         already_present: false,
-        ipfs_cid,
+        ipfs_cid: Some(ipfs_cid),
     })
 }
 

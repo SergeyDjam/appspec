@@ -220,6 +220,11 @@ fn add_and_show_roundtrip() {
     assert_eq!(meta["requires"], serde_json::json!([]));
     assert_eq!(meta["provides"], serde_json::json!([]));
     assert_eq!(meta["conflicts"], serde_json::json!([]));
+    // I1/I2: ipfs_cid заполнен и согласован с sif_sha256.
+    let cid = meta["ipfs_cid"].as_str().expect("ipfs_cid must be set");
+    assert!(cid.starts_with("bafkrei"), "unexpected CID prefix: {cid}");
+    let derived = sha256_from_cid_v1(cid);
+    assert_eq!(derived, meta["sif_sha256"].as_str().unwrap());
 
     // spec.appspec байт-в-байт
     let spec_on_disk = fs::read(f.root.join("packages/demo/0.0.1-1/spec.appspec")).unwrap();
@@ -579,4 +584,29 @@ fn gc_keep_n_keeps_newest_version() {
 
     assert!(!blob1.is_file(), "older version's blob must be removed");
     assert!(blob2.is_file(), "newest version's blob must be kept");
+}
+
+/// Декодирует CIDv1/raw/sha2-256 в sha256-hex. Независимая реализация —
+/// тест не должен звать `util::sha256_from_cid` (иначе регресс в util
+/// замаскирует регресс в `add`).
+fn sha256_from_cid_v1(cid: &str) -> String {
+    let b32 = cid.strip_prefix('b').expect("CID must start with 'b'");
+    let mut bits: u32 = 0;
+    let mut nbits: u8 = 0;
+    let mut bytes = Vec::new();
+    for c in b32.chars() {
+        let v: u8 = match c {
+            'a'..='z' => c as u8 - b'a',
+            '2'..='7' => c as u8 - b'2' + 26,
+            _ => panic!("bad base32 char {c}"),
+        };
+        bits = (bits << 5) | v as u32;
+        nbits += 5;
+        if nbits >= 8 {
+            nbits -= 8;
+            bytes.push(((bits >> nbits) & 0xff) as u8);
+        }
+    }
+    assert_eq!(&bytes[..4], &[0x01, 0x55, 0x12, 0x20], "bad CID prefix");
+    bytes[4..].iter().map(|b| format!("{:02x}", b)).collect()
 }

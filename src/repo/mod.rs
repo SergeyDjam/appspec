@@ -55,8 +55,11 @@ pub enum RepoCommand {
     Pull(commands::PullArgs),
     /// Подписать index.json (ed25519)
     Sign(commands::SignArgs),
-    /// Опубликовать index.json в IPFS и напечатать CID
+    /// Опубликовать index.json в IPFS и (опционально) IPNS
+    #[command(alias = "publish")]
     PublishIndex(commands::PublishIndexArgs),
+    /// Резолв IPNS name в index CID (для отладки)
+    Resolve(commands::ResolveArgs),
     /// Экспортировать index.json и SIF'ы в OCI-совместимый registry
     ExportOci(commands::ExportOciArgs),
     /// Проверить подпись index.json
@@ -89,6 +92,7 @@ pub fn run(cmd: RepoCommand) -> Result<i32> {
         RepoCommand::Pull(a) => commands::pull(a),
         RepoCommand::Sign(a) => commands::sign(a),
         RepoCommand::PublishIndex(a) => commands::publish_index(a),
+        RepoCommand::Resolve(a) => commands::resolve(a),
         RepoCommand::ExportOci(a) => commands::export_oci(a),
         RepoCommand::Verify(a) => commands::verify(a),
         RepoCommand::Token(c) => commands::token(c),

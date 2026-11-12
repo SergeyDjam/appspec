@@ -548,3 +548,22 @@ Unit-тесты внутри `src/bundle/loader.rs`, `src/bundle/model.rs`,
 ## Лицензия
 
 GPL-2.0-or-later. See [LICENSE](LICENSE) for the full text.
+
+## IPNS (mutable-имя репозитория)
+
+С 0.4.4 репозиторий можно адресовать по IPNS. Index по-прежнему
+обычный IPFS-объект; IPNS даёт ему стабильное mutable-имя.
+
+```sh
+# Сервер: опубликовать index через IPNS (требует [ipfs].ipns_key)
+appspec repo publish --ipns
+
+# Клиент: резолв через IPNS, при медленном DHT — fallback на HTTP
+appspec repo pull pkg:1.0.0-1 --from ipns://k51...
+# Или через профиль (fallback chain: ipns -> url)
+appspec repo pull pkg:1.0.0-1 --profile corp
+```
+
+Конфигурация (`[ipfs].ipns_key`, `source.ipns`), latency и fail-closed
+семантика — см. [`docs/repo.md`](docs/repo.md) и
+[`docs/repo-config.md`](docs/repo-config.md).

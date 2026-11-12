@@ -210,7 +210,52 @@ fi
 # TESTS
 # ===========================================================================
 
-step "1/9  repo: init → add → check"
+# ===========================================================================
+# Mock ipfs (always, независимо от USE_MOCK — smoke не должен зависеть от DHT)
+# ===========================================================================
+MOCK_IPFS_DIR="$TMP/mock-ipfs"
+mkdir -p "$MOCK_IPFS_DIR"
+cat > "$MOCK_IPFS_DIR/ipfs" <<'MOCK_IPFS'
+#!/bin/sh
+set -eu
+log="${MOCK_IPFS_LOG:-/dev/null}"
+printf '%s\n' "$*" >> "$log"
+
+case "$1" in
+  add)
+    echo "${MOCK_IPFS_CID:-bafkreismokedefault}"
+    ;;
+  name)
+    case "$2" in
+      publish)
+        echo "Published to ${MOCK_IPNS_NAME:-k51smokedefault}: /ipfs/${MOCK_IPFS_CID:-bafkreismokedefault}"
+        ;;
+      resolve)
+        echo "/ipfs/${MOCK_IPFS_CID:-bafkreismokedefault}"
+        ;;
+      *)
+        echo "mock ipfs: unknown name subcommand: $2" >&2
+        exit 1
+        ;;
+    esac
+    ;;
+  pin)
+    exit 0
+    ;;
+  *)
+    echo "mock ipfs: unexpected: $*" >&2
+    exit 1
+    ;;
+esac
+MOCK_IPFS
+chmod +x "$MOCK_IPFS_DIR/ipfs"
+export APPSPEC_IPFS="$MOCK_IPFS_DIR/ipfs"
+export MOCK_IPFS_LOG="$TMP/mock-ipfs.log"
+export MOCK_IPFS_CID="bafkreismoke1234567890"
+export MOCK_IPNS_NAME="k51smoketestname123"
+ok "mock ipfs" "$MOCK_IPFS_DIR/ipfs"
+
+step "1/11  repo: init → add → check"
 REPO="$TMP/repo"
 "$APPSPEC" repo init "$REPO" --name "smoke/e2e" >/dev/null
 "$APPSPEC" repo add --root "$REPO" "$SIF" 2>&1 | tee "$TMP/add.log" | sed 's/^/    /'
@@ -225,7 +270,7 @@ KEY=$("$APPSPEC" repo ls "$PKG" --root "$REPO" | awk 'NR==1{print $1}')
 ok "package"  "$PKG:$KEY"
 ok "check"    "ok"
 
-step "2/9  spec roundtrip (sha256)"
+step "2/11  spec roundtrip (sha256)"
 "$APPSPEC" repo show "$PKG:$KEY" --spec --root "$REPO" > "$TMP/spec.out"
 EXP_SHA=$("$APPSPEC" repo show "$PKG:$KEY" --root "$REPO" | awk '/Spec sha256:/{print $3; exit}')
 ACT_SHA=$(sha256sum "$TMP/spec.out" | cut -d' ' -f1)
@@ -233,14 +278,14 @@ ACT_SHA=$(sha256sum "$TMP/spec.out" | cut -d' ' -f1)
 [ "$EXP_SHA" = "$ACT_SHA" ] || fail "spec roundtrip: $EXP_SHA != $ACT_SHA"
 ok "spec_sha256" "${EXP_SHA%${EXP_SHA#????????}}…"
 
-step "3/9  reindex идемпотентен"
+step "3/11  reindex идемпотентен"
 cp "$REPO/index.json" "$TMP/idx-before.json"
 "$APPSPEC" repo reindex --root "$REPO" >/dev/null
 diff -q "$TMP/idx-before.json" "$REPO/index.json" >/dev/null \
     || fail "reindex changed index.json без изменений"
 ok "idempotent" "byte-identical"
 
-step "4/9  sign → verify + tamper detection"
+step "4/11  sign → verify + tamper detection"
 KEYFILE="$TMP/signing.key"
 PUBKEY=$("$APPSPEC" repo sign --key "$KEYFILE" --root "$REPO" | awk '/pubkey:/{print $2}')
 [ -n "$PUBKEY" ] || fail "repo sign: no pubkey"
@@ -263,14 +308,22 @@ fi
 cp "$TMP/idx-signed.json" "$REPO/index.json"
 ok "tamper" "rejected"
 
-step "5/9  serve + push + pull --from (HTTP)"
+step "5/11  serve + push + pull --from (HTTP)"
 REPO2="$TMP/repo2"
-INIT_OUT=$("$APPSPEC" repo init "$REPO2" --name "smoke/e2e-target" --token ci)
-TOKEN=$(echo "$INIT_OUT" | awk '/token ci:/{print $3}')
-[ -n "$TOKEN" ] || fail "init: no token"
+# sc5_init: proper init sequence — init, server init, token gen, serve --config.
+# (repo init --token is deprecated and only works if server config exists.)
+SC5="$TMP/repo2-server.toml"
+"$APPSPEC" repo init "$REPO2" --name "smoke/e2e-target" >/dev/null \
+    || fail "repo init"
+"$APPSPEC" repo server init --root "$REPO2" --config "$SC5" >/dev/null \
+    || fail "server init --config $SC5"
+TOKEN_OUT=$("$APPSPEC" repo token gen ci --config "$SC5") \
+    || fail "token gen ci"
+TOKEN=$(printf '%s\n' "$TOKEN_OUT" | awk '/^token ci:/{print $3}')
+[ -n "$TOKEN" ] || fail "token gen: no token in output"
 
 PORT=18099
-"$APPSPEC" repo serve --root "$REPO2" --listen "127.0.0.1:$PORT" >"$TMP/serve.log" 2>&1 &
+"$APPSPEC" repo serve --root "$REPO2" --config "$SC5" --listen "127.0.0.1:$PORT" >"$TMP/serve.log" 2>&1 &
 SERVE_PID=$!
 sleep 0.5
 if [ "$HAVE_CURL" = "1" ]; then
@@ -290,7 +343,7 @@ ok "check"    "ok"
 
 kill -TERM "$SERVE_PID" 2>/dev/null || true; SERVE_PID=; wait 2>/dev/null || true
 
-step "6/9  pull --from URL с --trusted-key (fail-closed)"
+step "6/11  pull --from URL с --trusted-key (fail-closed)"
 "$APPSPEC" repo sign --key "$KEYFILE" --root "$REPO2" >/dev/null
 "$APPSPEC" repo serve --root "$REPO2" --listen "127.0.0.1:$PORT" >"$TMP/serve2.log" 2>&1 &
 SERVE_PID=$!
@@ -305,7 +358,7 @@ ok "verify" "signature ok"
 
 kill -TERM "$SERVE_PID" 2>/dev/null || true; SERVE_PID=; wait 2>/dev/null || true
 
-step "7/9  bundle check с source = repo"
+step "7/11  bundle check с source = repo"
 BUNDLE_DIR="$TMP/bundle"; mkdir -p "$BUNDLE_DIR"
 cat > "$BUNDLE_DIR/base.appspec" <<'TOML'
 [package]
@@ -330,13 +383,13 @@ APPSPEC_REPO="$REPO" "$APPSPEC" bundle check "$BUNDLE_DIR/bundle.appspec" >/dev/
     || fail "bundle check"
 ok "bundle check" "ok"
 
-step "8/9  bundle lock"
+step "8/11  bundle lock"
 APPSPEC_REPO="$REPO" "$APPSPEC" bundle lock "$BUNDLE_DIR/bundle.appspec" >/dev/null
 [ -f "$BUNDLE_DIR/bundle.lock.toml" ] || fail "bundle.lock.toml not written"
 grep -q "sif_sha256" "$BUNDLE_DIR/bundle.lock.toml" || fail "lock without sif_sha256"
 ok "lock" "$BUNDLE_DIR/bundle.lock.toml"
 
-step "9/9  repo export-oci --dry-run"
+step "9/11  repo export-oci --dry-run"
 "$APPSPEC" repo export-oci --root "$REPO" \
     --registry "ghcr.io/smoke" --dry-run appspec-index > "$TMP/oci.log"
 grep -q "oras push" "$TMP/oci.log" || fail "no oras push in dry-run log"
@@ -344,5 +397,50 @@ grep -q "application/vnd.appspec.index.v1+json" "$TMP/oci.log" || fail "no index
 ok "dry-run" "commands printed"
 
 # ===========================================================================
+
+step "10/11  repo publish --ipns"
+SC10="$SC5"
+# sc10_v2: ensure ipns_key under [ipfs]. `server init` writes [ipfs]
+# with defaults (auto_pin/api_url/gateway), so `grep '^\[ipfs\]'` is
+# always true — check `^ipns_key` instead, and insert via sed after
+# the [ipfs] header (or append a fresh section if absent).
+if ! grep -q '^ipns_key' "$SC10"; then
+    if grep -q '^\[ipfs\]' "$SC10"; then
+        sed -i '/^\[ipfs\]$/a ipns_key = "smoke-test-key"' "$SC10"
+    else
+        printf '\n[ipfs]\nipns_key = "smoke-test-key"\n' >> "$SC10"
+    fi
+fi
+
+: > "$MOCK_IPFS_LOG"
+if ! "$APPSPEC" repo publish --ipns --config "$SC10" \
+        > "$TMP/publish.out" 2> "$TMP/publish.err"; then
+    cat "$TMP/publish.err" >&2
+    fail "repo publish --ipns"
+fi
+grep -qF "bafkreismoke1234567890" "$TMP/publish.out" \
+    || fail "publish: CID not in stdout"
+grep -qF "k51smoketestname123" "$TMP/publish.err" \
+    || fail "publish: ipns_name not in stderr"
+grep -qF 'ipns_name' "$SC10" \
+    || fail "publish: ipns_name not persisted in config"
+grep -qF "name publish" "$MOCK_IPFS_LOG" \
+    || fail "publish: mock ipfs name publish not called"
+grep -qF "smoke-test-key" "$MOCK_IPFS_LOG" \
+    || fail "publish: --key not passed to ipfs name publish"
+ok "publish" "$(grep -oE 'bafkrei[a-z0-9]+' "$TMP/publish.out" | head -1)"
+
+step "11/11  repo resolve <ipns_name>"
+: > "$MOCK_IPFS_LOG"
+RESOLVED=$("$APPSPEC" repo resolve "k51smoketestname123") \
+    || fail "repo resolve"
+grep -qF "bafkreismoke1234567890" <<< "$RESOLVED" \
+    || fail "resolve: expected CID in output, got: $RESOLVED"
+grep -qF "name resolve k51smoketestname123" "$MOCK_IPFS_LOG" \
+    || fail "resolve: mock ipfs not called with expected name"
+ok "resolve" "$RESOLVED"
+
+# ===========================================================================
+
 printf "\n\033[1;32mALL OK\033[0m — smoke test passed (%s mode)\n" \
     "$([ "$USE_MOCK" = "1" ] && echo mock || echo full)"

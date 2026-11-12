@@ -10,6 +10,8 @@
 //! Trusted keys: `~/.config/appspec/trusted-keys.toml` —
 //! `[[keys]] name / pubkey` (§10.1/§10.2).
 
+use super::util::hex_decode;
+pub use super::util::hex_encode;
 use anyhow::{bail, Context, Result};
 use serde_json::Value;
 use std::path::{Path, PathBuf};
@@ -323,37 +325,3 @@ pub fn verify_remote_index(
 // ===========================================================================
 // hex
 // ===========================================================================
-
-pub fn hex_encode(bytes: &[u8]) -> String {
-    let mut s = String::with_capacity(bytes.len() * 2);
-    for b in bytes {
-        s.push_str(&format!("{:02x}", b));
-    }
-    s
-}
-
-fn hex_decode(s: &str) -> Result<Vec<u8>> {
-    let s = s.trim();
-    if s.len() % 2 != 0 {
-        bail!("hex string must have even length");
-    }
-    let bytes = s.as_bytes();
-    let mut out = Vec::with_capacity(s.len() / 2);
-    let mut i = 0;
-    while i < bytes.len() {
-        let hi = hex_val(bytes[i])?;
-        let lo = hex_val(bytes[i + 1])?;
-        out.push((hi << 4) | lo);
-        i += 2;
-    }
-    Ok(out)
-}
-
-fn hex_val(b: u8) -> Result<u8> {
-    match b {
-        b'0'..=b'9' => Ok(b - b'0'),
-        b'a'..=b'f' => Ok(b - b'a' + 10),
-        b'A'..=b'F' => Ok(b - b'A' + 10),
-        _ => bail!("invalid hex character: {}", b as char),
-    }
-}

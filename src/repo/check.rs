@@ -5,7 +5,7 @@ use std::sync::{Arc, Mutex};
 
 use super::layout::RepoRoot;
 use super::meta::MetaV1;
-use super::util::{blob_path, sha256_file};
+use super::util::{blob_path, sha256_file, sha256_from_cid};
 
 pub struct CheckOutcome {
     pub errors: usize,
@@ -90,7 +90,49 @@ pub fn run(root: &RepoRoot, deep: bool) -> Result<CheckOutcome> {
         }
     }
 
-    // 3) --deep: параллельный apptainer inspect
+    // 2.5) ipfs_cid ↔ sif_sha256 (I2).
+    //      `ipfs_cid` — производное от `sif_sha256`; расхождение означает,
+    //      что meta.json правили руками или импортировали из репо с другим
+    //      соглашением. `None` — валидно (старые записи до этой итерации).
+    //
+    //      Проверяем через декодирование CID: это точнее диагностически
+    //      (битый CID → «cannot decode», а не «derived != cid») и
+    //      использует обратное направление `sha256_from_cid`.
+    for (meta_path, _blob, m) in &items {
+        let Some(cid) = &m.ipfs_cid else { continue };
+        // Legacy dag-pb CID (from appspec 0.4.3 --pin-ipfs on SIF >256 KB):
+        // sha256 is not recoverable from CID; skip with warning.
+        if !cid.starts_with("bafkrei") {
+            eprintln!(
+                "warning: ipfs_cid {} for {} is legacy dag-pb ipfs_cid                  (run `repo reindex --backfill-cid` to rewrite)",
+                cid,
+                meta_path.display()
+            );
+            continue;
+        }
+        match sha256_from_cid(cid) {
+            Ok(digest) if digest == m.sif_sha256 => {}
+            Ok(digest) => {
+                eprintln!(
+                    "error: ipfs_cid mismatch for {}: meta sif_sha256={},                      but ipfs_cid {} decodes to {}",
+                    meta_path.display(),
+                    m.sif_sha256,
+                    cid,
+                    digest
+                );
+                errors += 1;
+            }
+            Err(e) => {
+                eprintln!(
+                    "error: cannot decode ipfs_cid {} for {}: {:#}",
+                    cid,
+                    meta_path.display(),
+                    e
+                );
+                errors += 1;
+            }
+        }
+    } // 3) --deep: параллельный apptainer inspect
     if deep && !items.is_empty() {
         let results: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
         let idx = Arc::new(AtomicUsize::new(0));

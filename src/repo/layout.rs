@@ -123,6 +123,14 @@ pub struct Ipfs {
     pub api_url: String,
     #[serde(default = "default_ipfs_gateway")]
     pub gateway: String,
+    /// Имя IPNS-ключа в keystore локального `ipfs` daemon.
+    /// `repo publish --ipns` требует это поле.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ipns_key: Option<String>,
+    /// Кеш результата `ipfs name publish`. Обновляется при publish.
+    /// Источник истины — DHT; это поле только для отображения / отладки.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ipns_name: Option<String>,
 }
 
 fn default_ipfs_api() -> String {

@@ -333,3 +333,64 @@ $ appspec repo serve --listen 127.0.0.1:8844
 * `token = "keyring:…"` — v2.
 * `proxy` в профиле — задел; v1 использует `HTTP_PROXY`/`HTTPS_PROXY` из env.
 * `repo serve` и `repo add` на одном `<root>` используют **два разных** лока (server `write_lock` vs `<root>/.lock`). Параллельная запись возможна; фикс — Phase 2 (единый lock).
+
+---
+
+## IPNS (mutable-имя репозитория)
+
+### Server config: `[ipfs]`
+
+| Поле | Тип | Default | Описание |
+|---|---|---|---|
+| `pin` | bool | `false` | `repo add` → `ipfs pin add` |
+| `ipns_key` | string | — | имя ключа в `ipfs key list` |
+| `ipns_name` | string | — | кеш `ipfs name publish` |
+
+`ipns_key` обязателен для `repo publish --ipns`. Создать ключ:
+
+```sh
+ipfs key gen appspec-corp
+```
+
+`ipns_name` обновляется автоматически при успешном `publish --ipns`.
+Если server config не найден — warning, имя не сохраняется.
+
+### Client config: `source.ipns`
+
+| Поле | Формат | v1 |
+|---|---|---|
+| `ipns` | `k51...` (ed25519) или `12D3Koo...` (RSA) | да |
+
+`source.ipns` можно комбинировать с `source.url` — это fallback chain
+`ipns → url`, порядок фиксирован. `source.path` остаётся
+взаимоисключающим с сетевыми полями.
+
+`source.ipfs` (legacy v1, сырой index-CID) — deprecated; при чтении
+выдаёт warning. Удаляется в v2.
+
+Пример:
+
+```toml
+# ~/.config/appspec/repo-server.toml
+schema = 1
+[repo]
+root = "/var/lib/appspec/repo"
+name = "corp/stable"
+
+[ipfs]
+pin       = true
+ipns_key  = "appspec-corp"
+ipns_name = "k51qzi5uqu5d..."
+
+# ~/.config/appspec/repos.toml
+schema = 1
+default = "corp"
+
+[[repos]]
+name   = "corp"
+source = { ipns = "k51qzi5uqu5d...", url = "http://repo.corp:8080" }
+token  = "env:APPSPEC_REPO_TOKEN"
+trusted_keys   = ["file:~/.config/appspec/trusted-keys.toml"]
+allow_unsigned = false
+```
+

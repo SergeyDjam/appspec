@@ -7,52 +7,81 @@ use super::meta::{IndexV1, IndexVersion, MetaV1};
 use super::util::{atomic_write, sha256_hex};
 
 pub struct PullOpts {
-    pub from: Option<String>,
-    pub via: Option<String>, // "http" | "ipfs" | "path"
+    /// Упорядоченный список источников (fallback chain).
+    /// Каждый элемент: PATH | http://… | ipns://NAME | ipfs://CID | oci://…
+    /// Пустой — ошибка (нужен хотя бы один).
+    pub sources: Vec<String>,
+    pub via: Option<String>, // "ipfs" (legacy)
     pub spec_only: bool,
     pub sif_out: Option<PathBuf>,
     pub trusted_key: Option<PathBuf>,
     pub allow_unsigned: bool,
 }
-
 pub fn pull(local_root: &RepoRoot, name_ver: &str, opts: PullOpts) -> Result<()> {
     let (name, ver) = name_ver
         .split_once(':')
         .ok_or_else(|| anyhow!("expected NAME:VERSION-RELEASE, got `{}`", name_ver))?;
     let name = name.to_ascii_lowercase();
 
-    // Ровно один источник: --from или --via.
-    if opts.from.is_some() && opts.via.is_some() {
-        bail!("--from and --via are mutually exclusive");
+    if !opts.sources.is_empty() && opts.via.is_some() {
+        bail!("--from/sources and --via are mutually exclusive");
     }
 
-    if let Some(from) = opts.from.as_deref() {
-        if let Some(url) = from.strip_prefix("oci://") {
-            let full = format!("oci://{}", url);
-            return pull_from_oci(local_root, &name, ver, &full, &opts);
+    if !opts.sources.is_empty() {
+        let mut errors: Vec<String> = Vec::new();
+        for (i, src) in opts.sources.iter().enumerate() {
+            match pull_one(local_root, &name, ver, src, &opts) {
+                Ok(()) => return Ok(()),
+                Err(e) => {
+                    let msg = format!("source #{} `{}`: {:#}", i + 1, src, e);
+                    if opts.sources.len() > 1 {
+                        eprintln!("warning: {msg}; trying next source");
+                    }
+                    errors.push(msg);
+                }
+            }
         }
-        if from.starts_with("https://") {
-            bail!("https:// not supported in v1 (use http:// or reverse proxy)");
-        }
-        if let Some(cid) = from.strip_prefix("ipfs://") {
-            return pull_from_ipfs_index(local_root, &name, ver, cid, &opts);
-        }
-        if from.starts_with("http://") {
-            return pull_from_http(local_root, &name, ver, from, &opts);
-        }
-        return pull_from_path(local_root, &name, ver, Path::new(from), &opts);
+        bail!(
+            "all {} pull source(s) failed for {}:{}:\n  {}",
+            errors.len(),
+            name,
+            ver,
+            errors.join("\n  ")
+        );
     }
 
     if opts.via.as_deref() == Some("ipfs") {
         return pull_via_ipfs(local_root, &name, ver, &opts);
     }
 
-    bail!(
-        "repo pull requires --from URL|PATH or --via ipfs \
-         (local pull is no-op; use `repo show --sif`)"
-    )
+    bail!("repo pull requires --from URL|PATH|ipns://, --profile NAME, or --via ipfs")
 }
 
+fn pull_one(
+    local_root: &RepoRoot,
+    name: &str,
+    ver: &str,
+    from: &str,
+    opts: &PullOpts,
+) -> Result<()> {
+    if let Some(url) = from.strip_prefix("oci://") {
+        let full = format!("oci://{}", url);
+        return pull_from_oci(local_root, name, ver, &full, opts);
+    }
+    if from.starts_with("https://") {
+        bail!("https:// not supported in v1 (use http:// or reverse proxy)");
+    }
+    if let Some(cid) = from.strip_prefix("ipfs://") {
+        return pull_from_ipfs_index(local_root, name, ver, cid, opts);
+    }
+    if let Some(ipns) = from.strip_prefix("ipns://") {
+        return pull_from_ipns(local_root, name, ver, ipns, opts);
+    }
+    if from.starts_with("http://") {
+        return pull_from_http(local_root, name, ver, from, opts);
+    }
+    pull_from_path(local_root, name, ver, Path::new(from), opts)
+}
 // ===========================================================================
 // HTTP
 // ===========================================================================
@@ -282,6 +311,55 @@ fn pull_from_ipfs_index(
 // общая часть IPFS-pull
 // ===========================================================================
 
+fn pull_from_ipns(
+    local_root: &RepoRoot,
+    name: &str,
+    ver: &str,
+    ipns_name: &str,
+    opts: &PullOpts,
+) -> Result<()> {
+    if !super::ipfs::which_ipfs() {
+        bail!(
+            "`{}` not found in PATH; required for ipns:// sources",
+            super::ipfs::ipfs_bin()
+        );
+    }
+
+    let index_cid = super::ipfs::name_resolve(ipns_name, 30)
+        .with_context(|| format!("resolve ipns://{}", ipns_name))?;
+
+    let index_bytes = super::ipfs::cat(&index_cid)
+        .with_context(|| format!("ipfs cat {} (via ipns://{})", index_cid, ipns_name))?;
+    let index_text =
+        std::str::from_utf8(&index_bytes).context("IPNS index.json is not valid UTF-8")?;
+
+    let trusted = super::sign::load_trusted_keys(opts.trusted_key.as_deref())?;
+    super::sign::verify_remote_index(index_text, &trusted, opts.allow_unsigned)?;
+
+    let index: IndexV1 = serde_json::from_str(index_text).context("parsing IPNS index.json")?;
+
+    let pkg = index.packages.get(name).ok_or_else(|| {
+        anyhow!(
+            "package `{}` not in IPNS index (ipns://{})",
+            name,
+            ipns_name
+        )
+    })?;
+    let v = pkg
+        .versions
+        .get(ver)
+        .ok_or_else(|| anyhow!("{}:{} not in IPNS index (ipns://{})", name, ver, ipns_name))?;
+
+    let cid = v.ipfs_cid.as_deref().ok_or_else(|| {
+        anyhow!(
+            "no ipfs_cid for {}:{} in IPNS index — publisher must              re-add with appspec 0.4.4+ or run `repo reindex --backfill-cid`",
+            name,
+            ver
+        )
+    })?;
+
+    pull_blob_from_ipfs(local_root, name, ver, cid, v, opts)
+}
 fn pull_blob_from_ipfs(
     local_root: &RepoRoot,
     name: &str,

@@ -43,7 +43,7 @@ set -eu
 cmd="$1"; shift
 case "$cmd" in
   add)
-    if [ -n "${MOCK_IPFS_ADD_CID:-}" ]; then echo "$MOCK_IPFS_ADD_CID"; else echo "QmFakeAddCID"; fi
+    if [ -n "${MOCK_IPFS_ADD_CID:-}" ]; then echo "$MOCK_IPFS_ADD_CID"; else echo "bafkreifakeaddcid1"; fi
     ;;
   cat)
     if [ -n "${MOCK_IPFS_CAT_FILE:-}" ] && [ -f "$MOCK_IPFS_CAT_FILE" ]; then
@@ -191,7 +191,7 @@ fn make_index_with_ipfs_cid(
 
 fn default_opts() -> pull::PullOpts {
     pull::PullOpts {
-        from: None,
+        sources: Vec::new(),
         via: None,
         spec_only: false,
         sif_out: None,
@@ -211,10 +211,10 @@ fn ipfs_add_returns_cid_from_mock() {
     let tmp = TempDir::new().unwrap();
     let f = tmp.path().join("blob.bin");
     fs::write(&f, b"hello").unwrap();
-    mock.set_env(Some("QmTestAdd123"), Some(&f));
+    mock.set_env(Some("bafkreitestadd123"), Some(&f));
 
     let cid = ipfs::add_file(&f, true).unwrap();
-    assert_eq!(cid, "QmTestAdd123");
+    assert_eq!(cid, "bafkreitestadd123");
 }
 
 #[test]
@@ -224,10 +224,10 @@ fn ipfs_add_without_pin_flag_via_mock() {
     let tmp = TempDir::new().unwrap();
     let f = tmp.path().join("x.bin");
     fs::write(&f, b"x").unwrap();
-    mock.set_env(Some("QmNoPin"), Some(&f));
+    mock.set_env(Some("bafkreinopin1"), Some(&f));
 
     let cid = ipfs::add_file(&f, false).unwrap();
-    assert_eq!(cid, "QmNoPin");
+    assert_eq!(cid, "bafkreinopin1");
 }
 
 #[test]
@@ -254,15 +254,18 @@ fn publish_index_writes_cid_file() {
     let (_tmp, root) = make_min_repo();
 
     let idx_path = root.join("index.json");
-    mock.set_env(Some("QmIndexABC"), Some(&idx_path));
+    mock.set_env(Some("bafkreiindexabc1"), Some(&idx_path));
 
     let cid = ipfs::add_file(&idx_path, true).unwrap();
-    assert_eq!(cid, "QmIndexABC");
+    assert_eq!(cid, "bafkreiindexabc1");
 
     let cid_file = root.join("ipfs-index.cid");
     fs::write(&cid_file, format!("{}\n", cid)).unwrap();
     assert!(cid_file.is_file());
-    assert_eq!(fs::read_to_string(&cid_file).unwrap().trim(), "QmIndexABC");
+    assert_eq!(
+        fs::read_to_string(&cid_file).unwrap().trim(),
+        "bafkreiindexabc1"
+    );
 }
 
 // ============================================================================
@@ -337,7 +340,7 @@ fn pull_from_ipfs_index_with_invalid_json_fails_parsing() {
 
     let root_obj = layout::RepoRoot::open(&root).unwrap();
     let mut opts = default_opts();
-    opts.from = Some("ipfs://QmIndexCID".into());
+    opts.sources = vec!["ipfs://QmIndexCID".into()];
     let err = pull::pull(&root_obj, "demo:0.0.1-1", opts).unwrap_err();
     let msg = format!("{err:#}");
     assert!(msg.contains("parsing"), "expected parse error, got: {msg}");
@@ -352,7 +355,7 @@ fn pull_from_and_via_mutually_exclusive() {
 
     let root_obj = layout::RepoRoot::open(&root).unwrap();
     let mut opts = default_opts();
-    opts.from = Some("ipfs://QmX".into());
+    opts.sources = vec!["ipfs://QmX".into()];
     opts.via = Some("ipfs".into());
     let err = pull::pull(&root_obj, "demo:0.0.1-1", opts).unwrap_err();
     assert!(
