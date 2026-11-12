@@ -489,3 +489,66 @@ appspec repo migrate-config /srv/repo
 
 * Для локальной операции: `--root PATH` или `--config PATH` побеждает env.
 * Для публикации: `repo push --to <url>`.
+
+## `repo publish --ipns`: `--ipns requires [ipfs].ipns_key`
+
+**Симптом.** `appspec repo publish --ipns` падает с сообщением:
+
+    `--ipns` requires `[ipfs].ipns_key` in server config;
+    run `ipfs key gen <name>` and add `[ipfs].ipns_key = "<name>"`
+
+**Причина.** В `repo-server.toml` нет секции `[ipfs].ipns_key`.
+
+**Решение.**
+
+    # 1. Создать ключ в локальном ipfs keystore
+    ipfs key gen appspec-corp
+
+    # 2. Добавить в server config (или `appspec repo publish --ipns --config ...` с уже прописанным ключом)
+    cat >> ~/.config/appspec/repo-server.toml <<'TOML'
+    [ipfs]
+    ipns_key = "appspec-corp"
+    TOML
+
+    # 3. Опубликовать
+    appspec repo publish --ipns --config ~/.config/appspec/repo-server.toml
+
+## `repo publish --ipns`: `ipfs name publish failed for key X`
+
+**Симптом.** Публикация падает с `ipfs name publish failed for key 'appspec-corp': Error: ...`.
+
+**Причина.** `[ipfs].ipns_key` задан, но ключа с таким именем нет в
+локальном `ipfs` keystore (опечатка, или ключ был на другой машине).
+
+**Решение.**
+
+    # Проверить
+    ipfs key list | grep appspec-corp
+
+    # Если нет — создать
+    ipfs key gen appspec-corp
+
+    # Если ключ есть на другой машине — экспорт + импорт
+    ipfs key export appspec-corp -o appspec-corp.key    # на старой
+    ipfs key import appspec-corp appspec-corp.key       # на новой
+
+`ipfs key import` принимает только файлы, созданные `ipfs key export`.
+
+## `ipfs name resolve` зависает / timeout
+
+**Симптом.** `repo pull --from ipns://...` висит минуты.
+
+**Причина.** Первый DHT-резолв требует walk по сети, 1–3 минуты в
+зависимости от bootstrap-узлов и NAT.
+
+**Решение.**
+
+1. `pull` использует hard-timeout 30 s, после чего падает в fallback
+   на `source.url`, если URL задан в профиле.
+2. Если fallback не задан — увеличить timeout:
+       appspec repo resolve k51... --timeout-secs 120
+3. Проверить, что `ipfs` daemon жив:
+       ipfs id
+4. Если daemon в порядке, но resolve медленный — `ipfs config Routing.Type dht`
+   и перезапуск daemon.
+

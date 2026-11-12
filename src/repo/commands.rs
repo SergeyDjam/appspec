@@ -533,7 +533,13 @@ fn backfill_ipfs_cid(root: &layout::RepoRoot) -> Result<usize> {
             }
             let text = std::fs::read_to_string(&meta_path)?;
             let mut meta: meta::MetaV1 = serde_json::from_str(&text)?;
-            if meta.ipfs_cid.is_some() {
+            // Skip only if CID is present AND raw. Legacy dag-pb
+            // (from 0.4.3 --pin-ipfs on big SIF) is rewritten to raw.
+            if meta
+                .ipfs_cid
+                .as_deref()
+                .is_some_and(|c| c.starts_with("bafkrei"))
+            {
                 continue;
             }
             let cid = util::cid_v1_from_sha256(&meta.sif_sha256)

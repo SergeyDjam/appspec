@@ -31,7 +31,14 @@ pub fn add_file(path: &Path, pin: bool) -> Result<String> {
         );
     }
     let out = Command::new(&bin)
-        .args(["add", &format!("--pin={}", pin), "--quieter"])
+        .args([
+            "add",
+            &format!("--pin={}", pin),
+            "--quieter",
+            "--raw-leaves",
+            "--cid-version=1",
+            "--chunker=size-1073741824",
+        ])
         .arg(path)
         .output()
         .with_context(|| format!("spawning {} add", bin))?;
@@ -49,6 +56,15 @@ pub fn add_file(path: &Path, pin: bool) -> Result<String> {
         .to_string();
     if cid.is_empty() {
         bail!("{} add returned empty CID for {}", bin, path.display());
+    }
+    // Must be raw CID (bafkrei...) — otherwise file was chunked into dag-pb
+    // (e.g. >1 GB) and sha256-derived CID would not match.
+    if !cid.starts_with("bafkrei") {
+        bail!(
+            "ipfs add returned non-raw CID `{}` for {}; file is likely >1 GB              and would be chunked into dag-pb. Use a smaller SIF or a larger              --chunker in a fork.",
+            cid,
+            path.display()
+        );
     }
     Ok(cid)
 }

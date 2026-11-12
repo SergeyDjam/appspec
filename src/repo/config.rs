@@ -220,7 +220,6 @@ pub struct RepoSourceTable {
 }
 
 impl RepoSourceTable {
-    #[allow(dead_code)]
     pub fn kind_count(&self) -> usize {
         [
             self.path.is_some(),
@@ -234,15 +233,17 @@ impl RepoSourceTable {
     }
 
     pub fn validate(&self, ctx: &str) -> Result<()> {
-        if self.path.is_some() && (self.url.is_some() || self.ipns.is_some() || self.ipfs.is_some())
-        {
+        let n = self.kind_count();
+        if self.path.is_some() && n != 1 {
             bail!(
-                "{ctx}: source.path cannot be combined with url/ipns/ipfs                  (path is a local repository)"
+                "{ctx}: source.path cannot be combined with url/ipns/ipfs \
+                 (path is a local repository)"
             );
         }
-        if self.path.is_none() && self.url.is_none() && self.ipns.is_none() && self.ipfs.is_none() {
+        if self.path.is_none() && n == 0 {
             bail!(
-                "{ctx}: source must contain `path`, or at least one of                  `url` | `ipns` (found none)"
+                "{ctx}: source must contain `path`, or at least one of \
+                 `url` | `ipns` (found none)"
             );
         }
         if let Some(u) = &self.url {

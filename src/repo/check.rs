@@ -100,6 +100,16 @@ pub fn run(root: &RepoRoot, deep: bool) -> Result<CheckOutcome> {
     //      использует обратное направление `sha256_from_cid`.
     for (meta_path, _blob, m) in &items {
         let Some(cid) = &m.ipfs_cid else { continue };
+        // Legacy dag-pb CID (from appspec 0.4.3 --pin-ipfs on SIF >256 KB):
+        // sha256 is not recoverable from CID; skip with warning.
+        if !cid.starts_with("bafkrei") {
+            eprintln!(
+                "warning: ipfs_cid {} for {} is legacy dag-pb ipfs_cid                  (run `repo reindex --backfill-cid` to rewrite)",
+                cid,
+                meta_path.display()
+            );
+            continue;
+        }
         match sha256_from_cid(cid) {
             Ok(digest) if digest == m.sif_sha256 => {}
             Ok(digest) => {
