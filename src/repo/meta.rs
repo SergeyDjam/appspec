@@ -40,6 +40,16 @@ pub struct MetaV1 {
     pub ipfs_cid: Option<String>,
     #[serde(default)]
     pub raw_labels: BTreeMap<String, String>,
+    // --- иконка (E-icon) ---
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub icon_sha256: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub icon_mimetype: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub icon_size: Option<u64>,
+    /// Имя файла иконки в `packages/<name>/<ver>/` (например, `icon.png`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub icon_filename: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -82,6 +92,16 @@ pub struct IndexVersion {
     pub base_digest: Option<String>,
     #[serde(default)]
     pub tags: Vec<String>,
+    // --- иконка (E-icon) ---
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub icon_sha256: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub icon_mimetype: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub icon_size: Option<u64>,
+    /// Имя файла иконки в `packages/<name>/<ver>/` (например, `icon.png`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub icon_filename: Option<String>,
     #[serde(default)]
     pub requires: Vec<String>,
     #[serde(default)]

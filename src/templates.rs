@@ -462,6 +462,49 @@ pub fn build_labels(spec: &Spec, spec_path: &Path) -> BTreeMap<String, String> {
     }
 
     // --- содержимое спека для восстановления ---
+
+    // --- иконка (E-icon): base64 в SIF для install-from-repo ---
+    if let Some(icon_rel) = &spec.install.icon {
+        let icon_path = spec_path
+            .parent()
+            .map(|p| p.join(icon_rel))
+            .unwrap_or_else(|| PathBuf::from(icon_rel));
+        match std::fs::read(&icon_path) {
+            Ok(raw) => {
+                if raw.len() > 4 * 1024 * 1024 {
+                    crate::log(format!(
+                        "warning: иконка {} слишком большая ({} B); LABEL может не пролезть в SIF",
+                        icon_path.display(),
+                        raw.len()
+                    ));
+                }
+                let filename = icon_path
+                    .file_name()
+                    .map(|s| s.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| format!("{}.png", pkg.name));
+                let mime = guess_icon_mimetype(&filename, &raw);
+                use sha2::{Digest, Sha256};
+                let mut h = Sha256::new();
+                h.update(&raw);
+                let sha = format!("{:x}", h.finalize());
+                m.insert("org.appspec.icon.filename".into(), filename);
+                m.insert("org.appspec.icon.mimetype".into(), mime.to_string());
+                m.insert("org.appspec.icon.sha256".into(), sha);
+                m.insert("org.appspec.icon.size".into(), raw.len().to_string());
+                m.insert(
+                    "org.appspec.icon.content.base64".into(),
+                    base64::engine::general_purpose::STANDARD.encode(&raw),
+                );
+            }
+            Err(e) => {
+                crate::log(format!(
+                    "warning: не могу прочитать иконку {}: {} (иконка не будет в SIF)",
+                    icon_path.display(),
+                    e
+                ));
+            }
+        }
+    }
     match std::fs::read(spec_path) {
         Ok(raw) => {
             let filename = spec_path
@@ -875,6 +918,22 @@ pub fn render_desktop(
 // Symptom (0.4.5): installed launcher failed with `unbound variable` on
 // `$MUSIC_DIR` / `$CONFIG_DIR` because `templates/launcher.sh.j2` did not
 // render `runtime.vars` (unlike `run.sh.j2`).
+/// Угадать MIME-тип иконки по имени файла и magic bytes.
+fn guess_icon_mimetype(filename: &str, bytes: &[u8]) -> &'static str {
+    let lower = filename.to_ascii_lowercase();
+    if lower.ends_with(".svg") || bytes.starts_with(b"<?xml") || bytes.starts_with(b"<svg") {
+        return "image/svg+xml";
+    }
+    if lower.ends_with(".png") || bytes.starts_with(&[0x89, b'P', b'N', b'G']) {
+        return "image/png";
+    }
+    if lower.ends_with(".jpg") || lower.ends_with(".jpeg") || bytes.starts_with(&[0xff, 0xd8, 0xff])
+    {
+        return "image/jpeg";
+    }
+    "application/octet-stream"
+}
+
 #[cfg(test)]
 mod installed_launcher_tests {
     use super::*;

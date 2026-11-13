@@ -165,6 +165,22 @@ fn pull_from_http(
     }
 
     write_version(local_root, name, ver, &spec_body, &meta, Some(&blob_body))?;
+    // E-icon: скачать иконку, если она объявлена в meta.json.
+    if let Some(icon_name) = &meta.icon_filename {
+        let icon_url = format!("{}/packages/{}/{}/{}", base, name, ver, icon_name);
+        match http_request(&icon_url, "GET", &[], None) {
+            Ok((200, _h, body)) => {
+                let dir = local_root.packages_dir().join(name).join(ver);
+                atomic_write(&dir.join(icon_name), &body)?;
+            }
+            Ok((s, _, _)) => {
+                eprintln!("warning: icon {} returned status {}, skipping", icon_url, s);
+            }
+            Err(e) => {
+                eprintln!("warning: cannot fetch icon {}: {:#}", icon_url, e);
+            }
+        }
+    }
     let _ = super::index_build::rebuild_all(local_root);
     println!("pulled: {}:{}", name, ver);
     Ok(())
@@ -215,6 +231,17 @@ fn pull_from_path(
     let spec = std::fs::read(&spec_src)?;
     let blob = std::fs::read(&blob_src)?;
     write_version(local_root, name, ver, &spec, &meta, Some(&blob))?;
+    // E-icon: копировать иконку из source-репозитория.
+    if let Some(icon_name) = &meta.icon_filename {
+        let src_icon = meta_path.parent().unwrap().join(icon_name);
+        if src_icon.is_file() {
+            let dst_dir = local_root.packages_dir().join(name).join(ver);
+            std::fs::create_dir_all(&dst_dir)?;
+            std::fs::copy(&src_icon, dst_dir.join(icon_name)).with_context(|| {
+                format!("copy icon {} → {}", src_icon.display(), dst_dir.display())
+            })?;
+        }
+    }
     let _ = super::index_build::rebuild_all(local_root);
     println!("pulled: {}:{}", name, ver);
     Ok(())
@@ -470,6 +497,10 @@ fn build_meta(name: &str, v: &IndexVersion) -> MetaV1 {
         requires: v.requires.clone(),
         provides: v.provides.clone(),
         conflicts: Vec::new(),
+        icon_sha256: v.icon_sha256.clone(),
+        icon_mimetype: v.icon_mimetype.clone(),
+        icon_size: v.icon_size,
+        icon_filename: v.icon_filename.clone(),
         ipfs_cid: v.ipfs_cid.clone(),
         raw_labels: Default::default(),
     }

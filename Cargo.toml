@@ -1,6 +1,6 @@
 [package]
 name        = "appspec"
-version     = "0.4.6"
+version     = "0.4.7"
 edition     = "2021"
 rust-version = "1.74"
 description = "Apptainer SIF builder from TOML spec + composable bundles"
@@ -40,6 +40,9 @@ toml_edit   = "0.22"
 
 # --- misc ------------------------------------------------------------------
 base64 = "0.23"
+
+# --- иконки: resize PNG/JPEG при `appspec install` (E-icon) ---------------
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 
 # --- hashing для метаданных SIF: sha256 содержимого .appspec ---------------
 sha2   = "0.10"
