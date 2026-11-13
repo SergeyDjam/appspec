@@ -95,12 +95,6 @@ fn require_local_root(
     open_root(a, sc)
 }
 
-fn read_index(root: &layout::RepoRoot) -> Result<meta::IndexV1> {
-    Ok(serde_json::from_str(&std::fs::read_to_string(
-        root.index_path(),
-    )?)?)
-}
-
 fn split_pv(s: &str) -> Result<(String, String)> {
     let (n, v) = s
         .split_once(':')
@@ -202,7 +196,7 @@ fn profile_sources(p: &super::RepoProfile) -> Result<Vec<String>> {
     }
     Ok(v)
 }
-fn read_index_from(origin: &str) -> Result<meta::IndexV1> {
+fn read_index_text_from(origin: &str) -> Result<String> {
     if is_http_url(origin) {
         eprintln!("\x1b[2m[appspec] repo: {}\x1b[0m", origin);
         let url = format!("{}/index.json", origin.trim_end_matches('/'));
@@ -211,23 +205,53 @@ fn read_index_from(origin: &str) -> Result<meta::IndexV1> {
         if status != 200 {
             bail!("GET {} returned {}", url, status);
         }
-        let index: meta::IndexV1 = serde_json::from_slice(&body)
-            .with_context(|| format!("parsing remote index.json from {}", url))?;
-        if index.schema != 1 {
+        return String::from_utf8(body).context("remote index.json is not valid UTF-8");
+    }
+    if let Some(ipns_name) = origin.strip_prefix("ipns://") {
+        eprintln!("\x1b[2m[appspec] repo: {}\x1b[0m", origin);
+        if !super::ipfs::which_ipfs() {
             bail!(
-                "unsupported remote index schema {} (this client supports 1)",
-                index.schema
+                "ipns:// source requires `ipfs` binary in PATH \
+                 (set APPSPEC_IPFS to override)"
             );
         }
-        return Ok(index);
+        let cid = super::ipfs::name_resolve(ipns_name, 30)
+            .with_context(|| format!("resolve ipns://{}", ipns_name))?;
+        let bytes = super::ipfs::cat(&cid)
+            .with_context(|| format!("ipfs cat {} (via ipns://{})", cid, ipns_name))?;
+        return String::from_utf8(bytes).context("IPNS index.json is not valid UTF-8");
     }
-    if origin.starts_with("ipfs://") || origin.starts_with("ipns://") {
-        bail!(
-            "ipfs:// and ipns:// origins are not supported in v1 for read commands;              use `repo pull --profile NAME` or `--from URL|PATH`"
-        );
+    if let Some(cid) = origin.strip_prefix("ipfs://") {
+        eprintln!("\x1b[2m[appspec] repo: {}\x1b[0m", origin);
+        if !super::ipfs::which_ipfs() {
+            bail!(
+                "ipfs:// source requires `ipfs` binary in PATH \
+                 (set APPSPEC_IPFS to override)"
+            );
+        }
+        let bytes = super::ipfs::cat(cid).with_context(|| format!("ipfs cat {}", cid))?;
+        return String::from_utf8(bytes).context("IPFS index.json is not valid UTF-8");
     }
     let root = layout::RepoRoot::open(Path::new(origin))?;
-    read_index(&root)
+    std::fs::read_to_string(root.index_path())
+        .with_context(|| format!("reading {}", root.index_path().display()))
+}
+
+fn read_index_from(origin: &str) -> Result<meta::IndexV1> {
+    let text = read_index_text_from(origin)?;
+    let index: meta::IndexV1 = serde_json::from_str(&text)
+        .with_context(|| format!("parsing index.json from {}", origin))?;
+    if index.schema != 1 {
+        bail!(
+            "unsupported index schema {} (this client supports 1)",
+            index.schema
+        );
+    }
+    Ok(index)
+}
+
+fn is_remote_origin(origin: &str) -> bool {
+    is_http_url(origin) || origin.starts_with("ipfs://") || origin.starts_with("ipns://")
 }
 
 fn print_meta_fields(m: &meta::MetaV1) {
@@ -626,7 +650,8 @@ pub struct LsArgs {
     pub package: Option<String>,
     #[arg(long)]
     pub json: bool,
-    #[arg(long)]
+    /// Path to a local repo, or ipns://NAME / ipfs://CID (alias: --repo)
+    #[arg(long, alias = "repo")]
     pub root: Option<PathBuf>,
 }
 
@@ -653,7 +678,7 @@ pub fn ls(a: LsArgs) -> Result<i32> {
                         v.sif_size,
                         v.tags.join(","),
                         v.arch,
-                        &v.sif_sha256[..12]
+                        v.sif_sha256.get(..12).unwrap_or(&v.sif_sha256)
                     );
                 }
             }
@@ -695,7 +720,8 @@ pub struct SearchArgs {
     pub json: bool,
     #[arg(long)]
     pub limit: Option<usize>,
-    #[arg(long)]
+    /// Path to a local repo, or ipns://NAME / ipfs://CID (alias: --repo)
+    #[arg(long, alias = "repo")]
     pub root: Option<PathBuf>,
 }
 
@@ -788,7 +814,7 @@ pub fn search(a: SearchArgs) -> Result<i32> {
                     v.version,
                     v.release,
                     v.arch,
-                    &v.sif_sha256[..12]
+                    v.sif_sha256.get(..12).unwrap_or(&v.sif_sha256)
                 );
             }
         }
@@ -807,7 +833,8 @@ pub struct ShowArgs {
     pub sif: Option<PathBuf>,
     #[arg(long)]
     pub no_verify: bool,
-    #[arg(long)]
+    /// Path to a local repo, or ipns://NAME / ipfs://CID (alias: --repo)
+    #[arg(long, alias = "repo")]
     pub root: Option<PathBuf>,
 }
 
@@ -818,8 +845,19 @@ pub fn show(a: ShowArgs) -> Result<i32> {
     if is_http_url(&origin) {
         return show_http(&origin, &pkg, &ver, &a);
     }
-    if origin.starts_with("ipfs://") {
-        bail!("ipfs:// show not supported in v1; use `repo pull --from ipfs://…`");
+    if origin.starts_with("ipns://") || origin.starts_with("ipfs://") {
+        bail!(
+            "`repo show` from ipfs:// or ipns:// is not supported in v1.\n\
+             The index is a single file, not a directory tree; per-package\n\
+             meta.json / spec.appspec are not addressable.\n\
+             Use one of:\n  \
+             appspec repo pull <name>:<ver> --from {} --root <local-dir>\n  \
+             appspec repo ls     --repo {}\n  \
+             appspec repo search --repo {}",
+            origin,
+            origin,
+            origin
+        );
     }
 
     let root = layout::RepoRoot::open(Path::new(&origin))?;
@@ -1257,52 +1295,37 @@ pub fn sign(a: SignArgs) -> Result<i32> {
 pub struct VerifyArgs {
     #[arg(long)]
     pub pubkey: Option<PathBuf>,
+    /// Path to a local repo, or ipns://NAME / ipfs://CID (alias: --repo)
+    #[arg(long, alias = "repo")]
+    pub root: Option<PathBuf>,
+}
+
+#[derive(Debug, Args)]
+pub struct PinArgs {
+    /// Show what would be done without changing anything
     #[arg(long)]
+    pub dry_run: bool,
+    /// Path to a local repository (alias: --repo)
+    #[arg(long, alias = "repo")]
     pub root: Option<PathBuf>,
 }
 
 pub fn verify(a: VerifyArgs) -> Result<i32> {
     let origin = resolve_origin(&a.root)?;
-
-    if is_http_url(&origin) {
-        eprintln!("\x1b[2m[appspec] repo: {}\x1b[0m", origin);
-        let url = format!("{}/index.json", origin.trim_end_matches('/'));
-        let (status, _h, body) = super::http::http_request(&url, "GET", &[], None)
-            .with_context(|| format!("GET {}", url))?;
-        if status != 200 {
-            bail!("GET {} returned {}", url, status);
-        }
-        let index_text = String::from_utf8(body).context("remote index.json is not valid UTF-8")?;
-
-        let pubkey = if let Some(p) = &a.pubkey {
-            let s = std::fs::read_to_string(p)
-                .with_context(|| format!("reading pubkey {}", p.display()))?;
-            super::sign::parse_pubkey(s.trim())?
-        } else {
-            bail!(
-                "no public key: pass --pubkey PATH \
-                 (удалённый `{}` не отдаёт [signing].pubkey)",
-                origin
-            );
-        };
-
-        super::sign::verify_index(&index_text, &pubkey)?;
-        println!("verify: OK");
-        return Ok(0);
-    }
-
-    if origin.starts_with("ipfs://") {
-        bail!("ipfs:// verify not supported in v1");
-    }
-
-    let root = layout::RepoRoot::open(Path::new(&origin))?;
-    let index_text = std::fs::read_to_string(root.index_path())?;
+    let index_text = read_index_text_from(&origin)?;
 
     let pubkey = if let Some(p) = &a.pubkey {
         let s = std::fs::read_to_string(p)
             .with_context(|| format!("reading pubkey {}", p.display()))?;
         super::sign::parse_pubkey(s.trim())?
+    } else if is_remote_origin(&origin) {
+        bail!(
+            "no public key: pass --pubkey PATH \
+             (remote `{}` does not expose [signing].pubkey)",
+            origin
+        );
     } else {
+        let root = layout::RepoRoot::open(Path::new(&origin))?;
         let s = root.config.signing.pubkey.clone();
         if s.is_empty() {
             bail!("no public key: pass --pubkey PATH or set [signing].pubkey in server config");
@@ -1346,6 +1369,127 @@ pub struct ResolveArgs {
     pub timeout_secs: u64,
 }
 
+pub fn pin_cmd(a: PinArgs) -> Result<i32> {
+    let root = require_local_root(a.root, None, "pin")?;
+    let _lock = util::FileLock::acquire(&root.lock_path())?;
+
+    if !super::ipfs::which_ipfs() {
+        bail!(
+            "`{}` not found in PATH; required for `repo pin` \
+             (set APPSPEC_IPFS to override)",
+            super::ipfs::ipfs_bin()
+        );
+    }
+
+    let pkg_root = root.packages_dir();
+    if !pkg_root.exists() {
+        println!("pin: nothing to do (no packages)");
+        return Ok(0);
+    }
+
+    let mut newly_added = 0usize;
+    let mut newly_pinned = 0usize;
+    let mut already_pinned = 0usize;
+    let mut missing_blobs = 0usize;
+    let mut failed = 0usize;
+
+    for name_entry in std::fs::read_dir(&pkg_root)? {
+        let name_entry = name_entry?;
+        if !name_entry.file_type()?.is_dir() {
+            continue;
+        }
+        for ver_entry in std::fs::read_dir(name_entry.path())? {
+            let ver_entry = ver_entry?;
+            if !ver_entry.file_type()?.is_dir() {
+                continue;
+            }
+            let meta_path = ver_entry.path().join("meta.json");
+            if !meta_path.is_file() {
+                continue;
+            }
+            let mut meta: meta::MetaV1 =
+                serde_json::from_str(&std::fs::read_to_string(&meta_path)?)?;
+
+            let cid = if let Some(c) = &meta.ipfs_cid {
+                c.clone()
+            } else {
+                let blob = util::blob_path(&root.path, &meta.sif_sha256);
+                if !blob.is_file() {
+                    eprintln!(
+                        "warning: blob missing for {}: {}",
+                        meta_path.display(),
+                        blob.display()
+                    );
+                    missing_blobs += 1;
+                    continue;
+                }
+                if a.dry_run {
+                    println!(
+                        "would add + pin: {} (blob {})",
+                        meta_path.display(),
+                        blob.display()
+                    );
+                    continue;
+                }
+                match super::ipfs::add_file(&blob, true) {
+                    Ok(c) => {
+                        meta.ipfs_cid = Some(c.clone());
+                        util::atomic_write(&meta_path, &serde_json::to_vec_pretty(&meta)?)?;
+                        println!("added + pinned: {} -> {}", meta_path.display(), c);
+                        newly_added += 1;
+                        c
+                    }
+                    Err(e) => {
+                        eprintln!("error: add {} failed: {:#}", blob.display(), e);
+                        failed += 1;
+                        continue;
+                    }
+                }
+            };
+
+            if a.dry_run {
+                match super::ipfs::is_pinned(&cid) {
+                    Ok(true) => println!("already pinned: {}", cid),
+                    _ => println!("would pin: {}", cid),
+                }
+                continue;
+            }
+
+            match super::ipfs::is_pinned(&cid) {
+                Ok(true) => already_pinned += 1,
+                _ => match super::ipfs::pin(&cid) {
+                    Ok(()) => {
+                        println!("pinned: {}", cid);
+                        newly_pinned += 1;
+                    }
+                    Err(e) => {
+                        eprintln!("error: pin {} failed: {:#}", cid, e);
+                        failed += 1;
+                    }
+                },
+            }
+        }
+    }
+
+    if a.dry_run {
+        println!("dry-run: no changes");
+    } else if newly_added > 0 || newly_pinned > 0 {
+        let idx = index_build::rebuild_all(&root)?;
+        println!(
+            "reindexed: {} packages, updated={}",
+            idx.packages.len(),
+            idx.updated
+        );
+    }
+
+    println!(
+        "pin: {} added+pinned, {} newly pinned, {} already pinned, \
+         {} missing blob, {} failed",
+        newly_added, newly_pinned, already_pinned, missing_blobs, failed
+    );
+    Ok(if failed > 0 { 1 } else { 0 })
+}
+
 pub fn publish_index(a: PublishIndexArgs) -> Result<i32> {
     let root = require_local_root(a.root, a.server_config, "publish-index")?;
     let index_path = root.index_path();
@@ -1374,6 +1518,42 @@ pub fn publish_index(a: PublishIndexArgs) -> Result<i32> {
             "`--ipns` requires `[ipfs].ipns_key` in server config; \
              run `ipfs key gen <name>` and add `[ipfs].ipns_key = \"<name>\"`"
         );
+    }
+
+    // Preflight: warnings про доступность блобов в IPFS.
+    if super::ipfs::which_ipfs() {
+        if let Ok(text) = std::fs::read_to_string(&index_path) {
+            if let Ok(idx) = serde_json::from_str::<meta::IndexV1>(&text) {
+                let mut no_cid = 0usize;
+                let mut unpinned = 0usize;
+                for pkg in idx.packages.values() {
+                    for v in pkg.versions.values() {
+                        match &v.ipfs_cid {
+                            None => no_cid += 1,
+                            Some(cid) => {
+                                if !super::ipfs::is_pinned(cid).unwrap_or(false) {
+                                    unpinned += 1;
+                                }
+                            }
+                        }
+                    }
+                }
+                if no_cid > 0 {
+                    eprintln!(
+                        "warning: {} version(s) without ipfs_cid — \
+                         `pull --from ipns://` will fail for them. Run `appspec repo pin`.",
+                        no_cid
+                    );
+                }
+                if unpinned > 0 {
+                    eprintln!(
+                        "warning: {} version(s) with ipfs_cid but not pinned — \
+                         blobs may not be reachable via IPFS. Run `appspec repo pin`.",
+                        unpinned
+                    );
+                }
+            }
+        }
     }
 
     let cid = super::ipfs::add_file(&index_path, a.pin)?;

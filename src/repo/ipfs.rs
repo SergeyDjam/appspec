@@ -106,6 +106,25 @@ pub fn add_file_only_hash(path: &Path) -> Result<String> {
     Ok(cid)
 }
 
+/// `ipfs pin ls --type=recursive <cid>` → true if pinned.
+/// Uses stdout parsing instead of exit code: some IPFS versions return 0
+/// even when the CID is not pinned.
+pub fn is_pinned(cid: &str) -> Result<bool> {
+    let bin = ipfs_bin();
+    if !which_ipfs() {
+        bail!("`{}` not found in PATH; required for `ipfs pin ls`", bin);
+    }
+    let out = Command::new(&bin)
+        .args(["pin", "ls", "--type=recursive", cid])
+        .output()
+        .with_context(|| format!("spawning {} pin ls", bin))?;
+    if !out.status.success() {
+        return Ok(false);
+    }
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    Ok(stdout.lines().any(|l| l.starts_with(cid)))
+}
+
 pub fn cat(cid: &str) -> Result<Vec<u8>> {
     let bin = ipfs_bin();
     if !which_ipfs() {

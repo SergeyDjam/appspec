@@ -552,3 +552,71 @@ appspec repo migrate-config /srv/repo
 4. Если daemon в порядке, но resolve медленный — `ipfs config Routing.Type dht`
    и перезапуск daemon.
 
+
+## `repo ls --root ipns://...` → `ipfs not found in PATH`
+
+**Симптом.** `appspec repo ls --repo ipns://k51...` падает с `ipns:// source
+requires ipfs binary in PATH`.
+
+**Причина.** `ipns://` и `ipfs://` read-команды требуют `ipfs` binary
+(резолв + cat идут через локальный IPFS daemon). Без него индекс недоступен.
+
+**Решение.**
+
+~~~sh
+# Установить IPFS или указать мок
+APPSPEC_IPFS=/path/to/ipfs appspec repo ls --repo ipns://k51...
+~~~
+
+## `pull --from ipns://` → `no ipfs_cid for X:Y in IPNS index`
+
+**Симптом.** `pull --from ipns://...` падает на `no ipfs_cid for name:ver`.
+
+**Причина.** Пакеты добавлены в репо до 0.4.4 (без `ipfs_cid`) — обычно это
+старые `appspec 0.3.x` репозитории.
+
+**Решение.**
+
+~~~sh
+appspec repo pin            # добавит ipfs_cid, запинит блобы, reindex
+appspec repo sign           # переподписать индекс
+appspec repo publish --ipns # опубликовать
+~~~
+
+`repo reindex --backfill-cid` в одиночку не помогает: он пишет `ipfs_cid` в
+`meta.json`, но **не пинит** блоб, поэтому `ipfs cat` всё равно timeout.
+
+## `repo show --root ipns://` → `repo show not supported in v1`
+
+**Причина.** Индекс в IPFS — это один файл, а не директория. `meta.json` и
+`spec.appspec` per-package не адресуемы через `ipns://` / `ipfs://`.
+
+**Решение.**
+
+~~~sh
+appspec repo pull <name>:<ver> --from ipns://k51... --root ~/.local/share/appspec/repo
+appspec repo show <name>:<ver> --root ~/.local/share/appspec/repo
+~~~
+
+Или `ls` / `search` для просмотра индекса без скачивания:
+~~~sh
+appspec repo ls     --repo ipns://k51...
+appspec repo search foo --repo ipns://k51...
+~~~
+
+## `repo publish --ipns` → warnings про `ipfs_cid` или `not pinned`
+
+**Симптом.** `publish --ipns` печатает `warning: N version(s) without
+ipfs_cid` или `warning: M version(s) with ipfs_cid but not pinned`.
+
+**Причина.** В индексе есть версии без `ipfs_cid` (старые) или с `ipfs_cid`,
+но блоб не запинен на локальном узле. `pull --from ipns://` для таких пакетов
+упадёт на timeout.
+
+**Решение.**
+
+~~~sh
+appspec repo pin            # добавит CID и запинит все блобы
+appspec repo sign
+appspec repo publish --ipns # без warnings
+~~~

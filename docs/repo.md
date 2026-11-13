@@ -397,3 +397,54 @@ dag-pb root, чей CID не выводится из sha256. `--pin-ipfs` на �
 файле упадёт с «CID mismatch» — защита от молчаливой поломки
 `pull --via ipfs`.
 
+### IPFS-публикация: end-to-end
+
+`publish --ipns` публикует **index.json** в IPFS и привязывает к IPNS-имени.
+Блобы SIF — отдельные IPFS-объекты, адресуемые по `ipfs_cid` из индекса.
+Чтобы они были **доступны в сети**, их нужно **запинить**.
+
+~~~sh
+# Publisher
+appspec repo init /srv/repo --config ~/.config/appspec/repo-server.toml
+appspec repo add --pin-ipfs foo.sif
+appspec repo add --pin-ipfs bar.sif
+appspec repo sign
+appspec repo publish --ipns
+~~~
+
+### IPFS-публикация: конфигурация и consumer
+
+~~~toml
+[ipfs]
+ipns_key = "appspec-corp"
+~~~
+
+`pull --from ipns://<name>` идёт **только через IPFS**:
+1. `ipfs name resolve` → index CID;
+2. `ipfs cat` индекса → проверка подписи;
+3. `ipfs cat <ipfs_cid>` для SIF → проверка `sif_sha256`;
+4. запись в локальный репозиторий (`--root`, приёмник).
+
+**Read-команды** (`ls`, `search`, `verify`) поддерживают `--root ipns://NAME`
+и `--root ipfs://CID`. `show` — нет: per-package `meta.json` не адресуем,
+индекс — один файл.
+
+### IPFS-публикация: `repo pin`
+
+Если пакеты добавлены без `--pin-ipfs`, блобы не запинены и `pull --from
+ipns://` упадёт на timeout. `repo pin`:
+
+- для `ipfs_cid = None` + существующего блоба: `ipfs add --pin` (raw / dag-pb),
+  пишет CID в `meta.json`;
+- для `ipfs_cid = Some(cid)`: `ipfs pin add <cid>` (skip если уже pinned);
+- `reindex` → `ipfs_cid` появляется в `index.json`.
+
+~~~sh
+appspec repo pin --dry-run       # что будет сделано
+appspec repo pin                 # добавить + запинить + reindex
+appspec repo sign                # подписать новый index
+appspec repo publish --ipns      # опубликовать
+~~~
+
+`publish --ipns` печатает warnings, если в индексе есть версии без `ipfs_cid`
+или с `ipfs_cid`, но не запиненные.
