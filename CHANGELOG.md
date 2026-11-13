@@ -4,6 +4,45 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+## [0.4.8] - 2026-11-14
+
+### Fixed
+
+- **`appspec repo publish --ipns`** and any `ipfs add` call failed with
+  `chunker parameters may not exceed the maximum chunk size of 2096896`.
+  Root cause: `ipfs::add_file` passed `--chunker=size-1073741824` (1 GB),
+  which IPFS rejects (hard limit ~2 MiB). Removed; default chunker
+  (256 KB) is used.
+
+- **`repo add --pin-ipfs` on SIF > 256 KB** was broken: `ipfs add
+  --raw-leaves` for large files returns a dag-pb root, whose CID is not
+  derivable from sha256. The 0.4.4 invariant "local raw CID == ipfs CID"
+  only held for ≤ 256 KB. New strategy:
+  - files ≤ 256 KB: local raw CID (matches `ipfs add`);
+  - files > 256 KB: `ipfs add --offline --only-hash --cid-version=1
+    --raw-leaves` (works without daemon, correct dag-pb CID);
+  - no `ipfs` binary + file > 256 KB: `ipfs_cid = null`.
+
+- **`repo reindex --backfill-cid`** no longer rewrites existing dag-pb
+  CIDs to raw (raw CID points to a non-existent block). Only fills `null`
+  entries, using `ipfs add --only-hash` if `ipfs` is available.
+
+- **`repo check`** I2 (`ipfs_cid ↔ sif_sha256`): dag-pb CIDs now emit a
+  warning instead of an error (valid for `ipfs cat`, just not derivable
+  from sha256). Only raw CIDs (`bafkrei…`) are strictly checked.
+
+### Added
+
+- **`ipfs::add_file_only_hash`** — computes the CID IPFS would assign
+  without storing any blocks (`ipfs add --offline --only-hash`). No
+  daemon required.
+
+### Changed
+
+- **`ipfs::add_file`** no longer bails on non-raw CID; caller decides
+  whether raw is required based on file size.
+
+
 ## [0.4.7] - 2026-11-13
 
 ### Added

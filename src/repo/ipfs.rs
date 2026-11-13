@@ -37,7 +37,6 @@ pub fn add_file(path: &Path, pin: bool) -> Result<String> {
             "--quieter",
             "--raw-leaves",
             "--cid-version=1",
-            "--chunker=size-1073741824",
         ])
         .arg(path)
         .output()
@@ -57,19 +56,56 @@ pub fn add_file(path: &Path, pin: bool) -> Result<String> {
     if cid.is_empty() {
         bail!("{} add returned empty CID for {}", bin, path.display());
     }
-    // Must be raw CID (bafkrei...) — otherwise file was chunked into dag-pb
-    // (e.g. >1 GB) and sha256-derived CID would not match.
-    if !cid.starts_with("bafkrei") {
+    Ok(cid)
+}
+
+/// `ipfs cat <cid>` → байты (в памяти).
+/// Compute the CID IPFS would assign for `path`, without storing blocks.
+/// Uses `ipfs add --offline --only-hash` (works without a running daemon).
+/// For files <= 256 KB this equals `cid_v1_from_sha256(sha256(file))`. For
+/// larger files it returns the correct dag-pb root CID used by `ipfs cat`.
+pub fn add_file_only_hash(path: &Path) -> Result<String> {
+    let bin = ipfs_bin();
+    if !which_ipfs() {
         bail!(
-            "ipfs add returned non-raw CID `{}` for {}; file is likely >1 GB              and would be chunked into dag-pb. Use a smaller SIF or a larger              --chunker in a fork.",
-            cid,
+            "`{}` not found in PATH; required for `ipfs add --only-hash`",
+            bin
+        );
+    }
+    let out = Command::new(&bin)
+        .args([
+            "add",
+            "--offline",
+            "--only-hash",
+            "--cid-version=1",
+            "--raw-leaves",
+            "--quieter",
+        ])
+        .arg(path)
+        .output()
+        .with_context(|| format!("spawning {} add --only-hash", bin))?;
+    if !out.status.success() {
+        bail!(
+            "{} add --only-hash failed for {}: {}",
+            bin,
+            path.display(),
+            String::from_utf8_lossy(&out.stderr).trim()
+        );
+    }
+    let cid = String::from_utf8(out.stdout)
+        .context("ipfs add --only-hash stdout is not UTF-8")?
+        .trim()
+        .to_string();
+    if cid.is_empty() {
+        bail!(
+            "{} add --only-hash returned empty CID for {}",
+            bin,
             path.display()
         );
     }
     Ok(cid)
 }
 
-/// `ipfs cat <cid>` → байты (в памяти).
 pub fn cat(cid: &str) -> Result<Vec<u8>> {
     let bin = ipfs_bin();
     if !which_ipfs() {

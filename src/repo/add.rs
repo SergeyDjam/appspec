@@ -186,27 +186,49 @@ pub fn add_one(root: &RepoRoot, p: AddParams) -> Result<AddOutcome> {
     atomic_write(&pkg_dir.join("spec.appspec"), &spec_bytes)?;
     atomic_write(&pkg_dir.join("sha256"), sif_sha.as_bytes())?;
 
-    // 8. IPFS CID: вычисляется локально из sif_sha256 (I1).
-    //
-    //    --pin-ipfs теперь — чистый пиннинг, а не способ узнать CID.
-    //    Для файлов <= 256 KB `ipfs add` возвращает тот же CID, что мы
-    //    посчитали. Для больших — dag-pb root, проверка ниже упадёт с
-    //    внятной ошибкой (защита от молчаливой поломки pull --via ipfs).
-    let ipfs_cid = cid_v1_from_sha256(&sif_sha)
-        .with_context(|| format!("computing IPFS CID for {}", sif_sha))?;
+    // 8. IPFS CID strategy:
+    //   - files <= 256 KB: local raw CID == ipfs add (one block, no chunking)
+    //   - files > 256 KB:  ipfs add --only-hash (correct dag-pb root, offline)
+    //   - no ipfs + large:  None
+    const SMALL_CID_LIMIT: u64 = 262144;
+    let expected = cid_v1_from_sha256(&sif_sha)
+        .with_context(|| format!("computing local IPFS CID for {}", sif_sha))?;
 
-    if p.pin_ipfs {
+    let ipfs_cid: Option<String> = if p.pin_ipfs {
         let actual = super::ipfs::add_file(&blob, true)
             .with_context(|| format!("pinning blob {} to IPFS", blob.display()))?;
-        if actual != ipfs_cid {
+        if sif_size <= SMALL_CID_LIMIT && actual != expected {
             bail!(
-                "ipfs add returned {} but expected {} — CID mismatch for {};                  SIF likely >256KB and would be chunked into dag-pb.                  See apply-steps-1-3.sh header for the workaround.",
+                "ipfs add returned {} but local CID is {} for small file {}; \
+                 check IPFS version / config (expected raw-leaves CIDv1)",
                 actual,
-                ipfs_cid,
+                expected,
                 blob.display()
             );
         }
-    }
+        Some(actual)
+    } else if super::ipfs::which_ipfs() {
+        match super::ipfs::add_file_only_hash(&blob) {
+            Ok(cid) => Some(cid),
+            Err(e) => {
+                crate::log(format!(
+                    "warning: ipfs add --only-hash failed for {} ({:#}); \
+                     falling back to local CID for small files",
+                    blob.display(),
+                    e
+                ));
+                if sif_size <= SMALL_CID_LIMIT {
+                    Some(expected)
+                } else {
+                    None
+                }
+            }
+        }
+    } else if sif_size <= SMALL_CID_LIMIT {
+        Some(expected)
+    } else {
+        None
+    };
 
     let mut raw_labels = BTreeMap::new();
     for (k, v) in &labels.raw {
@@ -254,7 +276,7 @@ pub fn add_one(root: &RepoRoot, p: AddParams) -> Result<AddOutcome> {
         icon_mimetype: icon_mimetype_label,
         icon_size: icon_size_label,
         icon_filename: icon_filename.clone(),
-        ipfs_cid: Some(ipfs_cid.clone()),
+        ipfs_cid: ipfs_cid.clone(),
         raw_labels,
     };
     atomic_write(&meta_path, &serde_json::to_vec_pretty(&meta)?)?;
@@ -267,7 +289,7 @@ pub fn add_one(root: &RepoRoot, p: AddParams) -> Result<AddOutcome> {
         arch,
         sif_sha256: sif_sha,
         already_present: false,
-        ipfs_cid: Some(ipfs_cid),
+        ipfs_cid,
     })
 }
 
