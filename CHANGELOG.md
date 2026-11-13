@@ -4,6 +4,58 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+## [0.4.9] - 2026-11-14
+
+### Added
+
+- **`appspec repo pin`**: pin all SIF blobs in IPFS and fill missing
+  `ipfs_cid` in `meta.json`. For each package:
+  - if `ipfs_cid` is set: `ipfs pin add <cid>` (skips already-pinned);
+  - if `ipfs_cid` is `None` and blob exists: `ipfs add --pin` (raw CID
+    for ≤ 256 KB, dag-pb for larger), writes CID to `meta.json`;
+  - then `reindex` to propagate `ipfs_cid` into `index.json`.
+
+  This is the missing piece between `repo add` (local) and a
+  fully-published IPFS repository: without pinning, `pull --from ipns://`
+  fails because blobs are unreachable from the network.
+
+  Flags: `--dry-run`, `--root` / `--repo`.
+
+- **IPNS/IPFS read commands**: `repo ls`, `repo search`, `repo verify`
+  now accept `--root ipns://<name>` and `--root ipfs://<cid>`.
+  They resolve the IPNS name (or read the CID directly), `ipfs cat` the
+  index, and operate on it in memory. No local repo required.
+
+- **`--repo` alias for `--root`** in `repo {ls, search, show, verify, pin}`.
+
+### Changed
+
+- **`repo show` from `ipns://` / `ipfs://`** now fails with a clear
+  message pointing to `pull` / `ls` / `search`. The index is a single
+  file, not a directory tree, so per-package `meta.json` / `spec.appspec`
+  are not addressable over IPFS.
+
+- **`repo publish --ipns`** now preflights the index and prints warnings
+  when:
+  - N versions have no `ipfs_cid` → `pull --from ipns://` will fail for
+    them (fix: `appspec repo pin`);
+  - M versions have `ipfs_cid` but blob is not pinned → not reachable via
+    IPFS (fix: `appspec repo pin`);
+  - `ipfs` binary missing → cannot verify pinning state.
+
+  This makes the publish → pin → pull workflow explicit.
+
+- **`repo verify`** now uses the same index reader as `ls`/`search`,
+  unifying the code path. HTTP, IPFS, IPNS are handled identically; the
+  `--pubkey` requirement is the same for all remote origins.
+
+### Internal
+
+- `ipfs::is_pinned(cid)` — checks `ipfs pin ls --type=recursive <cid>`.
+- `commands::read_index_text_from(origin)` — single entry point for
+  reading `index.json` from any origin (HTTP / IPFS / IPNS / path).
+
+
 ## [0.4.8] - 2026-11-14
 
 ### Fixed

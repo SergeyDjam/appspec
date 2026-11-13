@@ -64,6 +64,8 @@ pub enum RepoCommand {
     ExportOci(commands::ExportOciArgs),
     /// Проверить подпись index.json
     Verify(commands::VerifyArgs),
+    /// Пиннить блобы в IPFS и заполнить отсутствующие ipfs_cid
+    Pin(commands::PinArgs),
     /// Управление токенами сервера
     #[command(subcommand)]
     Token(commands::TokenCommand),
@@ -95,6 +97,7 @@ pub fn run(cmd: RepoCommand) -> Result<i32> {
         RepoCommand::Resolve(a) => commands::resolve(a),
         RepoCommand::ExportOci(a) => commands::export_oci(a),
         RepoCommand::Verify(a) => commands::verify(a),
+        RepoCommand::Pin(a) => commands::pin_cmd(a),
         RepoCommand::Token(c) => commands::token(c),
         RepoCommand::MigrateConfig(a) => commands::migrate_config(a),
         RepoCommand::Server(c) => commands::server(c),
