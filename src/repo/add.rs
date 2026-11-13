@@ -141,6 +141,48 @@ pub fn add_one(root: &RepoRoot, p: AddParams) -> Result<AddOutcome> {
 
     // 7. packages/
     std::fs::create_dir_all(&pkg_dir)?;
+    // --- иконка (E-icon): base64 из SIF → packages/<n>/<v>/icon.<ext> ---
+    let icon_sha256_label = labels.get("org.appspec.icon.sha256").map(str::to_string);
+    let icon_mimetype_label = labels.get("org.appspec.icon.mimetype").map(str::to_string);
+    let icon_size_label = labels
+        .get("org.appspec.icon.size")
+        .and_then(|s| s.parse::<u64>().ok());
+    let icon_orig_filename = labels.get("org.appspec.icon.filename").map(str::to_string);
+
+    let mut icon_filename: Option<String> = None;
+    if let Some(b64) = labels.get("org.appspec.icon.content.base64") {
+        use base64::Engine as _;
+        match base64::engine::general_purpose::STANDARD.decode(b64) {
+            Ok(bytes) => {
+                let actual_sha = sha256_hex(&bytes);
+                let sha_ok = icon_sha256_label
+                    .as_deref()
+                    .map(|e| e == actual_sha)
+                    .unwrap_or(true);
+                if !sha_ok {
+                    crate::log(format!(
+                        "warning: icon sha256 mismatch in SIF labels (label={:?}, actual={}); пропускаю",
+                        icon_sha256_label, actual_sha
+                    ));
+                } else {
+                    let ext = icon_orig_filename
+                        .as_deref()
+                        .and_then(|n| n.rsplit_once('.').map(|(_, e)| e.to_ascii_lowercase()))
+                        .filter(|e| !e.is_empty() && e.len() <= 8)
+                        .unwrap_or_else(|| "png".to_string());
+                    let pkg_icon_name = format!("icon.{}", ext);
+                    atomic_write(&pkg_dir.join(&pkg_icon_name), &bytes)?;
+                    icon_filename = Some(pkg_icon_name);
+                }
+            }
+            Err(e) => {
+                crate::log(format!(
+                    "warning: cannot decode icon base64 from SIF labels: {}",
+                    e
+                ));
+            }
+        }
+    }
     atomic_write(&pkg_dir.join("spec.appspec"), &spec_bytes)?;
     atomic_write(&pkg_dir.join("sha256"), sif_sha.as_bytes())?;
 
@@ -208,6 +250,10 @@ pub fn add_one(root: &RepoRoot, p: AddParams) -> Result<AddOutcome> {
         requires: parse_json_array(labels.get("org.appspec.dependencies.requires")),
         provides: parse_json_array(labels.get("org.appspec.dependencies.provides")),
         conflicts: parse_json_array(labels.get("org.appspec.dependencies.conflicts")),
+        icon_sha256: icon_sha256_label.clone(),
+        icon_mimetype: icon_mimetype_label,
+        icon_size: icon_size_label,
+        icon_filename: icon_filename.clone(),
         ipfs_cid: Some(ipfs_cid.clone()),
         raw_labels,
     };

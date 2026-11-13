@@ -269,6 +269,10 @@ fn make_repo_with_demo_versions() -> (TempDir, PathBuf) {
                 generator: "appspec test".into(),
                 base_digest: None,
                 tags: vec![],
+                icon_sha256: None,
+                icon_mimetype: None,
+                icon_size: None,
+                icon_filename: None,
                 requires: vec![],
                 provides: vec![],
                 ipfs_cid: None,
@@ -305,6 +309,10 @@ fn make_repo_with_demo_versions() -> (TempDir, PathBuf) {
             conflicts: vec![],
             ipfs_cid: None,
             raw_labels: Default::default(),
+            icon_sha256: None,
+            icon_mimetype: None,
+            icon_size: None,
+            icon_filename: None,
         };
         fs::write(
             pd.join("meta.json"),

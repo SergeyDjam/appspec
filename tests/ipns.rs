@@ -100,6 +100,17 @@ esac
     fn set_env(&self) {
         std::env::set_var("APPSPEC_IPFS", &self.bin);
         std::env::set_var("MOCK_IPFS_LOG", &self.log);
+        // Reset mock state — env process-global, Mutex сериализует только
+        // выполнение. Без сброса MOCK_IPFS_FAIL / MOCK_IPFS_CID /
+        // MOCK_IPNS_NAME / MOCK_IPFS_CAT_* протекают между тестами:
+        // pull_falls_back_to_path_on_ipns_failure оставляет MOCK_IPFS_FAIL=1,
+        // следующий publish_* падает на `ipfs add` вместо ожидаемой
+        // проверки `[ipfs].ipns_key`.
+        std::env::remove_var("MOCK_IPFS_FAIL");
+        std::env::remove_var("MOCK_IPFS_CID");
+        std::env::remove_var("MOCK_IPNS_NAME");
+        std::env::remove_var("MOCK_IPFS_CAT_DIR");
+        std::env::remove_var("MOCK_IPFS_CAT_FILE");
     }
 
     fn read_log(&self) -> String {
@@ -426,6 +437,10 @@ fn make_repo_with_blob(root: &Path, name: &str, ver_key: &str, blob_bytes: &[u8]
         conflicts: vec![],
         ipfs_cid: None,
         raw_labels: Default::default(),
+        icon_sha256: None,
+        icon_mimetype: None,
+        icon_size: None,
+        icon_filename: None,
     };
     let pd = root.join("packages").join(name).join(ver_key);
     fs::create_dir_all(&pd).unwrap();
@@ -471,6 +486,10 @@ fn make_repo_with_blob(root: &Path, name: &str, ver_key: &str, blob_bytes: &[u8]
             generator: "appspec test".into(),
             base_digest: None,
             tags: vec![],
+            icon_sha256: None,
+            icon_mimetype: None,
+            icon_size: None,
+            icon_filename: None,
             requires: vec![],
             provides: vec![],
             ipfs_cid: None,
@@ -585,6 +604,10 @@ fn pull_ipns_succeeds_with_mock() {
             generator: "test".into(),
             base_digest: None,
             tags: vec![],
+            icon_sha256: None,
+            icon_mimetype: None,
+            icon_size: None,
+            icon_filename: None,
             requires: vec![],
             provides: vec![],
             ipfs_cid: Some(blob_cid.into()),

@@ -13,4 +13,6 @@ examples/Dockerfile*
 examples/*.img
 examples/repo/*
 examples/icons/*
+*.bak
+*.bak.*
 project.txt

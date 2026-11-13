@@ -4,6 +4,39 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+## [0.4.7] - 2026-11-13
+
+### Added
+
+- **Icons in SIF (E-icon)**: `[install].icon` is embedded into the SIF
+  as base64 labels at build time:
+  `org.appspec.icon.filename`, `.mimetype`, `.sha256`, `.size`,
+  `.content.base64`. Allows `appspec install` from a repository
+  (where the icon file itself is not present on disk).
+
+- **Icon metadata in repo**: `repo add` extracts the icon from SIF
+  labels, saves it as `packages/<name>/<ver>/icon.<ext>`, and records
+  `icon_sha256`, `icon_mimetype`, `icon_size`, `icon_filename` in
+  `meta.json` and `index.json`. `repo pull` (HTTP / path) fetches
+  the icon alongside `spec.appspec`.
+
+- **Multi-size icons on install**: `appspec install` resizes PNG/JPEG
+  icons to 16/22/24/32/48/64/128/256 px under
+  `<icon_dir>/<N>x<N>/apps/<name>.png`. SVG is placed into
+  `<icon_dir>/scalable/apps/<name>.svg`. Icon source resolution:
+  SIF labels first, then `spec_dir/[install].icon` (backward compat).
+
+- **New dependency**: `image = { version = "0.25", default-features = false,
+  features = ["png", "jpeg"] }`.
+
+### Changed
+
+- `[install].icon` in `.appspec` is now treated as a **build-time
+  source only**. After `appspec install`, the icon lives in
+  `~/.local/share/icons/hicolor/` (or `/usr/share/icons/hicolor/`
+  for global scope) and is embedded in the SIF.
+
+
 ## [0.4.6] - 2026-11-12
 
 ### Fixed

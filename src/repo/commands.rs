@@ -1339,12 +1339,6 @@ pub fn publish_index(a: PublishIndexArgs) -> Result<i32> {
     if !index_path.is_file() {
         bail!("index.json missing at {}", index_path.display());
     }
-    let cid = super::ipfs::add_file(&index_path, a.pin)?;
-    super::ipfs::validate_cid(&cid)?;
-
-    // Локальный кеш CID — для отладки и скриптов.
-    let cid_path = root.path.join("ipfs-index.cid");
-    std::fs::write(&cid_path, format!("{}\n", cid))?;
 
     // IPNS: явно (--ipns), явно выключено (--no-ipns), либо default
     // из конфига (ipns_key.is_some()).
@@ -1356,12 +1350,33 @@ pub fn publish_index(a: PublishIndexArgs) -> Result<i32> {
         root.config.ipfs.ipns_key.is_some()
     };
 
+    // Fail-fast: --ipns требует [ipfs].ipns_key. Проверяем ДО ipfs add,
+    // чтобы не делать side-effect (пиннинг, запись <root>/ipfs-index.cid,
+    // обновление server config) при заведомо провальной команде.
+    // Побочный эффект: тест publish_without_ipns_key_fails_when_forced
+    // становится детерминированным — ошибка не зависит от состояния
+    // mock ipfs.
+    if want_ipns && root.config.ipfs.ipns_key.is_none() {
+        bail!(
+            "`--ipns` requires `[ipfs].ipns_key` in server config; \
+             run `ipfs key gen <name>` and add `[ipfs].ipns_key = \"<name>\"`"
+        );
+    }
+
+    let cid = super::ipfs::add_file(&index_path, a.pin)?;
+    super::ipfs::validate_cid(&cid)?;
+
+    // Локальный кеш CID — для отладки и скриптов.
+    let cid_path = root.path.join("ipfs-index.cid");
+    std::fs::write(&cid_path, format!("{}\n", cid))?;
+
     if want_ipns {
-        let key = root.config.ipfs.ipns_key.as_ref().ok_or_else(|| {
-            anyhow!(
-                "`--ipns` requires `[ipfs].ipns_key` in server config;                  run `ipfs key gen <name>` and add `[ipfs].ipns_key = \"<name>\"`"
-            )
-        })?;
+        let key = root
+            .config
+            .ipfs
+            .ipns_key
+            .as_ref()
+            .expect("validated above: want_ipns => ipns_key is Some");
         let ipns_name = super::ipfs::name_publish(key, &cid)
             .with_context(|| format!("ipfs name publish (key={})", key))?;
 
@@ -1387,7 +1402,8 @@ pub fn publish_index(a: PublishIndexArgs) -> Result<i32> {
             },
             None => {
                 eprintln!(
-                    "warning: no server config path;                      [ipfs].ipns_name is not persisted (ipns={}, index={})",
+                    "warning: no server config path; \
+                     [ipfs].ipns_name is not persisted (ipns={}, index={})",
                     ipns_name, cid
                 );
             }
