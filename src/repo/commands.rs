@@ -512,6 +512,7 @@ pub fn reindex(a: ReindexArgs) -> Result<i32> {
 }
 
 fn backfill_ipfs_cid(root: &layout::RepoRoot) -> Result<usize> {
+    const SMALL_CID_LIMIT: u64 = 262144;
     let mut count = 0usize;
     let pkg_root = root.packages_dir();
     if !pkg_root.exists() {
@@ -533,17 +534,29 @@ fn backfill_ipfs_cid(root: &layout::RepoRoot) -> Result<usize> {
             }
             let text = std::fs::read_to_string(&meta_path)?;
             let mut meta: meta::MetaV1 = serde_json::from_str(&text)?;
-            // Skip only if CID is present AND raw. Legacy dag-pb
-            // (from 0.4.3 --pin-ipfs on big SIF) is rewritten to raw.
-            if meta
-                .ipfs_cid
-                .as_deref()
-                .is_some_and(|c| c.starts_with("bafkrei"))
-            {
+            if meta.ipfs_cid.is_some() {
                 continue;
             }
-            let cid = util::cid_v1_from_sha256(&meta.sif_sha256)
-                .with_context(|| format!("computing CID for {}", meta_path.display()))?;
+            let new_cid: Option<String> = if super::ipfs::which_ipfs() {
+                let blob = crate::repo::util::blob_path(&root.path, &meta.sif_sha256);
+                if blob.is_file() {
+                    super::ipfs::add_file_only_hash(&blob).ok()
+                } else {
+                    None
+                }
+            } else if meta.sif_size <= SMALL_CID_LIMIT {
+                util::cid_v1_from_sha256(&meta.sif_sha256).ok()
+            } else {
+                None
+            };
+            let Some(cid) = new_cid else {
+                eprintln!(
+                    "warning: cannot compute ipfs_cid for {} \
+                     (need `ipfs` binary or file <= 256 KB)",
+                    meta_path.display()
+                );
+                continue;
+            };
             meta.ipfs_cid = Some(cid);
             util::atomic_write(&meta_path, &serde_json::to_vec_pretty(&meta)?)?;
             count += 1;
