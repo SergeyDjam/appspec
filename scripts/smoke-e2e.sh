@@ -223,15 +223,15 @@ printf '%s\n' "$*" >> "$log"
 
 case "$1" in
   add)
-    echo "${MOCK_IPFS_CID:-bafkreismokedefault}"
+    echo "${MOCK_IPFS_CID:-bafkreimockdefaultaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa}"
     ;;
   name)
     case "$2" in
       publish)
-        echo "Published to ${MOCK_IPNS_NAME:-k51smokedefault}: /ipfs/${MOCK_IPFS_CID:-bafkreismokedefault}"
+        echo "Published to ${MOCK_IPNS_NAME:-k51smokedefault}: /ipfs/${MOCK_IPFS_CID:-bafkreimockdefaultaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa}"
         ;;
       resolve)
-        echo "/ipfs/${MOCK_IPFS_CID:-bafkreismokedefault}"
+        echo "/ipfs/${MOCK_IPFS_CID:-bafkreimockdefaultaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa}"
         ;;
       *)
         echo "mock ipfs: unknown name subcommand: $2" >&2
@@ -249,9 +249,8 @@ case "$1" in
 esac
 MOCK_IPFS
 chmod +x "$MOCK_IPFS_DIR/ipfs"
-export APPSPEC_IPFS="$MOCK_IPFS_DIR/ipfs"
 export MOCK_IPFS_LOG="$TMP/mock-ipfs.log"
-export MOCK_IPFS_CID="bafkreismoke1234567890"
+export MOCK_IPFS_CID="bafkreismoketestaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 export MOCK_IPNS_NAME="k51smoketestname123"
 ok "mock ipfs" "$MOCK_IPFS_DIR/ipfs"
 
@@ -398,6 +397,11 @@ ok "dry-run" "commands printed"
 
 # ===========================================================================
 
+# Enable mock ipfs for publish/resolve steps only (steps 10-11).
+# Step 1 `repo add` runs without APPSPEC_IPFS so `ipfs_cid` is derived
+# from sha256 (real raw CID), passing `repo check` I2.
+export APPSPEC_IPFS="$MOCK_IPFS_DIR/ipfs"
+
 step "10/11  repo publish --ipns"
 SC10="$SC5"
 # sc10_v2: ensure ipns_key under [ipfs]. `server init` writes [ipfs]
@@ -418,7 +422,7 @@ if ! "$APPSPEC" repo publish --ipns --config "$SC10" \
     cat "$TMP/publish.err" >&2
     fail "repo publish --ipns"
 fi
-grep -qF "bafkreismoke1234567890" "$TMP/publish.out" \
+grep -qF "bafkreismoketestaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" "$TMP/publish.out" \
     || fail "publish: CID not in stdout"
 grep -qF "k51smoketestname123" "$TMP/publish.err" \
     || fail "publish: ipns_name not in stderr"
@@ -434,7 +438,7 @@ step "11/11  repo resolve <ipns_name>"
 : > "$MOCK_IPFS_LOG"
 RESOLVED=$("$APPSPEC" repo resolve "k51smoketestname123") \
     || fail "repo resolve"
-grep -qF "bafkreismoke1234567890" <<< "$RESOLVED" \
+grep -qF "bafkreismoketestaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" <<< "$RESOLVED" \
     || fail "resolve: expected CID in output, got: $RESOLVED"
 grep -qF "name resolve k51smoketestname123" "$MOCK_IPFS_LOG" \
     || fail "resolve: mock ipfs not called with expected name"

@@ -177,7 +177,7 @@ fn profile_origin(p: &super::RepoProfile) -> Result<String> {
     bail!("profile `{}`: no source", p.name)
 }
 
-fn profile_sources(p: &super::RepoProfile) -> Result<Vec<String>> {
+pub(crate) fn profile_sources(p: &super::RepoProfile) -> Result<Vec<String>> {
     let mut v = Vec::new();
     if let Some(ipns) = &p.source.ipns {
         v.push(format!("ipns://{}", ipns));
@@ -196,7 +196,7 @@ fn profile_sources(p: &super::RepoProfile) -> Result<Vec<String>> {
     }
     Ok(v)
 }
-fn read_index_text_from(origin: &str) -> Result<String> {
+pub(crate) fn read_index_text_from(origin: &str) -> Result<String> {
     if is_http_url(origin) {
         eprintln!("\x1b[2m[appspec] repo: {}\x1b[0m", origin);
         let url = format!("{}/index.json", origin.trim_end_matches('/'));
@@ -1346,11 +1346,12 @@ pub fn verify(a: VerifyArgs) -> Result<i32> {
 pub struct PublishIndexArgs {
     #[arg(long)]
     pub pin: bool,
-    /// Опубликовать по IPNS (`ipfs name publish`). Требует `[ipfs].ipns_key`
-    /// в server config. По умолчанию включается, если `ipns_key` задан.
+    /// Auto-pin all package blobs before publishing (default).
+    /// Use --no-pin to publish the index only.
+    #[arg(long)]
+    pub no_pin: bool,
     #[arg(long, conflicts_with = "no_ipns")]
     pub ipns: bool,
-    /// Не публиковать по IPNS, даже если `[ipfs].ipns_key` задан.
     #[arg(long, conflicts_with = "ipns")]
     pub no_ipns: bool,
     #[arg(long)]
@@ -1553,6 +1554,79 @@ pub fn publish_index(a: PublishIndexArgs) -> Result<i32> {
                     );
                 }
             }
+        }
+    }
+
+    // Auto-pin: add missing CIDs and pin all package blobs (0.5.0).
+    if !a.no_pin && super::ipfs::which_ipfs() {
+        let pkg_root = root.packages_dir();
+        let mut changed = false;
+        let mut failed = 0usize;
+        if pkg_root.exists() {
+            for name_entry in std::fs::read_dir(&pkg_root)? {
+                let name_entry = name_entry?;
+                if !name_entry.file_type()?.is_dir() {
+                    continue;
+                }
+                for ver_entry in std::fs::read_dir(name_entry.path())? {
+                    let ver_entry = ver_entry?;
+                    if !ver_entry.file_type()?.is_dir() {
+                        continue;
+                    }
+                    let meta_path = ver_entry.path().join("meta.json");
+                    if !meta_path.is_file() {
+                        continue;
+                    }
+                    let mut meta: meta::MetaV1 =
+                        serde_json::from_str(&std::fs::read_to_string(&meta_path)?)?;
+                    let cid = if let Some(c) = &meta.ipfs_cid {
+                        c.clone()
+                    } else {
+                        let blob = util::blob_path(&root.path, &meta.sif_sha256);
+                        if !blob.is_file() {
+                            eprintln!(
+                                "warning: auto-pin: blob missing for {}: {}",
+                                meta_path.display(),
+                                blob.display()
+                            );
+                            continue;
+                        }
+                        match super::ipfs::add_file(&blob, true) {
+                            Ok(c) => {
+                                meta.ipfs_cid = Some(c.clone());
+                                util::atomic_write(&meta_path, &serde_json::to_vec_pretty(&meta)?)?;
+                                changed = true;
+                                c
+                            }
+                            Err(e) => {
+                                eprintln!("error: auto-pin add {} failed: {:#}", blob.display(), e);
+                                failed += 1;
+                                continue;
+                            }
+                        }
+                    };
+                    if !super::ipfs::is_pinned(&cid).unwrap_or(false) {
+                        match super::ipfs::pin(&cid) {
+                            Ok(()) => changed = true,
+                            Err(e) => {
+                                eprintln!("error: auto-pin {} failed: {:#}", cid, e);
+                                failed += 1;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        if changed {
+            let idx = index_build::rebuild_all(&root)?;
+            eprintln!(
+                "info: index rebuilt ({} packages); if previously signed, \
+                 signature is now invalid. Run `appspec repo sign` if needed.",
+                idx.packages.len()
+            );
+        }
+        if failed > 0 {
+            eprintln!("warning: {} pin(s) failed during auto-pin", failed);
         }
     }
 

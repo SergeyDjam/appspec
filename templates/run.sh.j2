@@ -3,7 +3,9 @@
 set -eu
 
 SPEC_DIR="$(cd "$(dirname "$0")" && pwd)"
-SIF_FILE="$SPEC_DIR/{{ sif_file }}"
+{% if sif_is_absolute %}SIF_FILE="{{ sif_file }}"
+{%- else %}SIF_FILE="$SPEC_DIR/{{ sif_file }}"
+{%- endif %}
 IMAGE_NAME="{{ image_name }}"
 INSTANCE_NAME="{{ pkg.name }}"
 {% if runtime.vars %}

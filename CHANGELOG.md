@@ -4,6 +4,43 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+## [0.5.0] - 2026-11-14
+
+### Added
+
+- **`appspec run <package>[:<version>[-<release>]]`**: run a package
+  directly from a repository, using `index.json` as the source of truth.
+  Version resolution:
+  - `foo` or `foo:latest` — max semver, max release within;
+  - `foo:2.2.0` — exact version, **max release** among `2.2.0-N`;
+  - `foo:2.2.0-1` — exact version+release.
+  Source fallback: local cache → `--from` → `--profile` → `$APPSPEC_REPO`
+  → default profile. Flags: `--from`, `--profile`, `--root`,
+  `--trusted-key`, `--allow-unsigned`, `--dry-run`.
+  Files still work: `appspec run ./foo.appspec`.
+
+- **`repo publish --ipns` auto-pin**: before publishing the index, pins
+  every blob in `packages/` (adding `ipfs_cid` if missing via
+  `ipfs add --pin`, then `ipfs pin add` for existing CID). After auto-pin
+  `index.json` is rebuilt; if it was signed, the signature becomes
+  invalid and a warning is printed (rerun `appspec repo sign`).
+
+### Changed
+
+- **`publish --ipns`** default behaviour includes auto-pin. Use
+  `--no-pin` for the previous behaviour (index only, no blob pinning).
+
+- **`appspec run`** now accepts a package name (no path separator,
+  no `.appspec` suffix) in addition to file paths. File paths must be
+  given as `./foo.appspec`, `/abs/foo.appspec`, or `foo.appspec`.
+
+### Internal
+
+- `templates::render_launcher_abs(spec, sif_path)` — renders `run.sh`
+  with an absolute SIF path (used by `run <package>`).
+- `repo::run_package::{parse_package_ref, pick_version}` — pure helpers.
+- `load_spec_from_text` — extracted from `load_spec` for reuse.
+
 ## [0.4.9] - 2026-11-14
 
 ### Added

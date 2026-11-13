@@ -43,7 +43,30 @@ enum Cmd {
     },
 
     /// Запустить: для обычного spec — SIF-лаунчер, для bundle — собранный bundle-лаунчер
-    Run { spec: PathBuf },
+    /// Запустить пакет из репозитория или локальный spec/bundle.
+    /// Пакет: `foo`, `foo:1.0`, `foo:1.0-1`. Файл: `./foo.appspec`.
+    Run {
+        /// Имя пакета или путь к `.appspec`
+        spec: String,
+        /// Источник: PATH | http:// | ipns:// | ipfs:// | oci://
+        #[arg(long)]
+        from: Option<String>,
+        /// Профиль из repos.toml
+        #[arg(long)]
+        profile: Option<String>,
+        /// Локальный репозиторий (sink)
+        #[arg(long)]
+        root: Option<PathBuf>,
+        /// ed25519 pubkey для проверки index.json (repeatable)
+        #[arg(long = "trusted-key")]
+        trusted_keys: Vec<PathBuf>,
+        /// Принять неподписанный index.json
+        #[arg(long)]
+        allow_unsigned: bool,
+        /// Только подготовить (pull + launcher), не запускать
+        #[arg(long)]
+        dry_run: bool,
+    },
 
     /// Остановить instance, оставленный `appspec run` в режиме persist
     Stop { spec: PathBuf },
@@ -126,11 +149,31 @@ fn main() {
     let result: Result<i32> = match cli.cmd {
         Cmd::Gen { spec } => cmd_gen(&spec).map(|_| 0),
         Cmd::Build { spec, force } => cmd_build(&spec, force).map(|_| 0),
-        Cmd::Run { spec } => cmd_run(&spec).map(|_| 0),
+        Cmd::Run {
+            spec,
+            from,
+            profile,
+            root,
+            trusted_keys,
+            allow_unsigned,
+            dry_run,
+        } => cmd_run(
+            &spec,
+            from.as_deref(),
+            profile.as_deref(),
+            root.as_deref(),
+            &trusted_keys,
+            allow_unsigned,
+            dry_run,
+        )
+        .map(|_| 0),
         Cmd::Stop { spec } => cmd_stop(&spec).map(|_| 0),
-        Cmd::All { spec, force } => cmd_build(&spec, force)
-            .and_then(|_| cmd_run(&spec))
-            .map(|_| 0),
+        Cmd::All { spec, force } => {
+            let s = spec.display().to_string();
+            cmd_build(&spec, force)
+                .and_then(|_| cmd_run(&s, None, None, None, &[], false, false))
+                .map(|_| 0)
+        }
         Cmd::Clean { spec } => cmd_clean(&spec).map(|_| 0),
 
         Cmd::Install {
@@ -213,23 +256,14 @@ pub(crate) fn log(msg: impl AsRef<str>) {
 pub(crate) fn load_spec(path: &Path) -> Result<Spec> {
     let text =
         fs::read_to_string(path).with_context(|| format!("reading spec {}", path.display()))?;
+    load_spec_from_text(&text).with_context(|| format!("in {}", path.display()))
+}
 
-    let mut value: toml::Value =
-        toml::from_str(&text).with_context(|| format!("parsing spec {}", path.display()))?;
-
-    macros::expand_all(&mut value)
-        .with_context(|| format!("expanding macros in {}", path.display()))?;
-
-    let mut spec: Spec = value
-        .try_into()
-        .with_context(|| format!("converting spec {}", path.display()))?;
-
-    // §8.1/§8.2: валидация [dependencies] и [build].base_digest.
-    // ДОЛЖНА вызываться до qualify_base_image, чтобы невалидный digest
-    // не попал в `base` и не дал невнятную ошибку движка.
-    spec.validate()
-        .with_context(|| format!("validating spec {}", path.display()))?;
-
+pub(crate) fn load_spec_from_text(text: &str) -> Result<Spec> {
+    let mut value: toml::Value = toml::from_str(text).context("parsing spec")?;
+    macros::expand_all(&mut value).context("expanding macros")?;
+    let mut spec: Spec = value.try_into().context("converting spec")?;
+    spec.validate().context("validating spec")?;
     spec.build.qualify_base_image();
     Ok(spec)
 }
@@ -350,7 +384,7 @@ fn run(args: &[&str]) -> Result<()> {
 }
 
 #[cfg(unix)]
-fn set_exec(p: &Path) -> Result<()> {
+pub(crate) fn set_exec(p: &Path) -> Result<()> {
     use std::os::unix::fs::PermissionsExt;
     let mut perm = fs::metadata(p)?.permissions();
     perm.set_mode(0o755);
@@ -653,11 +687,266 @@ fn cmd_build_bundle(bundle_path: &Path) -> Result<()> {
     Ok(())
 }
 
-fn cmd_run(spec_path: &Path) -> Result<()> {
+fn is_package_name(s: &str) -> bool {
+    if s.is_empty() {
+        return false;
+    }
+    if s.contains('/') || s.starts_with('.') || s.starts_with('~') || s.ends_with(".appspec") {
+        return false;
+    }
+    true
+}
+
+fn cmd_run(
+    spec: &str,
+    from: Option<&str>,
+    profile: Option<&str>,
+    root: Option<&Path>,
+    trusted_keys: &[PathBuf],
+    allow_unsigned: bool,
+    dry_run: bool,
+) -> Result<()> {
+    if is_package_name(spec) {
+        return cmd_run_package(
+            spec,
+            from,
+            profile,
+            root,
+            trusted_keys,
+            allow_unsigned,
+            dry_run,
+        );
+    }
+    if dry_run {
+        bail!("--dry-run applies to package names, not file paths");
+    }
+    let spec_path = Path::new(spec);
     match spec_kind(spec_path)? {
         SpecKind::App => cmd_run_app(spec_path),
         SpecKind::Bundle => cmd_run_bundle(spec_path),
     }
+}
+
+fn run_cache_dir() -> PathBuf {
+    if let Ok(v) = std::env::var("XDG_CACHE_HOME") {
+        if !v.is_empty() {
+            return PathBuf::from(v).join("appspec/run");
+        }
+    }
+    if let Ok(h) = std::env::var("HOME") {
+        if !h.is_empty() {
+            return PathBuf::from(h).join(".cache/appspec/run");
+        }
+    }
+    PathBuf::from("/tmp/appspec-run")
+}
+
+fn open_local_repo_for_run(root: Option<&Path>) -> Result<crate::repo::layout::RepoRoot> {
+    let root_path = match root {
+        Some(p) => p.to_path_buf(),
+        None => match std::env::var_os("APPSPEC_REPO") {
+            Some(v) => {
+                let s = v.to_string_lossy().to_string();
+                if s.is_empty() || s.contains("://") {
+                    crate::repo::default_root()
+                } else {
+                    PathBuf::from(s)
+                }
+            }
+            None => crate::repo::default_root(),
+        },
+    };
+    if root_path.join("index.json").is_file() {
+        return crate::repo::layout::RepoRoot::open(&root_path);
+    }
+    // bootstrap empty repo
+    fs::create_dir_all(root_path.join("blobs/sha256"))?;
+    fs::create_dir_all(root_path.join("packages"))?;
+    fs::create_dir_all(root_path.join("refs"))?;
+    fs::create_dir_all(root_path.join("index"))?;
+    let _ = fs::write(root_path.join("index/.keep"), b"");
+    let empty = crate::repo::meta::IndexV1 {
+        schema: 1,
+        repo: "local/auto".into(),
+        updated: crate::repo::util::now_iso8601(),
+        generator: format!("appspec {}", env!("CARGO_PKG_VERSION")),
+        signature: String::new(),
+        packages: Default::default(),
+    };
+    fs::write(
+        root_path.join("index.json"),
+        serde_json::to_vec_pretty(&empty)?,
+    )?;
+    crate::repo::layout::RepoRoot::open(&root_path)
+}
+
+fn resolve_run_sources(from: Option<&str>, profile: Option<&str>) -> Result<Vec<String>> {
+    if let Some(f) = from {
+        return Ok(vec![f.to_string()]);
+    }
+    if let Some(pname) = profile {
+        let (_, cc) = crate::repo::config::find_client_config(None)
+            .with_context(|| format!("loading client config for profile `{}`", pname))?;
+        let p = cc
+            .profile(pname)
+            .ok_or_else(|| anyhow!("unknown profile `{}`", pname))?;
+        return crate::repo::commands::profile_sources(p);
+    }
+    if let Ok(v) = std::env::var("APPSPEC_REPO") {
+        if !v.is_empty() {
+            if v.starts_with("http://")
+                || v.starts_with("https://")
+                || v.starts_with("ipfs://")
+                || v.starts_with("ipns://")
+            {
+                return Ok(vec![v]);
+            }
+            if let Ok((_, cc)) = crate::repo::config::find_client_config(None) {
+                if let Some(p) = cc.profile(&v) {
+                    return crate::repo::commands::profile_sources(p);
+                }
+            }
+        }
+    }
+    if let Ok((_, cc)) = crate::repo::config::find_client_config(None) {
+        if let Some(def) = &cc.default {
+            if let Some(p) = cc.profile(def) {
+                return crate::repo::commands::profile_sources(p);
+            }
+        }
+    }
+    Ok(Vec::new())
+}
+
+fn cmd_run_package(
+    target: &str,
+    from: Option<&str>,
+    profile: Option<&str>,
+    root: Option<&Path>,
+    trusted_keys: &[PathBuf],
+    allow_unsigned: bool,
+    dry_run: bool,
+) -> Result<()> {
+    let (name, ver_spec) = crate::repo::run_package::parse_package_ref(target)?;
+    log(format!("run: package={} ver_spec={:?}", name, ver_spec));
+
+    let local_root = open_local_repo_for_run(root)?;
+
+    // 1. try local index
+    let mut resolved: Option<(String, crate::repo::meta::IndexVersion, String)> = None;
+    if local_root.index_path().is_file() {
+        if let Ok(text) = fs::read_to_string(local_root.index_path()) {
+            if let Ok(idx) = serde_json::from_str::<crate::repo::meta::IndexV1>(&text) {
+                if let Ok((k, v)) =
+                    crate::repo::run_package::pick_version(&idx, &name, ver_spec.as_deref())
+                {
+                    resolved = Some((k.clone(), v.clone(), local_root.path.display().to_string()));
+                }
+            }
+        }
+    }
+
+    // 2. try remote sources
+    if resolved.is_none() {
+        let sources = resolve_run_sources(from, profile)?;
+        for src in &sources {
+            if let Ok(text) = crate::repo::commands::read_index_text_from(src) {
+                if let Ok(idx) = serde_json::from_str::<crate::repo::meta::IndexV1>(&text) {
+                    if let Ok((k, v)) =
+                        crate::repo::run_package::pick_version(&idx, &name, ver_spec.as_deref())
+                    {
+                        resolved = Some((k.clone(), v.clone(), src.clone()));
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    let (ver_key, ver, origin) = resolved.ok_or_else(|| {
+        anyhow!(
+            "package `{}` not found (local={}, or in remote sources)",
+            name,
+            local_root.path.display()
+        )
+    })?;
+    log(format!(
+        "resolved: {}:{} (sha256={}, ipfs_cid={})",
+        name,
+        ver_key,
+        ver.sif_sha256.get(..12).unwrap_or(&ver.sif_sha256),
+        ver.ipfs_cid.as_deref().unwrap_or("<none>")
+    ));
+
+    // 3. pull if blob missing
+    let blob = local_root
+        .path
+        .join("blobs/sha256")
+        .join(ver.sif_sha256.get(..2).unwrap_or("00"))
+        .join(ver.sif_sha256.get(2..).unwrap_or(""));
+    let pkg_dir = local_root.packages_dir().join(&name).join(&ver_key);
+
+    let cached = blob.is_file() && pkg_dir.is_dir();
+    if !cached {
+        log(format!("pull {}:{} from {}", name, ver_key, origin));
+        let opts = crate::repo::pull::PullOpts {
+            sources: vec![origin.clone()],
+            via: None,
+            spec_only: false,
+            sif_out: None,
+            trusted_key: trusted_keys.first().cloned(),
+            allow_unsigned,
+        };
+        crate::repo::pull::pull(&local_root, &format!("{}:{}", name, ver_key), opts)?;
+    } else {
+        log(format!("cache hit: {}", blob.display()));
+    }
+    if !blob.is_file() {
+        bail!("blob missing after pull: {}", blob.display());
+    }
+
+    // 4. resolve spec
+    let spec_path = pkg_dir.join("spec.appspec");
+    let spec = if spec_path.is_file() {
+        crate::load_spec(&spec_path)?
+    } else {
+        log("spec.appspec not in cache; loading from SIF labels");
+        let labels = crate::repo::inspect::inspect(&blob)?;
+        let b64 = labels
+            .get("org.appspec.spec.content.base64")
+            .ok_or_else(|| anyhow!("SIF has no org.appspec.spec.content.base64 label"))?;
+        use base64::Engine as _;
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(b64)
+            .context("decoding SIF spec label")?;
+        let text = std::str::from_utf8(&bytes).context("spec label is not UTF-8")?;
+        crate::load_spec_from_text(text)?
+    };
+
+    // 5. render launcher
+    let launcher_text = templates::render_launcher_abs(&spec, &blob)?;
+    let run_dir = run_cache_dir();
+    fs::create_dir_all(&run_dir)?;
+    let safe_ver = ver_key.replace('/', "_");
+    let launcher_path = run_dir.join(format!("run.{}.{}.sh", name, safe_ver));
+    fs::write(&launcher_path, &launcher_text)?;
+    set_exec(&launcher_path)?;
+    log(format!("launcher: {}", launcher_path.display()));
+
+    if dry_run {
+        log("dry-run: not executing");
+        return Ok(());
+    }
+
+    log(format!("Running {}", launcher_path.display()));
+    let status = Command::new("/bin/sh")
+        .arg(&launcher_path)
+        .status()
+        .context("failed to spawn launcher")?;
+    if !status.success() {
+        bail!("launcher вернул ошибку");
+    }
+    Ok(())
 }
 
 fn cmd_run_app(spec_path: &Path) -> Result<()> {
