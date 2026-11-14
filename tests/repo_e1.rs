@@ -445,6 +445,10 @@ fn gc_dry_run_does_not_remove() {
 fn uninitialized_repo_yields_clear_error() {
     let tmp = TempDir::new().unwrap();
     let root = tmp.path().join("nope");
+    // test setup: existing but empty dir (uninitialized repo).
+    // 0.5.3: RepoRoot::open now distinguishes "dir not found" (missing path)
+    // vs "repository not initialized" (empty dir). Test intent is the latter.
+    fs::create_dir_all(&root).unwrap();
     appspec()
         .args(["repo", "ls", "--root", root.to_str().unwrap()])
         .assert()

@@ -4,6 +4,40 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+## [0.5.3] - 2026-11-15
+
+### Fixed
+
+- **`repo pin --dht` fetches from network for blobs that are actually on
+  disk.** `pin_one` for `ipfs_cid = Some` never checked the blob file.
+  After `repo add` without `--pin-ipfs` (0.4.8+), `ipfs_cid` is computed
+  via `add_file_only_hash` (`--only-hash`, no store). Blob file exists in
+  `blobs/sha256/<sha>`; block is not in the IPFS blockstore. `pin_one`
+  went `is_local_block → false → SKIP` (or DHT timeout with `--dht`).
+
+  Now: for `ipfs_cid = Some`, blob file exists → `ipfs add --pin <file>`
+  (fast local, verifies CID matches `meta.ipfs_cid`). Only if file is
+  missing → `is_local_block` / DHT.
+
+- **`repo pin` was slow on large repos** — N × `is_pinned` (5s each).
+  Now: single batched `ipfs pin ls --type=recursive` → HashSet; per-package
+  check is O(1).
+
+- **`RepoRoot::open` misleading error**: "missing index.json" for a
+  non-existent directory (wrong cwd or `--root` typo). Now: "repository
+  directory not found" + hints (resolved cwd path, server config `[repo].root`).
+
+### Added
+
+- **`ipfs::list_pinned()`** — one batched `ipfs pin ls --type=recursive`,
+  30s timeout, returns `HashSet<String>`.
+
+### Changed
+
+- **`repo pin` summary** — `added` counter now also counts `add --pin`
+  for `ipfs_cid = Some` + blob file (previously only `ipfs_cid = None`).
+
+
 ## [0.5.2] - 2026-11-15
 
 ### Added
