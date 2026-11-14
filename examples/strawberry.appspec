@@ -224,10 +224,10 @@ mime_types    = ["audio/mpeg", "audio/flac", "audio/ogg", "audio/x-wav"]
 comment       = "Music player and organizer"
 wm_class      = "strawberry"
 
-extra_files = [
-    { from = "icons/strawberry-32.png",  to = "{{icons}}/32x32/apps/strawberry.png" },
-    { from = "icons/strawberry-128.png", to = "{{icons}}/128x128/apps/strawberry.png" },
-]
+#extra_files = [
+#    { from = "icons/strawberry-32.png",  to = "{{icons}}/32x32/apps/strawberry.png" },
+#    { from = "icons/strawberry-128.png", to = "{{icons}}/128x128/apps/strawberry.png" },
+#]
 
 [install.global]
 sif_dir   = "/opt/appspec/strawberry"

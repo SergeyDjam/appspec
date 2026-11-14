@@ -1305,6 +1305,12 @@ pub struct PinArgs {
     /// Show what would be done without changing anything
     #[arg(long)]
     pub dry_run: bool,
+    /// Suppress per-package progress on stderr
+    #[arg(long)]
+    pub quiet: bool,
+    /// Pin timeout per blob (seconds). Default: 600.
+    #[arg(long, default_value_t = 600)]
+    pub timeout: u64,
     /// Path to a local repository (alias: --repo)
     #[arg(long, alias = "repo")]
     pub root: Option<PathBuf>,
@@ -1346,17 +1352,22 @@ pub fn verify(a: VerifyArgs) -> Result<i32> {
 pub struct PublishIndexArgs {
     #[arg(long)]
     pub pin: bool,
-    /// Auto-pin all package blobs before publishing (default).
-    /// Use --no-pin to publish the index only.
-    #[arg(long)]
+    /// Deprecated (0.5.0). No-op; kept for CLI compatibility.
+    #[arg(long, hide = true, conflicts_with = "pin_all")]
     pub no_pin: bool,
+    /// Pin all blobs before publishing (opt-in, 0.5.1).
+    /// Equivalent to `appspec repo pin && appspec repo publish --ipns`.
+    #[arg(long, conflicts_with = "no_pin")]
+    pub pin_all: bool,
+    /// Suppress progress/info on stderr
+    #[arg(long)]
+    pub quiet: bool,
     #[arg(long, conflicts_with = "no_ipns")]
     pub ipns: bool,
     #[arg(long, conflicts_with = "ipns")]
     pub no_ipns: bool,
     #[arg(long)]
     pub root: Option<PathBuf>,
-    /// Путь к `repo-server.toml`. Алиас `--server-config` — deprecated.
     #[arg(short = 'c', long = "config", alias = "server-config")]
     pub server_config: Option<PathBuf>,
 }
@@ -1374,121 +1385,29 @@ pub fn pin_cmd(a: PinArgs) -> Result<i32> {
     let root = require_local_root(a.root, None, "pin")?;
     let _lock = util::FileLock::acquire(&root.lock_path())?;
 
-    if !super::ipfs::which_ipfs() {
-        bail!(
-            "`{}` not found in PATH; required for `repo pin` \
-             (set APPSPEC_IPFS to override)",
-            super::ipfs::ipfs_bin()
-        );
-    }
-
-    let pkg_root = root.packages_dir();
-    if !pkg_root.exists() {
-        println!("pin: nothing to do (no packages)");
-        return Ok(0);
-    }
-
-    let mut newly_added = 0usize;
-    let mut newly_pinned = 0usize;
-    let mut already_pinned = 0usize;
-    let mut missing_blobs = 0usize;
-    let mut failed = 0usize;
-
-    for name_entry in std::fs::read_dir(&pkg_root)? {
-        let name_entry = name_entry?;
-        if !name_entry.file_type()?.is_dir() {
-            continue;
-        }
-        for ver_entry in std::fs::read_dir(name_entry.path())? {
-            let ver_entry = ver_entry?;
-            if !ver_entry.file_type()?.is_dir() {
-                continue;
-            }
-            let meta_path = ver_entry.path().join("meta.json");
-            if !meta_path.is_file() {
-                continue;
-            }
-            let mut meta: meta::MetaV1 =
-                serde_json::from_str(&std::fs::read_to_string(&meta_path)?)?;
-
-            let cid = if let Some(c) = &meta.ipfs_cid {
-                c.clone()
-            } else {
-                let blob = util::blob_path(&root.path, &meta.sif_sha256);
-                if !blob.is_file() {
-                    eprintln!(
-                        "warning: blob missing for {}: {}",
-                        meta_path.display(),
-                        blob.display()
-                    );
-                    missing_blobs += 1;
-                    continue;
-                }
-                if a.dry_run {
-                    println!(
-                        "would add + pin: {} (blob {})",
-                        meta_path.display(),
-                        blob.display()
-                    );
-                    continue;
-                }
-                match super::ipfs::add_file(&blob, true) {
-                    Ok(c) => {
-                        meta.ipfs_cid = Some(c.clone());
-                        util::atomic_write(&meta_path, &serde_json::to_vec_pretty(&meta)?)?;
-                        println!("added + pinned: {} -> {}", meta_path.display(), c);
-                        newly_added += 1;
-                        c
-                    }
-                    Err(e) => {
-                        eprintln!("error: add {} failed: {:#}", blob.display(), e);
-                        failed += 1;
-                        continue;
-                    }
-                }
-            };
-
-            if a.dry_run {
-                match super::ipfs::is_pinned(&cid) {
-                    Ok(true) => println!("already pinned: {}", cid),
-                    _ => println!("would pin: {}", cid),
-                }
-                continue;
-            }
-
-            match super::ipfs::is_pinned(&cid) {
-                Ok(true) => already_pinned += 1,
-                _ => match super::ipfs::pin(&cid) {
-                    Ok(()) => {
-                        println!("pinned: {}", cid);
-                        newly_pinned += 1;
-                    }
-                    Err(e) => {
-                        eprintln!("error: pin {} failed: {:#}", cid, e);
-                        failed += 1;
-                    }
-                },
-            }
-        }
-    }
-
-    if a.dry_run {
-        println!("dry-run: no changes");
-    } else if newly_added > 0 || newly_pinned > 0 {
-        let idx = index_build::rebuild_all(&root)?;
-        println!(
-            "reindexed: {} packages, updated={}",
-            idx.packages.len(),
-            idx.updated
-        );
-    }
+    let opts = super::pin::PinOpts {
+        dry_run: a.dry_run,
+        progress: !a.quiet,
+        pin_timeout_secs: a.timeout,
+    };
+    let stats = super::pin::pin_all(&root, &opts)?;
 
     println!(
-        "pin: {} added+pinned, {} newly pinned, {} already pinned, \
-         {} missing blob, {} failed",
-        newly_added, newly_pinned, already_pinned, missing_blobs, failed
+        "pin: {} total, {} added, {} newly pinned, {} already, {} missing, {} failed, {} timeout",
+        stats.total,
+        stats.added,
+        stats.pinned_new,
+        stats.already_pinned,
+        stats.missing_blob,
+        stats.failed,
+        stats.timed_out
     );
-    Ok(if failed > 0 { 1 } else { 0 })
+
+    Ok(if stats.failed > 0 || stats.timed_out > 0 {
+        1
+    } else {
+        0
+    })
 }
 
 pub fn publish_index(a: PublishIndexArgs) -> Result<i32> {
@@ -1557,76 +1476,30 @@ pub fn publish_index(a: PublishIndexArgs) -> Result<i32> {
         }
     }
 
-    // Auto-pin: add missing CIDs and pin all package blobs (0.5.0).
-    if !a.no_pin && super::ipfs::which_ipfs() {
-        let pkg_root = root.packages_dir();
-        let mut changed = false;
-        let mut failed = 0usize;
-        if pkg_root.exists() {
-            for name_entry in std::fs::read_dir(&pkg_root)? {
-                let name_entry = name_entry?;
-                if !name_entry.file_type()?.is_dir() {
-                    continue;
-                }
-                for ver_entry in std::fs::read_dir(name_entry.path())? {
-                    let ver_entry = ver_entry?;
-                    if !ver_entry.file_type()?.is_dir() {
-                        continue;
-                    }
-                    let meta_path = ver_entry.path().join("meta.json");
-                    if !meta_path.is_file() {
-                        continue;
-                    }
-                    let mut meta: meta::MetaV1 =
-                        serde_json::from_str(&std::fs::read_to_string(&meta_path)?)?;
-                    let cid = if let Some(c) = &meta.ipfs_cid {
-                        c.clone()
-                    } else {
-                        let blob = util::blob_path(&root.path, &meta.sif_sha256);
-                        if !blob.is_file() {
-                            eprintln!(
-                                "warning: auto-pin: blob missing for {}: {}",
-                                meta_path.display(),
-                                blob.display()
-                            );
-                            continue;
-                        }
-                        match super::ipfs::add_file(&blob, true) {
-                            Ok(c) => {
-                                meta.ipfs_cid = Some(c.clone());
-                                util::atomic_write(&meta_path, &serde_json::to_vec_pretty(&meta)?)?;
-                                changed = true;
-                                c
-                            }
-                            Err(e) => {
-                                eprintln!("error: auto-pin add {} failed: {:#}", blob.display(), e);
-                                failed += 1;
-                                continue;
-                            }
-                        }
-                    };
-                    if !super::ipfs::is_pinned(&cid).unwrap_or(false) {
-                        match super::ipfs::pin(&cid) {
-                            Ok(()) => changed = true,
-                            Err(e) => {
-                                eprintln!("error: auto-pin {} failed: {:#}", cid, e);
-                                failed += 1;
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        if changed {
-            let idx = index_build::rebuild_all(&root)?;
+    // --pin-all (0.5.1, opt-in): pin blobs before publishing.
+    if a.pin_all {
+        let pin_opts = super::pin::PinOpts {
+            dry_run: false,
+            progress: !a.quiet,
+            pin_timeout_secs: 600,
+        };
+        let stats = super::pin::pin_all(&root, &pin_opts)?;
+        if !a.quiet && stats.total > 0 {
             eprintln!(
-                "info: index rebuilt ({} packages); if previously signed, \
-                 signature is now invalid. Run `appspec repo sign` if needed.",
-                idx.packages.len()
+                "info: pin-all: {} total, {} added, {} newly pinned, {} already, {} failed, {} timeout",
+                stats.total,
+                stats.added,
+                stats.pinned_new,
+                stats.already_pinned,
+                stats.failed,
+                stats.timed_out
             );
         }
-        if failed > 0 {
-            eprintln!("warning: {} pin(s) failed during auto-pin", failed);
+        if stats.failed + stats.timed_out > 0 {
+            eprintln!(
+                "warning: {} pin(s) failed or timed out; some blobs may be unreachable",
+                stats.failed + stats.timed_out
+            );
         }
     }
 

@@ -45,7 +45,7 @@ printf '%s\n' "$*" >> "$log"
 case "$1" in
   add)
     [ -n "${MOCK_IPFS_FAIL:-}" ] && { echo "forced fail" >&2; exit 1; }
-    echo "${MOCK_IPFS_ADD_CID:-bafkreimockedcid}"
+    echo "${MOCK_IPFS_ADD_CID:-bafkreigh2akiscaildcqabsyg3dfr6chu3fgpregiymsck7e7aqa4s52zy}"
     ;;
   pin)
     case "$2" in
@@ -215,7 +215,13 @@ fn repo_pin_adds_and_pins_missing() {
 
     // log должен содержать pin add
     let log = mock.read_log();
-    assert!(log.contains("pin add bafkreitestadded"), "log:\n{log}");
+    // 0.5.1: pin::pin_all `continue`s after add_file (add --pin=true
+    // already pins the block). 0.4.9 also did redundant `pin add` — accept
+    // both, since intent ("blob pinned") is the same.
+    assert!(
+        log.contains("add --pin=true") || log.contains("pin add bafkreitestadded"),
+        "expected add --pin=true (or legacy pin add) in mock log:\n{log}"
+    );
 }
 
 #[test]
@@ -261,7 +267,7 @@ fn repo_pin_dry_run_no_changes() {
         .args(["repo", "pin", "--root", root.to_str().unwrap(), "--dry-run"])
         .assert()
         .success()
-        .stdout(predicate::str::contains("would add"));
+        .stderr(predicate::str::contains("would add"));
 
     let meta: serde_json::Value = serde_json::from_str(
         &fs::read_to_string(root.join("packages/demo/0.0.1-1/meta.json")).unwrap(),

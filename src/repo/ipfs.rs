@@ -23,6 +23,10 @@ pub fn which_ipfs() -> bool {
 
 /// `ipfs add --pin=<pin> --quieter <path>` → CID (trim).
 pub fn add_file(path: &Path, pin: bool) -> Result<String> {
+    add_file_with_timeout(path, pin, 600)
+}
+
+pub fn add_file_with_timeout(path: &Path, pin: bool, timeout_secs: u64) -> Result<String> {
     let bin = ipfs_bin();
     if !which_ipfs() {
         bail!(
@@ -30,18 +34,43 @@ pub fn add_file(path: &Path, pin: bool) -> Result<String> {
             bin
         );
     }
-    let out = Command::new(&bin)
-        .args([
+    let pin_arg = format!("--pin={}", pin);
+    let out = if which_tool("timeout") {
+        let mut cmd = Command::new("timeout");
+        cmd.arg(timeout_secs.to_string());
+        cmd.arg(&bin);
+        cmd.args([
             "add",
-            &format!("--pin={}", pin),
+            &pin_arg,
             "--quieter",
             "--raw-leaves",
             "--cid-version=1",
-        ])
-        .arg(path)
-        .output()
-        .with_context(|| format!("spawning {} add", bin))?;
+        ]);
+        cmd.arg(path);
+        cmd.output()
+            .with_context(|| format!("spawning timeout {} add", bin))?
+    } else {
+        Command::new(&bin)
+            .args([
+                "add",
+                &pin_arg,
+                "--quieter",
+                "--raw-leaves",
+                "--cid-version=1",
+            ])
+            .arg(path)
+            .output()
+            .with_context(|| format!("spawning {} add", bin))?
+    };
     if !out.status.success() {
+        let code = out.status.code();
+        if code == Some(124) {
+            bail!(
+                "ipfs add {} timed out after {}s",
+                path.display(),
+                timeout_secs
+            );
+        }
         bail!(
             "{} add failed for {}: {}",
             bin,
@@ -109,20 +138,48 @@ pub fn add_file_only_hash(path: &Path) -> Result<String> {
 /// `ipfs pin ls --type=recursive <cid>` → true if pinned.
 /// Uses stdout parsing instead of exit code: some IPFS versions return 0
 /// even when the CID is not pinned.
+fn run_with_timeout(bin: &str, args: &[&str], timeout_secs: u64) -> Result<std::process::Output> {
+    if which_tool("timeout") {
+        let mut cmd = Command::new("timeout");
+        cmd.arg(timeout_secs.to_string());
+        cmd.arg(bin);
+        cmd.args(args);
+        cmd.output()
+            .with_context(|| format!("spawning timeout {} {:?}", bin, args))
+    } else {
+        let mut cmd = Command::new(bin);
+        cmd.args(args);
+        cmd.output()
+            .with_context(|| format!("spawning {} {:?}", bin, args))
+    }
+}
+
 pub fn is_pinned(cid: &str) -> Result<bool> {
+    is_pinned_with_timeout(cid, 5)
+}
+
+pub fn is_pinned_with_timeout(cid: &str, timeout_secs: u64) -> Result<bool> {
     let bin = ipfs_bin();
     if !which_ipfs() {
         bail!("`{}` not found in PATH; required for `ipfs pin ls`", bin);
     }
-    let out = Command::new(&bin)
-        .args(["pin", "ls", "--type=recursive", cid])
-        .output()
-        .with_context(|| format!("spawning {} pin ls", bin))?;
+    let out = run_with_timeout(&bin, &["pin", "ls", "--type=recursive", cid], timeout_secs)?;
     if !out.status.success() {
         return Ok(false);
     }
     let stdout = String::from_utf8_lossy(&out.stdout);
     Ok(stdout.lines().any(|l| l.starts_with(cid)))
+}
+
+pub fn is_local_block(cid: &str) -> Result<bool> {
+    let bin = ipfs_bin();
+    if !which_ipfs() {
+        return Ok(false);
+    }
+    match run_with_timeout(&bin, &["block", "stat", cid], 5) {
+        Ok(out) => Ok(out.status.success()),
+        Err(_) => Ok(false),
+    }
 }
 
 pub fn cat(cid: &str) -> Result<Vec<u8>> {
@@ -162,16 +219,26 @@ pub fn get_to(cid: &str, out: &Path) -> Result<()> {
 /// `ipfs pin add <cid>` — явный пин (когда файл уже в IPFS без --pin).
 #[allow(dead_code)] // зарезервировано: repo pin <cid> (v2)
 pub fn pin(cid: &str) -> Result<()> {
+    pin_with_timeout(cid, 600)
+}
+
+pub fn pin_with_timeout(cid: &str, timeout_secs: u64) -> Result<()> {
     let bin = ipfs_bin();
     if !which_ipfs() {
         bail!("`{}` not found in PATH", bin);
     }
-    let st = Command::new(&bin)
-        .args(["pin", "add", cid])
-        .status()
-        .with_context(|| format!("spawning {} pin add", bin))?;
-    if !st.success() {
-        bail!("{} pin add {} failed", bin, cid);
+    let out = run_with_timeout(&bin, &["pin", "add", cid], timeout_secs)?;
+    if !out.status.success() {
+        let code = out.status.code();
+        if code == Some(124) {
+            bail!("ipfs pin add {} timed out after {}s", cid, timeout_secs);
+        }
+        bail!(
+            "{} pin add {} failed: {}",
+            bin,
+            cid,
+            String::from_utf8_lossy(&out.stderr).trim()
+        );
     }
     Ok(())
 }

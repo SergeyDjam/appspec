@@ -1,0 +1,71 @@
+# =============================================================================
+# appspec bundle: opencode-desktop-pty
+# opencode-desktop + PTY-демон opencode-pty, запускаемый при старте.
+# =============================================================================
+
+[bundle]
+name        = "opencode-desktop-pty"
+description = "OpenCode Desktop with PTY daemon (opencode-pty)"
+strict      = false
+
+[bundle.base]
+spec  = "./opencode-desktop.appspec"
+entry = '''
+# 1. Поднимаем PTY-демон через bridge: base → chroot(sandbox) → wrapper.
+#    Wrapper запускает `opencode-pty daemon &` и сразу возвращает 0,
+#    поэтому bridge не блокируется.
+/usr/local/bin/opencode-pty-start 2>/dev/null || true
+
+# 2. OpenCode ищет registration file в $XDG_STATE_HOME/opencode/pty/<name>.
+#    Демон запущен с --runtime-dir /tmp/opencode/pty → кладём state в /tmp.
+export XDG_STATE_HOME=/tmp
+
+# 3. Запускаем desktop как обычно.
+exec /opt/OpenCode/ai.opencode --no-sandbox "$@"
+'''
+
+# -----------------------------------------------------------------------------
+# Компонент: PTY-демон (chroot)
+# -----------------------------------------------------------------------------
+[[components]]
+name    = "opencode-pty"
+spec    = "./opencode-pty.appspec"
+mode    = "chroot"
+provide = "opencode-pty"
+
+# bind /tmp base instance в sandbox — сокет (в /tmp/opencode-pty-0/) и
+# runtime-dir (/tmp/opencode/pty) станут общими для демона и клиента.
+# /proc и /dev нужны Rust-демону (flock, /dev/urandom).
+mounts = ["/tmp", "/proc", "/dev"]
+
+# bridge target: /usr/local/bin/opencode-pty-start
+# внутри sandbox: /usr/local/bin/opencode-pty-daemon-wrapper.sh
+binary = "/usr/local/bin/opencode-pty-daemon-wrapper.sh"
+target = "/usr/local/bin/opencode-pty-start"
+
+# -----------------------------------------------------------------------------
+# Wrapper: запускает демон в фоне и выходит (bridge не должен блокироваться)
+# -----------------------------------------------------------------------------
+[[components.files]]
+to    = "/usr/local/bin/opencode-pty-daemon-wrapper.sh"
+scope = "sandbox"
+mode  = 0o755
+content = '''
+#!/bin/sh
+set -eu
+RUNTIME_DIR="${OPENCODE_PTY_RUNTIME_DIR:-/tmp/opencode/pty}"
+NAME="${OPENCODE_PTY_NAME:-opencode-pty}"
+mkdir -p "$RUNTIME_DIR"
+(
+  exec /usr/local/bin/opencode-pty daemon --name "$NAME" --runtime-dir "$RUNTIME_DIR" \
+       >>"/tmp/opencode-pty.log" 2>&1
+) &
+exit 0
+'''
+
+# -----------------------------------------------------------------------------
+# Smoke-test: bridge target создан и исполняем
+# -----------------------------------------------------------------------------
+[components.selftest]
+cmd             = ["test", "-x", "/usr/local/bin/opencode-pty-start"]
+expect_contains = ""

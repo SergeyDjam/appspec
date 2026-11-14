@@ -1,0 +1,79 @@
+# =============================================================================
+# appspec spec: opencode-pty
+# PTY-демон OpenCode (Rust, musl, статический бинарник из tar.gz).
+# =============================================================================
+
+[package]
+name    = "opencode-pty"
+version = "0.5.2"
+
+release     = "1"
+epoch       = 0
+summary     = "OpenCode PTY daemon (process-daemon)"
+description = """
+opencode-pty — демон, который держит PTY-сессии для OpenCode. Слушает
+Unix-сокет в /tmp/opencode-pty-<uid>/, регистрационный файл пишет в
+--runtime-dir. Клиент (opencode) подключается по registration file.
+"""
+license  = "MIT"
+url      = "https://github.com/anomalyco/opencode/tree/dev/packages/process-daemon"
+vendor   = "Anomaly (SST)"
+packager = "appspec <appspec@example.invalid>"
+bin      = "opencode-pty"
+
+# -----------------------------------------------------------------------------
+# build
+# -----------------------------------------------------------------------------
+[build]
+base     = "alpine:3.24"
+arch     = "x64"
+# static: tar + busybox (нужен /bin/sh для bridge chroot) + startscript.
+template = "static"
+
+[build.source]
+type = "tar"
+url  = "https://github.com/anomalyco/opencode/releases/download/process-daemon-v%{version}/opencode-pty-%{version}-x86_64-unknown-linux-musl.tar.gz"
+extract_to = "/usr/local/bin"
+# strip_components НЕ указываем: как и opencode-linux-x64-musl.tar.gz,
+# архив, скорее всего, содержит один файл `opencode-pty` в корне.
+# Если в архиве папка — сборка упадёт на `binary not found`,
+# тогда добавить `strip_components = 1`.
+strip_components = 1       # ← снять один уровень (каталог из архива)
+
+[build.collect]
+binary = "/usr/local/bin/opencode-pty"
+
+[build.scratch]
+workdir = "/work"
+cmd     = ["/usr/local/bin/opencode-pty", "--version"]
+
+[build.scratch.env]
+LANG   = "C.UTF-8"
+LC_ALL = "C.UTF-8"
+
+# -----------------------------------------------------------------------------
+# runtime — CLI
+# -----------------------------------------------------------------------------
+[runtime]
+mode    = "cli"
+command = "/usr/local/bin/opencode-pty"
+
+sif_file   = "opencode-pty.sif"
+image_name = "%{name}:%{version}"
+
+env_passthrough = [
+    "TERM",
+    "XDG_STATE_HOME",
+    "OPENCODE_PTY_RUNTIME_DIR",
+    "OPENCODE_PTY_NAME",
+]
+
+binds       = []
+create_dirs = []
+
+[install]
+scope         = "user"
+launcher_name = "opencode-pty-container"
+desktop       = false
+comment       = "OpenCode PTY daemon (containerized)"
+extra_files   = []
