@@ -67,6 +67,12 @@ case "$1" in
       cat "$MOCK_IPFS_CAT_DIR/$2"; exit 0
     fi
     echo "no content for $2" >&2; exit 1 ;;
+  block)
+    case "$2" in
+      stat) exit 0 ;;
+      *) echo "block $2" >&2; exit 1 ;;
+    esac
+    ;;
   name)
     case "$2" in
       resolve) echo "/ipfs/${MOCK_IPFS_INDEX_CID:-bafkreiindexcid}" ;;
