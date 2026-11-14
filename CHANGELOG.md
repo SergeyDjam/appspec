@@ -4,6 +4,40 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+## [0.5.2] - 2026-11-15
+
+### Added
+
+- **Parallel pinning** — `repo pin --jobs N` (default 8). Multiple
+  worker threads pop packages from a shared queue and run `ipfs add --pin`
+  / `ipfs pin add` concurrently. Wall time drops ~N× for local blobs.
+
+- **Local-only default** — `repo pin` now **skips DHT** by default.
+  If `ipfs_cid` is set but block is not local (`ipfs block stat` fails),
+  the package is skipped with `SKIP not local (use --dht to fetch)`.
+  This avoids hours of DHT walk for blobs the publisher doesn't have.
+
+- **`--dht` opt-in** — `repo pin --dht` attempts DHT fetch for non-local
+  blobs. Still bounded (parallel × `--timeout` per blob).
+
+- **Progress with ETA** — `[i/N] name:ver — action (Xs) ETA~Ys` on stderr.
+
+### Fixed
+
+- **`publish --ipns` preflight warning was misleading** — `warning: N
+  version(s) with ipfs_cid but not pinned` ran **before** reindex,
+  counted blobs about to be pinned, and was **slow** (N × 5s
+  `is_pinned`). Removed.
+
+- **`repo pin` summary** — new field `skipped (not local)`.
+
+### Changed
+
+- `repo pin` default = parallel (8), local only, skip DHT.
+  For previous behaviour (sequential, DHT for all `ipfs_cid=Some`):
+  `repo pin --dht --jobs 1 --timeout 600`.
+
+
 ## [0.5.1] - 2026-11-14
 
 ### Fixed

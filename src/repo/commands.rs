@@ -1302,15 +1302,19 @@ pub struct VerifyArgs {
 
 #[derive(Debug, Args)]
 pub struct PinArgs {
-    /// Show what would be done without changing anything
     #[arg(long)]
     pub dry_run: bool,
-    /// Suppress per-package progress on stderr
     #[arg(long)]
     pub quiet: bool,
-    /// Pin timeout per blob (seconds). Default: 600.
+    /// Per-blob timeout in seconds (default 600)
     #[arg(long, default_value_t = 600)]
     pub timeout: u64,
+    /// Number of parallel workers (default 8)
+    #[arg(long, default_value_t = 8)]
+    pub jobs: usize,
+    /// Also attempt DHT fetch for non-local blobs (slow; may timeout)
+    #[arg(long)]
+    pub dht: bool,
     /// Path to a local repository (alias: --repo)
     #[arg(long, alias = "repo")]
     pub root: Option<PathBuf>,
@@ -1389,16 +1393,19 @@ pub fn pin_cmd(a: PinArgs) -> Result<i32> {
         dry_run: a.dry_run,
         progress: !a.quiet,
         pin_timeout_secs: a.timeout,
+        jobs: a.jobs,
+        dht: a.dht,
     };
     let stats = super::pin::pin_all(&root, &opts)?;
 
     println!(
-        "pin: {} total, {} added, {} newly pinned, {} already, {} missing, {} failed, {} timeout",
+        "pin: {} total, {} added, {} newly pinned, {} already, {} missing, {} skipped (not local), {} failed, {} timeout",
         stats.total,
         stats.added,
         stats.pinned_new,
         stats.already_pinned,
         stats.missing_blob,
+        stats.skipped_not_local,
         stats.failed,
         stats.timed_out
     );
@@ -1440,48 +1447,14 @@ pub fn publish_index(a: PublishIndexArgs) -> Result<i32> {
         );
     }
 
-    // Preflight: warnings про доступность блобов в IPFS.
-    if super::ipfs::which_ipfs() {
-        if let Ok(text) = std::fs::read_to_string(&index_path) {
-            if let Ok(idx) = serde_json::from_str::<meta::IndexV1>(&text) {
-                let mut no_cid = 0usize;
-                let mut unpinned = 0usize;
-                for pkg in idx.packages.values() {
-                    for v in pkg.versions.values() {
-                        match &v.ipfs_cid {
-                            None => no_cid += 1,
-                            Some(cid) => {
-                                if !super::ipfs::is_pinned(cid).unwrap_or(false) {
-                                    unpinned += 1;
-                                }
-                            }
-                        }
-                    }
-                }
-                if no_cid > 0 {
-                    eprintln!(
-                        "warning: {} version(s) without ipfs_cid — \
-                         `pull --from ipns://` will fail for them. Run `appspec repo pin`.",
-                        no_cid
-                    );
-                }
-                if unpinned > 0 {
-                    eprintln!(
-                        "warning: {} version(s) with ipfs_cid but not pinned — \
-                         blobs may not be reachable via IPFS. Run `appspec repo pin`.",
-                        unpinned
-                    );
-                }
-            }
-        }
-    }
-
     // --pin-all (0.5.1, opt-in): pin blobs before publishing.
     if a.pin_all {
         let pin_opts = super::pin::PinOpts {
             dry_run: false,
             progress: !a.quiet,
             pin_timeout_secs: 600,
+            jobs: 8,
+            dht: false,
         };
         let stats = super::pin::pin_all(&root, &pin_opts)?;
         if !a.quiet && stats.total > 0 {
