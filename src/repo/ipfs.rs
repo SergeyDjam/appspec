@@ -154,23 +154,6 @@ fn run_with_timeout(bin: &str, args: &[&str], timeout_secs: u64) -> Result<std::
     }
 }
 
-pub fn is_pinned(cid: &str) -> Result<bool> {
-    is_pinned_with_timeout(cid, 5)
-}
-
-pub fn is_pinned_with_timeout(cid: &str, timeout_secs: u64) -> Result<bool> {
-    let bin = ipfs_bin();
-    if !which_ipfs() {
-        bail!("`{}` not found in PATH; required for `ipfs pin ls`", bin);
-    }
-    let out = run_with_timeout(&bin, &["pin", "ls", "--type=recursive", cid], timeout_secs)?;
-    if !out.status.success() {
-        return Ok(false);
-    }
-    let stdout = String::from_utf8_lossy(&out.stdout);
-    Ok(stdout.lines().any(|l| l.starts_with(cid)))
-}
-
 pub fn is_local_block(cid: &str) -> Result<bool> {
     let bin = ipfs_bin();
     if !which_ipfs() {
@@ -180,6 +163,29 @@ pub fn is_local_block(cid: &str) -> Result<bool> {
         Ok(out) => Ok(out.status.success()),
         Err(_) => Ok(false),
     }
+}
+
+/// One batched `ipfs pin ls --type=recursive` → set of pinned CIDs.
+/// 30s timeout. Returns empty set if daemon not responding (caller can
+/// still try add/pin and fail-fast on the real reason).
+pub fn list_pinned() -> Result<std::collections::HashSet<String>> {
+    let bin = ipfs_bin();
+    if !which_ipfs() {
+        bail!("`{}` not found in PATH", bin);
+    }
+    let out = run_with_timeout(&bin, &["pin", "ls", "--type=recursive"], 30)?;
+    if !out.status.success() {
+        return Ok(std::collections::HashSet::new());
+    }
+    let mut set = std::collections::HashSet::new();
+    for line in String::from_utf8_lossy(&out.stdout).lines() {
+        if let Some(cid) = line.split_whitespace().next() {
+            if !cid.is_empty() {
+                set.insert(cid.to_string());
+            }
+        }
+    }
+    Ok(set)
 }
 
 pub fn cat(cid: &str) -> Result<Vec<u8>> {

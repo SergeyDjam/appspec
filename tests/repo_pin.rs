@@ -53,7 +53,13 @@ case "$1" in
         [ -n "${MOCK_IPFS_PIN_FAIL:-}" ] && { echo "pin failed" >&2; exit 1; }
         exit 0 ;;
       ls)
-        cid="$4"
+        cid="${4:-}"
+        if [ -z "$cid" ]; then
+          for c in ${MOCK_IPFS_PINNED_CIDS:-}; do
+            echo "$c recursive"
+          done
+          exit 0
+        fi
         case " ${MOCK_IPFS_PINNED_CIDS:-} " in
           *" $cid "*) echo "$cid recursive"; exit 0 ;;
         esac
@@ -242,6 +248,17 @@ fn repo_pin_pins_existing_skips_pinned() {
     init_repo(&root);
     add_pkg(&root, "a", "0.0.1-1", b"aaa", Some("bafkreicid-a"));
     add_pkg(&root, "b", "0.0.1-1", b"bbb", Some("bafkreicid-b"));
+    // Delete blob files so is_local_block path is exercised (not blob-file path).
+    let _ = fs::remove_file(
+        root.join("blobs/sha256")
+            .join(&sha256_hex(b"aaa")[..2])
+            .join(&sha256_hex(b"aaa")[2..]),
+    );
+    let _ = fs::remove_file(
+        root.join("blobs/sha256")
+            .join(&sha256_hex(b"bbb")[..2])
+            .join(&sha256_hex(b"bbb")[2..]),
+    );
     write_index(&root, serde_json::json!({}));
 
     appspec()
@@ -517,4 +534,43 @@ fn repo_ls_pkg_short_sha_does_not_panic() {
         .assert()
         .success()
         .stdout(predicate::str::contains("0.0.1-1"));
+}
+
+/// 0.5.3: blob file exists locally, `ipfs_cid` in meta but not pinned
+/// → `add --pin <file>` (fast, local), NOT `pin add` (DHT).
+#[test]
+fn repo_pin_pins_local_file() {
+    let _g = lock_env();
+    let mock = IpfsMock::new();
+    mock.set_env();
+    // No PINNED_CIDS → not in pinned set
+    // MOCK_IPFS_ADD_CID matches meta.ipfs_cid → add returns matching cid
+    std::env::set_var("MOCK_IPFS_ADD_CID", "bafkreicid-local");
+
+    let tmp = TempDir::new().unwrap();
+    let root = tmp.path().join("repo");
+    init_repo(&root);
+    add_pkg(
+        &root,
+        "demo",
+        "0.0.1-1",
+        b"local blob",
+        Some("bafkreicid-local"),
+    );
+    write_index(&root, serde_json::json!({}));
+
+    appspec()
+        .args(["repo", "pin", "--root", root.to_str().unwrap()])
+        .assert()
+        .success();
+
+    let log = mock.read_log();
+    assert!(
+        log.contains("add --pin=true"),
+        "expected add --pin=true (blob file → local add), got:\n{log}"
+    );
+    assert!(
+        !log.contains("pin add bafkreicid-local"),
+        "should not call pin add when blob file exists, got:\n{log}"
+    );
 }

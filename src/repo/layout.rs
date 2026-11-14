@@ -169,6 +169,32 @@ impl RepoRoot {
     ///
     /// Всегда требует наличия `<root>/index.json`.
     pub fn open(root: &Path) -> Result<Self> {
+        // 0.5.3: directory existence check with hint (cwd, server config)
+        if !root.is_dir() {
+            let mut hint = String::new();
+            if root.is_relative() {
+                if let Ok(cwd) = std::env::current_dir() {
+                    hint.push_str(&format!(
+                        "\n  resolved to {} (cwd is {})",
+                        cwd.join(root).display(),
+                        cwd.display()
+                    ));
+                }
+            }
+            if let Ok((cfg_path, cfg)) = crate::repo::config::find_server_config(None) {
+                if !cfg.repo.root.as_os_str().is_empty()
+                    && norm_path(&cfg.repo.root) != norm_path(root)
+                {
+                    hint.push_str(&format!(
+                    "\n  hint: server config {} has [repo].root = {}\n  omit `--root` to use it",
+                    cfg_path.display(),
+                    cfg.repo.root.display()
+                ));
+                }
+            }
+            bail!("repository directory not found: {}{}", root.display(), hint);
+        }
+
         if !root.join("index.json").is_file() {
             bail!(
                 "repository not initialized at {} (missing index.json); \

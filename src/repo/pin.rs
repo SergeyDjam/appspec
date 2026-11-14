@@ -1,15 +1,17 @@
 //! `appspec repo pin` — pin blobs to IPFS, backfill ipfs_cid, reindex.
 //!
-//! Parallel workers (default 8) pull from a shared queue. Per package:
-//!   - `ipfs_cid = None` + blob file exists  → `ipfs add --pin` (local)
-//!   - `ipfs_cid = Some` + already pinned     → skip
-//!   - `ipfs_cid = Some` + local block exists → `pin add` (local)
-//!   - `ipfs_cid = Some` + no local block     → skip (unless `--dht`)
+//! Resolution order per package:
+//! - `ipfs_cid = None` with local blob file: `ipfs add --pin` (fast, local).
+//! - `ipfs_cid = Some` already in pinned set: skip.
+//! - `ipfs_cid = Some` with local blob file: `ipfs add --pin` (fast, local).
+//! - `ipfs_cid = Some` with local block: `pin add` (fast, local).
+//! - `ipfs_cid = Some` without local block: skip (`--dht` to fetch).
 //!
-//! `--dht`: attempt DHT fetch for non-local blobs (timeout per blob).
+//! `pinned_set` is built once via `ipfs pin ls --type=recursive`.
+//! Progress on stderr, `--quiet` suppresses.
 
 use anyhow::{anyhow, Result};
-use std::collections::VecDeque;
+use std::collections::{HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
@@ -74,6 +76,88 @@ struct PerEntry {
     timed_out: usize,
 }
 
+fn short(cid: &str) -> &str {
+    if cid.len() >= 12 {
+        &cid[..12]
+    } else {
+        cid
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn add_from_blob(
+    blob: &Path,
+    meta_path: &Path,
+    meta: &MetaV1,
+    expected_cid: Option<&str>,
+    opts: &PinOpts,
+    idx: usize,
+    total: usize,
+    label: &str,
+    eta: &str,
+) -> PerEntry {
+    let mut s = PerEntry::default();
+    let t = Instant::now();
+    match ipfs::add_file(blob, true) {
+        Ok(actual) => {
+            if let Some(exp) = expected_cid {
+                if actual != exp {
+                    s.failed = 1;
+                    if opts.progress {
+                        eprintln!(
+                            "[{}/{}] {} — FAILED: ipfs add returned {} but meta.ipfs_cid is {} \
+                             (corrupted blob or stale index; run `appspec repo reindex --backfill-cid`?)",
+                            idx, total, label, actual, exp
+                        );
+                    }
+                    return s;
+                }
+            } else {
+                let mut new_meta = meta.clone();
+                new_meta.ipfs_cid = Some(actual.clone());
+                match serde_json::to_vec_pretty(&new_meta) {
+                    Ok(bytes) => {
+                        if let Err(e) = util::atomic_write(meta_path, &bytes) {
+                            s.failed = 1;
+                            if opts.progress {
+                                eprintln!("[{}/{}] {} — write failed: {:#}", idx, total, label, e);
+                            }
+                            return s;
+                        }
+                    }
+                    Err(e) => {
+                        s.failed = 1;
+                        if opts.progress {
+                            eprintln!("[{}/{}] {} — serialize failed: {:#}", idx, total, label, e);
+                        }
+                        return s;
+                    }
+                }
+            }
+            s.added = 1;
+            if opts.progress {
+                eprintln!(
+                    "[{}/{}] {} — OK {} ({}ms){}",
+                    idx,
+                    total,
+                    label,
+                    actual,
+                    t.elapsed().as_millis(),
+                    eta
+                );
+            }
+        }
+        Err(e) => {
+            s.failed = 1;
+            if opts.progress {
+                eprintln!("[{}/{}] {} — FAILED: {:#}", idx, total, label, e);
+            }
+        }
+    }
+    s
+}
+
+#[allow(clippy::too_many_arguments)]
 fn pin_one(
     root_path: &Path,
     meta_path: &Path,
@@ -82,14 +166,16 @@ fn pin_one(
     idx: usize,
     total: usize,
     elapsed_ms: u128,
+    pinned_set: &HashSet<String>,
 ) -> PerEntry {
     let mut s = PerEntry::default();
     let ver_key = format!("{}-{}", meta.version, meta.release);
     let label = format!("{}:{}", meta.name, ver_key);
     let eta = format_eta(idx, total, elapsed_ms);
+    let blob = util::blob_path(root_path, &meta.sif_sha256);
 
+    // 1. cid = None → add from local blob file
     if meta.ipfs_cid.is_none() {
-        let blob = util::blob_path(root_path, &meta.sif_sha256);
         if !blob.is_file() {
             if opts.progress {
                 eprintln!(
@@ -105,73 +191,60 @@ fn pin_one(
         }
         if opts.dry_run {
             if opts.progress {
-                eprintln!("[{}/{}] {} — would add+pin (local)", idx, total, label);
+                eprintln!("[{}/{}] {} — would add+pin (local file)", idx, total, label);
             }
             return s;
         }
         if opts.progress {
-            eprintln!("[{}/{}] {} — add+pin (local){}", idx, total, label, eta);
+            eprintln!(
+                "[{}/{}] {} — add+pin (local file){}",
+                idx, total, label, eta
+            );
         }
-        let t = Instant::now();
-        match ipfs::add_file(&blob, true) {
-            Ok(cid) => {
-                let mut new_meta = meta.clone();
-                new_meta.ipfs_cid = Some(cid.clone());
-                match serde_json::to_vec_pretty(&new_meta) {
-                    Ok(bytes) => match util::atomic_write(meta_path, &bytes) {
-                        Ok(()) => {
-                            s.added = 1;
-                            if opts.progress {
-                                eprintln!(
-                                    "[{}/{}] {} — OK {} ({}ms)",
-                                    idx,
-                                    total,
-                                    label,
-                                    cid,
-                                    t.elapsed().as_millis()
-                                );
-                            }
-                        }
-                        Err(e) => {
-                            s.failed = 1;
-                            if opts.progress {
-                                eprintln!("[{}/{}] {} — write failed: {:#}", idx, total, label, e);
-                            }
-                        }
-                    },
-                    Err(e) => {
-                        s.failed = 1;
-                        if opts.progress {
-                            eprintln!("[{}/{}] {} — serialize failed: {:#}", idx, total, label, e);
-                        }
-                    }
-                }
-            }
-            Err(e) => {
-                s.failed = 1;
-                if opts.progress {
-                    eprintln!("[{}/{}] {} — FAILED: {:#}", idx, total, label, e);
-                }
-            }
-        }
-        return s;
+        return add_from_blob(&blob, meta_path, meta, None, opts, idx, total, &label, &eta);
     }
 
+    // 2. cid = Some
     let cid = meta.ipfs_cid.clone().unwrap();
-    let short: String = if cid.len() >= 12 {
-        cid[..12].to_string()
-    } else {
-        cid.clone()
-    };
+    let sc = short(&cid).to_string();
 
-    if ipfs::is_pinned(&cid).unwrap_or(false) {
+    // 2a. batch pinned set
+    if pinned_set.contains(&cid) {
         s.already_pinned = 1;
         if opts.progress {
-            eprintln!("[{}/{}] {} — already pinned ({})", idx, total, label, short);
+            eprintln!("[{}/{}] {} — already pinned ({})", idx, total, label, sc);
         }
         return s;
     }
 
+    // 2b. blob file exists → add --pin from disk (fast local)
+    if blob.is_file() {
+        if opts.dry_run {
+            if opts.progress {
+                eprintln!("[{}/{}] {} — would add+pin (local file)", idx, total, label);
+            }
+            return s;
+        }
+        if opts.progress {
+            eprintln!(
+                "[{}/{}] {} — add+pin (local file){}",
+                idx, total, label, eta
+            );
+        }
+        return add_from_blob(
+            &blob,
+            meta_path,
+            meta,
+            Some(&cid),
+            opts,
+            idx,
+            total,
+            &label,
+            &eta,
+        );
+    }
+
+    // 2c. blob file missing, block in blockstore → pin add (fast)
     let is_local = ipfs::is_local_block(&cid).unwrap_or(false);
     let hint = if is_local { "local" } else { "DHT" };
 
@@ -179,8 +252,9 @@ fn pin_one(
         s.skipped_not_local = 1;
         if opts.progress {
             eprintln!(
-                "[{}/{}] {} — SKIP not local (use --dht to fetch), cid {}",
-                idx, total, label, short
+                "[{}/{}] {} — SKIP not local (no blob file, block not in blockstore; \
+                 use --dht or `appspec build`), cid {}",
+                idx, total, label, sc
             );
         }
         return s;
@@ -190,7 +264,7 @@ fn pin_one(
         if opts.progress {
             eprintln!(
                 "[{}/{}] {} — would pin ({}), timeout {}s, cid {}",
-                idx, total, label, hint, opts.pin_timeout_secs, short
+                idx, total, label, hint, opts.pin_timeout_secs, sc
             );
         }
         return s;
@@ -242,6 +316,21 @@ pub fn pin_all(root: &RepoRoot, opts: &PinOpts) -> Result<PinStats> {
         );
     }
 
+    // 1. batch pinned list (1 call, 30s timeout)
+    let pinned_set = match ipfs::list_pinned() {
+        Ok(s) => s,
+        Err(e) => {
+            if opts.progress {
+                eprintln!("warning: cannot list pinned CIDs: {:#}; assuming empty", e);
+            }
+            HashSet::new()
+        }
+    };
+    if opts.progress {
+        eprintln!("pinned: {} CID(s) already in IPFS", pinned_set.len());
+    }
+
+    // 2. collect packages
     let mut entries: Vec<(PathBuf, MetaV1)> = Vec::new();
     let pkg_root = root.packages_dir();
     if pkg_root.exists() {
@@ -283,6 +372,7 @@ pub fn pin_all(root: &RepoRoot, opts: &PinOpts) -> Result<PinStats> {
     }
 
     let root_path = root.path.clone();
+    let pinned_arc = Arc::new(pinned_set);
     let queue = Arc::new(Mutex::new(VecDeque::from(entries)));
     let done = Arc::new(AtomicUsize::new(0));
     let agg = Arc::new(Mutex::new(PinStats {
@@ -299,6 +389,7 @@ pub fn pin_all(root: &RepoRoot, opts: &PinOpts) -> Result<PinStats> {
         let a = Arc::clone(&agg);
         let rp = root_path.clone();
         let o = Arc::clone(&opts_arc);
+        let ps = Arc::clone(&pinned_arc);
         handles.push(thread::spawn(move || -> Result<()> {
             loop {
                 let item = {
@@ -310,7 +401,7 @@ pub fn pin_all(root: &RepoRoot, opts: &PinOpts) -> Result<PinStats> {
                 };
                 let i = d.fetch_add(1, Ordering::SeqCst) + 1;
                 let elapsed_ms = start_all.elapsed().as_millis();
-                let one = pin_one(&rp, &meta_path, &meta, &o, i, total, elapsed_ms);
+                let one = pin_one(&rp, &meta_path, &meta, &o, i, total, elapsed_ms, &ps);
                 let mut guard = a.lock().map_err(|_| anyhow!("stats lock"))?;
                 guard.added += one.added;
                 guard.pinned_new += one.pinned_new;
@@ -339,8 +430,8 @@ pub fn pin_all(root: &RepoRoot, opts: &PinOpts) -> Result<PinStats> {
     if opts.progress && !opts.dht && result.skipped_not_local > 0 {
         eprintln!(
             "info: {} blob(s) not local and skipped. Either:\n  \
-             - run `appspec repo pin --dht --jobs 8 --timeout 600` to fetch from network, or\n  \
-             - run `appspec build` to regenerate SIFs locally (they are not in IPFS yet).",
+             - `appspec repo pin --dht --jobs 8 --timeout 60` (fetch from network), or\n  \
+             - `appspec build` (regenerate SIFs locally — they are not in IPFS yet).",
             result.skipped_not_local
         );
     }
