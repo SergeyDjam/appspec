@@ -4,6 +4,54 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+## [0.5.1] - 2026-11-14
+
+### Fixed
+
+- **`repo publish --ipns` hung on DHT**: auto-pin in 0.5.0 called
+  `ipfs pin add` for every blob; for blobs not present locally that
+  walks the DHT (hours). Auto-pin is now **opt-in** via `--pin-all`.
+  Default `publish --ipns` only publishes the index (seconds).
+
+- **`ipfs::is_pinned` / `pin` / `add_file` had no timeout** — could
+  hang forever on `ipfs pin ls` or `ipfs pin add` against a stuck daemon
+  or DHT walk. Now: `is_pinned` = 5s, `pin` = 600s, `add_file` = 600s.
+  Timeout uses `timeout(1)` binary if available.
+
+- **`repo pin` was silent** — no progress, looked frozen on large repos.
+  Now prints `[N/M] name:ver — action` on stderr (elapsed, CID, local/DHT).
+  `--quiet` suppresses. `--timeout N` (default 600s) per blob.
+
+- **`publish_index` preflight warning** ("N versions without ipfs_cid"
+  etc.) was misleading (ran before reindex, saw stale data) and slow
+  (14 × 5s `is_pinned`). Removed. `appspec repo pin --dry-run` shows
+  the same picture, faster and without side effects.
+
+### Added
+
+- **`appspec repo pin --dry-run`** now shows `would add+pin (local)`
+  vs `would pin (DHT, timeout 600s)` per package, so it's clear which
+  blobs are cheap to pin and which require network.
+
+- **`appspec repo publish --pin-all`** — opt-in replacement for the
+  0.5.0 auto-pin. Equivalent to `appspec repo pin && appspec repo publish --ipns`.
+
+- **`ipfs::is_local_block`** — `ipfs block stat <cid>` with 5s timeout.
+  Used by `repo pin` to pick "local (fast)" vs "DHT (slow)" hint.
+
+### Changed
+
+- **`PublishIndexArgs --no-pin`** is deprecated (no-op). Old scripts
+  still work; new code should use `--pin-all` for opt-in pinning or
+  omit it for default "publish only".
+
+### Migration
+
+- Old: `publish --ipns` = publish + auto-pin (slow). New: publish only.
+  Use `publish --ipns --pin-all` for previous behavior (with progress
+  and timeouts).
+
+
 ## [0.5.0] - 2026-11-14
 
 ### Added

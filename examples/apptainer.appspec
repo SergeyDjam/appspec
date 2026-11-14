@@ -5,7 +5,7 @@
 
 [package]
 name    = "apptainer"
-version = "1.4.5"
+version = "1.5.5"
 
 release     = "1"
 epoch       = 0
@@ -32,8 +32,7 @@ template = "full"
 
 [build.source]
 type = "deb"
-# Официальный deb из Debian pool (версия 1.4.5-2, актуальная на 2026-02-23)
-url  = "http://http.us.debian.org/debian/pool/main/a/apptainer/apptainer_%{version}-2_amd64.deb"
+url  = "https://github.com/apptainer/apptainer/releases/download/v%{version}/apptainer_%{version}-trixie+_amd64.deb"
 
 # Зависимости .deb разрешаются автоматически через apt-get satisfy,
 # но для rootless-режима нужны дополнительные пакеты.
@@ -60,7 +59,7 @@ binary = "%{_prefix}/bin/%{bin}"
 
 [build.scratch]
 workdir = "/work"
-cmd     = ["%{_prefix}/bin/%{bin}", "--version"]
+cmd     = ["%{_bindir}/%{bin}", "--version"]
 
 [build.scratch.env]
 LANG   = "C.UTF-8"
@@ -71,10 +70,10 @@ LC_ALL = "C.UTF-8"
 # -----------------------------------------------------------------------------
 [runtime]
 mode    = "cli"
-command = "%{_prefix}/bin/%{bin}"
+command = "%{_bindir}/%{bin}"
 
-sif_file   = "apptainer.sif"
-image_name = "apptainer:latest"
+sif_file   = "%{name}-%{version}.sif"
+image_name = "%{name}:%{version}"
 
 env_passthrough = ["TERM"]
 

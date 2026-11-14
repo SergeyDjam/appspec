@@ -17,6 +17,7 @@ pub mod ipfs;
 pub mod layout;
 pub mod meta;
 pub mod oci;
+pub mod pin;
 pub mod pull;
 pub mod push;
 pub mod run_package;
