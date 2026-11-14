@@ -448,3 +448,68 @@ appspec repo publish --ipns      # опубликовать
 
 `publish --ipns` печатает warnings, если в индексе есть версии без `ipfs_cid`
 или с `ipfs_cid`, но не запиненные.
+
+## `appspec run <package>` — Index as source of truth
+
+`index.json` описывает всё, что нужно клиенту: `sif_sha256`, `sif_size`,
+`ipfs_cid` для каждой версии. Клиент читает индекс **один раз**, дальше
+работает по CID'ам без обращения к серверу.
+
+### Синтаксис
+
+```sh
+appspec run foo                       # latest, max release
+appspec run foo:latest                # то же
+appspec run foo:2.2.0                 # версия 2.2.0, max release среди 2.2.0-N
+appspec run foo:2.2.0-1               # точно 2.2.0 release=1
+```
+
+Файл (не пакет): `appspec run ./foo.appspec`, `/abs/foo.appspec`,
+`foo.appspec`.
+
+### Флаги
+
+| Флаг | Что |
+|---|---|
+| `--from URL\|PATH\|ipns://…` | источник (index + blob) |
+| `--profile NAME` | профиль из `repos.toml` |
+| `--root PATH` | локальный репозиторий (sink + cache) |
+| `--trusted-key PATH` | ed25519 pubkey для подписи индекса |
+| `--allow-unsigned` | принять неподписанный индекс |
+| `--dry-run` | pull + launcher, без запуска |
+
+### Резолюция версии
+
+- `foo` / `foo:latest` — max `(version, release, epoch)` по `sort_key`;
+- `foo:2.2.0` — filter `version == "2.2.0"`, max release;
+- `foo:2.2.0-1` — точный ключ `2.2.0-1`.
+
+### Источник
+
+Порядок: **local cache** → `--from` / `--profile` / `$APPSPEC_REPO` /
+`default` профиль. Первый успешный — используется для pull.
+
+Blob кешируется в `blobs/sha256/<ab>/<…>`, spec — в
+`packages/<name>/<ver_key>/spec.appspec`. Launcher — в
+`~/.cache/appspec/run/run.<name>.<ver>.sh`.
+
+### Publish + auto-pin
+
+`appspec repo publish --ipns` (0.5.0) **автоматически пинит** все блобы
+из `packages/`:
+
+1. `ipfs_cid = None` + блоб есть → `ipfs add --pin` → CID в `meta.json`.
+2. `ipfs_cid = Some` → `ipfs pin ls` → если не pinned, `ipfs pin add`.
+3. `reindex` → `index.json` получает все CID.
+4. Warning: «if previously signed, signature now invalid».
+
+Флаг `--no-pin` — только публикация индекса, без пиннинга блобов
+(поведение 0.4.x).
+
+После `publish --ipns` любой клиент:
+
+```sh
+appspec run foo:2.2.0 \
+    --from ipns://k51… \
+    --trusted-key pub.txt
+```

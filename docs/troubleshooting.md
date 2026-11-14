@@ -620,3 +620,54 @@ appspec repo pin            # добавит CID и запинит все бло
 appspec repo sign
 appspec repo publish --ipns # без warnings
 ~~~
+
+## `appspec run foo` → `package foo not found`
+
+**Причина.** Имя не найдено ни в локальном репо, ни в remote sources.
+
+**Решение.**
+
+```sh
+# Проверить, что индекс читается
+appspec repo ls --repo ipns://k51...
+
+# Задать источник явно
+appspec run foo --from ipns://k51...
+appspec run foo --from http://127.0.0.1:8844
+```
+
+## `appspec run foo:2.2.0` → `2.2.0 not in index`
+
+**Причина.** Версия отсутствует в индексе. Список версий:
+
+```sh
+appspec repo ls foo --repo <source>
+```
+
+## `appspec run foo` → `ipfs_cat <cid> timeout`
+
+**Причина.** В индексе есть `ipfs_cid`, но блоб не запинен. Publisher
+не выполнил `repo pin` или не запускал `publish --ipns` (0.5.0 auto-pin).
+
+**Решение (на стороне publisher).**
+
+```sh
+appspec repo publish --ipns    # 0.5.0 auto-pins all blobs
+appspec repo sign              # если index был подписан
+appspec repo publish --ipns    # опубликовать подписанный
+```
+
+## `appspec run foo` → `signature required: index.json is not signed`
+
+**Причина.** `--trusted-key` задан, но индекс не подписан. Fail-closed.
+
+**Решение.**
+
+```sh
+# на стороне publisher:
+appspec repo sign
+appspec repo publish --ipns
+
+# или на клиенте (осознанно):
+appspec run foo --from ipns://k51... --allow-unsigned
+```

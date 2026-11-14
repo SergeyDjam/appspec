@@ -777,6 +777,14 @@ pub fn render_dockerfile(spec: &Spec, spec_dir: &Path, spec_path: &Path) -> Resu
 // ===========================================================================
 
 pub fn render_launcher(spec: &Spec, spec_dir: &Path) -> Result<String> {
+    render_launcher_impl(spec, spec_dir, None)
+}
+
+pub fn render_launcher_abs(spec: &Spec, sif_abs: &Path) -> Result<String> {
+    render_launcher_impl(spec, Path::new("."), Some(sif_abs))
+}
+
+fn render_launcher_impl(spec: &Spec, spec_dir: &Path, sif_abs: Option<&Path>) -> Result<String> {
     let rt = &spec.runtime;
 
     let default_name = match rt.mode.as_deref() {
@@ -825,13 +833,20 @@ pub fn render_launcher(spec: &Spec, spec_dir: &Path) -> Result<String> {
     let setup = rt.setup.as_deref().map(str::trim_end).map(str::to_string);
     let entry = rt.entry.as_deref().map(str::trim_end).map(str::to_string);
 
+    let sif_file_val: String = match sif_abs {
+        Some(p) => p.display().to_string(),
+        None => spec.sif_file(),
+    };
+    let sif_is_absolute = sif_abs.is_some() || sif_file_val.starts_with('/');
+
     render(
         &source,
         &origin,
         context! {
             pkg             => &spec.package,
             runtime         => &spec.runtime,
-            sif_file        => spec.sif_file(),
+            sif_file        => sif_file_val,
+            sif_is_absolute => sif_is_absolute,
             image_name      => spec.image_name(),
             bind_lines      => bind_lines,
             env_checks      => env_checks,

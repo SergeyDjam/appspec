@@ -19,6 +19,7 @@ pub mod meta;
 pub mod oci;
 pub mod pull;
 pub mod push;
+pub mod run_package;
 pub mod server;
 pub mod sign;
 pub mod tls;
