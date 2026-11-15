@@ -47,7 +47,7 @@ pub fn preflight(
     file: &BundleFile,
     base_dir: &Path,
     cache: &Path,
-    repo_root: &crate::repo::layout::RepoRoot,
+    repo_root: Option<&crate::repo::layout::RepoRoot>,
     trusted: &[crate::repo::sign::TrustedKey],
     allow_unsigned: bool,
 ) -> Vec<Issue> {
@@ -163,7 +163,7 @@ fn check_source(
     base_dir: &Path,
     cache: &Path,
     out: &mut Vec<Issue>,
-    root: &crate::repo::layout::RepoRoot,
+    root: Option<&crate::repo::layout::RepoRoot>,
     trusted: &[crate::repo::sign::TrustedKey],
     allow_unsigned: bool,
 ) {
@@ -219,7 +219,13 @@ fn check_source(
             ));
         }
     } else if let Some(r) = &src.repo {
-        check_repo_source(scope, r, out, root, trusted, allow_unsigned);
+        match root {
+            Some(rt) => check_repo_source(scope, r, out, rt, trusted, allow_unsigned),
+            None => out.push(Issue::error(
+                scope,
+                "`repo:` source requires `--repo`, `$APPSPEC_REPO`, or server config `[repo].root`",
+            )),
+        }
     }
 }
 

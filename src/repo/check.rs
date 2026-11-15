@@ -133,6 +133,45 @@ pub fn run(root: &RepoRoot, deep: bool) -> Result<CheckOutcome> {
             }
         }
     } // 3) --deep: параллельный apptainer inspect
+      // B6 (0.5.4-b): icon_sha256 consistency (BEFORE --deep moves items).
+    for (meta_path, _blob, m) in &items {
+        let Some(expected) = &m.icon_sha256 else {
+            continue;
+        };
+        let filename = m.icon_filename.as_deref().unwrap_or("icon.png");
+        let icon_path = meta_path.parent().unwrap().join(filename);
+        if !icon_path.is_file() {
+            eprintln!(
+                "warning: icon file missing for {}: {} (re-pull or re-add)",
+                meta_path.display(),
+                icon_path.display()
+            );
+            continue;
+        }
+        match std::fs::read(&icon_path) {
+            Ok(bytes) => {
+                let actual = super::util::sha256_hex(&bytes);
+                if &actual != expected {
+                    eprintln!(
+                        "error: icon sha256 mismatch for {}: meta {} vs actual {}",
+                        meta_path.display(),
+                        expected,
+                        actual
+                    );
+                    errors += 1;
+                }
+            }
+            Err(e) => {
+                eprintln!(
+                    "warning: cannot read icon {} for {}: {:#}",
+                    icon_path.display(),
+                    meta_path.display(),
+                    e
+                );
+            }
+        }
+    }
+
     if deep && !items.is_empty() {
         let results: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
         let idx = Arc::new(AtomicUsize::new(0));

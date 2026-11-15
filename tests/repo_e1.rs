@@ -614,3 +614,16 @@ fn sha256_from_cid_v1(cid: &str) -> String {
     assert_eq!(&bytes[..4], &[0x01, 0x55, 0x12, 0x20], "bad CID prefix");
     bytes[4..].iter().map(|b| format!("{:02x}", b)).collect()
 }
+
+/// 0.5.4-b: RepoRoot::open distinguishes "directory not found" (missing path,
+/// wrong cwd) from "repository not initialized" (existing empty dir).
+#[test]
+fn nonexistent_repo_root_yields_directory_not_found() {
+    let tmp = TempDir::new().unwrap();
+    let root = tmp.path().join("does-not-exist");
+    appspec()
+        .args(["repo", "ls", "--root", root.to_str().unwrap()])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("repository directory not found"));
+}
