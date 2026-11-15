@@ -1144,7 +1144,6 @@ pub struct PullArgs {
     pub allow_unsigned: bool,
     #[arg(long)]
     pub via: Option<String>,
-    #[arg(long)]
     /// Destination repo (alias: --to)
     #[arg(long, alias = "to")]
     pub root: Option<PathBuf>,
