@@ -350,86 +350,87 @@ pub fn ipfs_publish(path: &Path, pin: bool) -> Result<String> {
 
 // --- E-icon: установка иконки (SIF → spec_dir, resize, раскладка) ---------
 
-fn resolve_icon(
+// B7 (0.5.4-b): explicit SIF-labels diagnostics (apptainer missing, bad SIF).
+fn resolve_icon_opt(
     spec: &Spec,
     spec_dir: &Path,
     sif_path: &Path,
-) -> Result<(Vec<u8>, String, String)> {
-    // 1. SIF labels (primary)
+) -> Result<Option<(Vec<u8>, String, String)>> {
+    let mut sif_err: Option<String> = None;
     if sif_path.is_file() {
-        if let Ok(labels) = crate::repo::inspect::inspect(sif_path) {
-            if let Some(b64) = labels.get("org.appspec.icon.content.base64") {
-                use base64::Engine as _;
-                let bytes = base64::engine::general_purpose::STANDARD
-                    .decode(b64)
-                    .with_context(|| "decoding org.appspec.icon.content.base64")?;
-                let filename = labels
-                    .get("org.appspec.icon.filename")
-                    .map(str::to_string)
-                    .unwrap_or_else(|| "icon.png".into());
-                let mimetype = labels
-                    .get("org.appspec.icon.mimetype")
-                    .map(str::to_string)
-                    .unwrap_or_else(|| {
-                        if filename.to_ascii_lowercase().ends_with(".svg") {
-                            "image/svg+xml".into()
-                        } else {
-                            "image/png".into()
-                        }
-                    });
-                return Ok((bytes, filename, mimetype));
+        match crate::repo::inspect::inspect(sif_path) {
+            Ok(labels) => {
+                if let Some(b64) = labels.get("org.appspec.icon.content.base64") {
+                    use base64::Engine as _;
+                    let bytes = base64::engine::general_purpose::STANDARD
+                        .decode(b64)
+                        .with_context(|| "decoding org.appspec.icon.content.base64")?;
+                    let filename = labels
+                        .get("org.appspec.icon.filename")
+                        .map(str::to_string)
+                        .unwrap_or_else(|| "icon.png".into());
+                    let mimetype = labels
+                        .get("org.appspec.icon.mimetype")
+                        .map(str::to_string)
+                        .unwrap_or_else(|| {
+                            if filename.to_ascii_lowercase().ends_with(".svg") {
+                                "image/svg+xml".into()
+                            } else {
+                                "image/png".into()
+                            }
+                        });
+                    return Ok(Some((bytes, filename, mimetype)));
+                }
+            }
+            Err(e) => {
+                sif_err = Some(format!("{:#}", e));
             }
         }
     }
-
-    // 2. spec_dir (fallback)
-    let icon_rel = spec
-        .install
-        .icon
-        .as_ref()
-        .ok_or_else(|| anyhow!("[install].icon не задан (и в SIF нет меток)"))?;
-    let icon_src = spec_dir.join(icon_rel);
-    if !icon_src.is_file() {
-        bail!(
-            "иконка не найдена: ни в SIF (labels), ни в {}",
-            icon_src.display()
-        );
+    if let Some(icon_rel) = &spec.install.icon {
+        let icon_src = spec_dir.join(icon_rel);
+        if !icon_src.is_file() {
+            let extra = sif_err
+                .as_deref()
+                .map(|e| format!(" (SIF labels also unavailable: {e})"))
+                .unwrap_or_default();
+            bail!("иконка не найдена: {}{}", icon_src.display(), extra);
+        }
+        let bytes =
+            fs::read(&icon_src).with_context(|| format!("reading icon {}", icon_src.display()))?;
+        let filename = icon_src
+            .file_name()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "icon.png".to_string());
+        let lower = filename.to_ascii_lowercase();
+        let mimetype = if lower.ends_with(".svg") {
+            "image/svg+xml".to_string()
+        } else if lower.ends_with(".png") {
+            "image/png".to_string()
+        } else if lower.ends_with(".jpg") || lower.ends_with(".jpeg") {
+            "image/jpeg".to_string()
+        } else {
+            "application/octet-stream".to_string()
+        };
+        return Ok(Some((bytes, filename, mimetype)));
     }
-    let bytes =
-        fs::read(&icon_src).with_context(|| format!("reading icon {}", icon_src.display()))?;
-    let filename = icon_src
-        .file_name()
-        .map(|s| s.to_string_lossy().into_owned())
-        .unwrap_or_else(|| "icon.png".to_string());
-    let lower = filename.to_ascii_lowercase();
-    let mimetype = if lower.ends_with(".svg") {
-        "image/svg+xml".to_string()
-    } else if lower.ends_with(".png") {
-        "image/png".to_string()
-    } else if lower.ends_with(".jpg") || lower.ends_with(".jpeg") {
-        "image/jpeg".to_string()
-    } else {
-        "application/octet-stream".to_string()
-    };
-    Ok((bytes, filename, mimetype))
+    Ok(None)
 }
 
+// B8 (0.5.4-b): install_icons tries SIF labels even without [install].icon.
 fn install_icons(
     spec: &Spec,
     spec_dir: &Path,
     sif_path: &Path,
     icon_dir: &Path,
 ) -> Result<Vec<PathBuf>> {
-    // [install].icon не задан — иконки не нужны, не ошибка.
-    if spec.install.icon.is_none() {
-        return Ok(Vec::new());
-    }
-
-    let (bytes, filename, mimetype) = resolve_icon(spec, spec_dir, sif_path)?;
+    let (bytes, filename, mimetype) = match resolve_icon_opt(spec, spec_dir, sif_path)? {
+        Some(x) => x,
+        None => return Ok(Vec::new()),
+    };
     let name = &spec.package.name;
     let mut installed: Vec<PathBuf> = Vec::new();
 
-    // SVG — только scalable/apps, без растровых вариантов.
     if mimetype == "image/svg+xml" || filename.to_ascii_lowercase().ends_with(".svg") {
         let dst = icon_dir.join("scalable/apps").join(format!("{}.svg", name));
         if let Some(p) = dst.parent() {
@@ -440,7 +441,6 @@ fn install_icons(
         return Ok(installed);
     }
 
-    // PNG/JPEG — resize в стандартные размеры.
     if mimetype == "image/png" || mimetype == "image/jpeg" {
         let img = image::load_from_memory(&bytes)
             .with_context(|| format!("decoding {} icon for {}", mimetype, name))?;
@@ -460,7 +460,6 @@ fn install_icons(
         return Ok(installed);
     }
 
-    // Неизвестный формат — копируем как есть в 256x256.
     let ext = filename.rsplit_once('.').map(|(_, e)| e).unwrap_or("png");
     let dst = icon_dir
         .join("256x256/apps")

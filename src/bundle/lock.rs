@@ -15,6 +15,8 @@ use super::model::BundleFile;
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct LockFile {
     pub bundle: LockBundle,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base: Option<BaseLock>,
     #[serde(default, rename = "components")]
     pub components: Vec<LockComponent>,
 }
@@ -23,6 +25,15 @@ pub struct LockFile {
 pub struct LockBundle {
     pub name: String,
     pub locked_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BaseLock {
+    pub repo: String,
+    pub sif_sha256: String,
+    pub spec_sha256: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base_digest: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -73,7 +84,7 @@ pub fn default_path(spec_path: &Path) -> PathBuf {
 pub fn generate(
     file: &BundleFile,
     _spec_path: &Path,
-    root: &crate::repo::layout::RepoRoot,
+    root: Option<&crate::repo::layout::RepoRoot>,
     trusted: &[crate::repo::sign::TrustedKey],
     allow_unsigned: bool,
 ) -> Result<LockFile> {
@@ -85,15 +96,47 @@ pub fn generate(
                 name: file.bundle.name.clone(),
                 locked_at: crate::repo::util::now_iso8601(),
             },
+            base: None,
             components: Vec::new(),
         });
     }
+
+    let root = root.ok_or_else(|| {
+        anyhow!(
+            "bundle has `repo:` sources but no repo root; \
+             pass `--repo`, `$APPSPEC_REPO`, or configure server config `[repo].root`"
+        )
+    })?;
+
     let index_text = std::fs::read_to_string(root.index_path())
         .with_context(|| format!("reading {}", root.index_path().display()))?;
     crate::repo::sign::verify_remote_index(&index_text, trusted, allow_unsigned)
         .with_context(|| format!("verifying {}", root.index_path().display()))?;
     let index: crate::repo::meta::IndexV1 =
         serde_json::from_str(&index_text).context("parsing repo index.json")?;
+
+    let base_lock = if let Some(r) = &file.bundle.base.source.repo {
+        let (bn, bv) = r
+            .split_once(':')
+            .ok_or_else(|| anyhow!("bundle.base.repo must be `NAME:VERSION-RELEASE`, got `{r}`"))?;
+        let bn = bn.to_ascii_lowercase();
+        let bp = index
+            .packages
+            .get(&bn)
+            .ok_or_else(|| anyhow!("base package `{bn}` not in repo index"))?;
+        let bvv = bp
+            .versions
+            .get(bv)
+            .ok_or_else(|| anyhow!("{bn}:{bv} not in repo index"))?;
+        Some(BaseLock {
+            repo: r.clone(),
+            sif_sha256: bvv.sif_sha256.clone(),
+            spec_sha256: bvv.spec_sha256.clone(),
+            base_digest: bvv.base_digest.clone(),
+        })
+    } else {
+        None
+    };
 
     let mut components = Vec::new();
     for c in &file.components {
@@ -127,6 +170,7 @@ pub fn generate(
             name: file.bundle.name.clone(),
             locked_at: crate::repo::util::now_iso8601(),
         },
+        base: base_lock,
         components,
     })
 }
@@ -135,13 +179,21 @@ pub fn generate(
 /// (дрейф). Не ошибка: `bundle build` идёт по индексу.
 pub fn check_drift(
     lock: &LockFile,
-    root: &crate::repo::layout::RepoRoot,
+    root: Option<&crate::repo::layout::RepoRoot>,
     trusted: &[crate::repo::sign::TrustedKey],
     allow_unsigned: bool,
 ) -> Result<Vec<String>> {
-    if lock.components.is_empty() {
+    if lock.base.is_none() && lock.components.is_empty() {
         return Ok(Vec::new());
     }
+
+    let root = root.ok_or_else(|| {
+        anyhow!(
+            "lock has repo refs but no repo root; \
+             pass `--repo`, `$APPSPEC_REPO`, or configure server config `[repo].root`"
+        )
+    })?;
+
     let index_text = std::fs::read_to_string(root.index_path())
         .with_context(|| format!("reading {}", root.index_path().display()))?;
     crate::repo::sign::verify_remote_index(&index_text, trusted, allow_unsigned)
@@ -150,13 +202,31 @@ pub fn check_drift(
         serde_json::from_str(&index_text).context("parsing repo index.json")?;
 
     let mut warns = Vec::new();
+
+    if let Some(b) = &lock.base {
+        if let Some((n, v)) = b.repo.split_once(':') {
+            let n = n.to_ascii_lowercase();
+            match index.packages.get(&n).and_then(|p| p.versions.get(v)) {
+                Some(iv) if iv.sif_sha256 == b.sif_sha256 => {}
+                Some(iv) => warns.push(format!(
+                    "lock drift: base `{}` sif_sha256 {} != index {}; using index",
+                    b.repo, b.sif_sha256, iv.sif_sha256
+                )),
+                None => warns.push(format!(
+                    "lock drift: base `{}` not in current index",
+                    b.repo
+                )),
+            }
+        }
+    }
+
     for c in &lock.components {
         let Some((n, v)) = c.repo.split_once(':') else {
             continue;
         };
         let n = n.to_ascii_lowercase();
         match index.packages.get(&n).and_then(|p| p.versions.get(v)) {
-            Some(iv) if iv.sif_sha256 == c.sif_sha256 => { /* ok */ }
+            Some(iv) if iv.sif_sha256 == c.sif_sha256 => {}
             Some(iv) => warns.push(format!(
                 "lock drift: {} sif_sha256 {} != index {}; using index",
                 c.name, c.sif_sha256, iv.sif_sha256

@@ -1145,6 +1145,8 @@ pub struct PullArgs {
     #[arg(long)]
     pub via: Option<String>,
     #[arg(long)]
+    /// Destination repo (alias: --to)
+    #[arg(long, alias = "to")]
     pub root: Option<PathBuf>,
     /// Путь к `repo-server.toml`. Алиас `--server-config` — deprecated.
     #[arg(short = 'c', long = "config", alias = "server-config")]
@@ -1366,6 +1368,9 @@ pub struct PublishIndexArgs {
     /// Suppress progress/info on stderr
     #[arg(long)]
     pub quiet: bool,
+    /// Sign index.json with [signing].key before publishing.
+    #[arg(long)]
+    pub sign: bool,
     #[arg(long, conflicts_with = "no_ipns")]
     pub ipns: bool,
     #[arg(long, conflicts_with = "ipns")]
@@ -1424,8 +1429,6 @@ pub fn publish_index(a: PublishIndexArgs) -> Result<i32> {
         bail!("index.json missing at {}", index_path.display());
     }
 
-    // IPNS: явно (--ipns), явно выключено (--no-ipns), либо default
-    // из конфига (ipns_key.is_some()).
     let want_ipns = if a.ipns {
         true
     } else if a.no_ipns {
@@ -1434,12 +1437,6 @@ pub fn publish_index(a: PublishIndexArgs) -> Result<i32> {
         root.config.ipfs.ipns_key.is_some()
     };
 
-    // Fail-fast: --ipns требует [ipfs].ipns_key. Проверяем ДО ipfs add,
-    // чтобы не делать side-effect (пиннинг, запись <root>/ipfs-index.cid,
-    // обновление server config) при заведомо провальной команде.
-    // Побочный эффект: тест publish_without_ipns_key_fails_when_forced
-    // становится детерминированным — ошибка не зависит от состояния
-    // mock ipfs.
     if want_ipns && root.config.ipfs.ipns_key.is_none() {
         bail!(
             "`--ipns` requires `[ipfs].ipns_key` in server config; \
@@ -1447,7 +1444,7 @@ pub fn publish_index(a: PublishIndexArgs) -> Result<i32> {
         );
     }
 
-    // --pin-all (0.5.1, opt-in): pin blobs before publishing.
+    let mut pin_changed = false;
     if a.pin_all {
         let pin_opts = super::pin::PinOpts {
             dry_run: false,
@@ -1457,6 +1454,7 @@ pub fn publish_index(a: PublishIndexArgs) -> Result<i32> {
             dht: false,
         };
         let stats = super::pin::pin_all(&root, &pin_opts)?;
+        pin_changed = stats.added > 0 || stats.pinned_new > 0;
         if !a.quiet && stats.total > 0 {
             eprintln!(
                 "info: pin-all: {} total, {} added, {} newly pinned, {} already, {} failed, {} timeout",
@@ -1476,10 +1474,78 @@ pub fn publish_index(a: PublishIndexArgs) -> Result<i32> {
         }
     }
 
+    // B1 (0.5.4-b): info summary AFTER pin-all.
+    if !a.quiet {
+        if let Ok(text) = std::fs::read_to_string(&index_path) {
+            if let Ok(idx) = serde_json::from_str::<meta::IndexV1>(&text) {
+                let mut n_total = 0usize;
+                let mut n_cid = 0usize;
+                for pkg in idx.packages.values() {
+                    for v in pkg.versions.values() {
+                        n_total += 1;
+                        if v.ipfs_cid.is_some() {
+                            n_cid += 1;
+                        }
+                    }
+                }
+                let hint = if n_cid == n_total {
+                    String::new()
+                } else {
+                    format!(" ({} without ipfs_cid; run `repo pin`)", n_total - n_cid)
+                };
+                eprintln!(
+                    "info: index: {} package(s), {} version(s), {} with ipfs_cid{}",
+                    idx.packages.len(),
+                    n_total,
+                    n_cid,
+                    hint
+                );
+            }
+        }
+    }
+
+    // B2 (0.5.4-b): --sign or auto-sign after pin-all rebuild.
+    let signing_key_configured = root
+        .server_config_path
+        .as_ref()
+        .and_then(|p| {
+            config::ServerConfig::load(p)
+                .ok()
+                .and_then(|sc| sc.signing.key)
+        })
+        .is_some();
+    let need_sign = a.sign || (pin_changed && signing_key_configured);
+    if need_sign {
+        let key_path = root
+            .signing_key_path
+            .clone()
+            .unwrap_or_else(super::sign::default_key_path);
+        let key = if key_path.is_file() {
+            super::sign::load_key(&key_path)?
+        } else {
+            let k = super::sign::keygen();
+            super::sign::save_key(&key_path, &k)?;
+            if !a.quiet {
+                eprintln!("info: generated new signing key: {}", key_path.display());
+            }
+            k
+        };
+        let index_text = std::fs::read_to_string(&index_path)?;
+        let sig = super::sign::sign_index(&index_text, &key)?;
+        let mut v: serde_json::Value =
+            serde_json::from_str(&index_text).context("parsing index.json for sign")?;
+        v.as_object_mut()
+            .ok_or_else(|| anyhow!("index.json is not an object"))?
+            .insert("signature".into(), serde_json::Value::String(sig));
+        std::fs::write(&index_path, serde_json::to_vec_pretty(&v)?)?;
+        if !a.quiet {
+            eprintln!("info: index signed ({})", key_path.display());
+        }
+    }
+
     let cid = super::ipfs::add_file(&index_path, a.pin)?;
     super::ipfs::validate_cid(&cid)?;
 
-    // Локальный кеш CID — для отладки и скриптов.
     let cid_path = root.path.join("ipfs-index.cid");
     std::fs::write(&cid_path, format!("{}\n", cid))?;
 
@@ -1493,9 +1559,6 @@ pub fn publish_index(a: PublishIndexArgs) -> Result<i32> {
         let ipns_name = super::ipfs::name_publish(key, &cid)
             .with_context(|| format!("ipfs name publish (key={})", key))?;
 
-        // Обновить [ipfs].ipns_name в server config — это кеш для
-        // отображения; источник истины — DHT. Если путь к конфигу
-        // неизвестен (data-only репо) — предупреждаем, но не падаем.
         match &root.server_config_path {
             Some(sc_path) => match config::ServerConfig::load(sc_path) {
                 Ok(mut sc) => {

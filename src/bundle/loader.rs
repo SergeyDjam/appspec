@@ -107,7 +107,7 @@ pub fn resolve_source(
     base_dir: &Path,
     allow_build: bool,
     label: &str,
-    root: &crate::repo::layout::RepoRoot,
+    root: Option<&crate::repo::layout::RepoRoot>,
     trusted: &[crate::repo::sign::TrustedKey],
     allow_unsigned: bool,
 ) -> Result<ResolvedSource> {
@@ -203,7 +203,13 @@ pub fn resolve_source(
         });
     }
     if let Some(r) = &src.repo {
-        return resolve_repo_source(r, label, root, trusted, allow_unsigned);
+        let rt = root.ok_or_else(|| {
+            anyhow!(
+                "{label}: `repo:` source requires `--repo`, `$APPSPEC_REPO`, \
+                 or server config `[repo].root`"
+            )
+        })?;
+        return resolve_repo_source(r, label, rt, trusted, allow_unsigned);
     }
     unreachable!()
 }
@@ -243,11 +249,26 @@ fn resolve_repo_source(
             sif.display()
         );
     }
-    let spec_path = root
-        .packages_dir()
-        .join(&name)
-        .join(ver)
-        .join("spec.appspec");
+    // A1 (0.5.4): resolve spec via meta.spec_filename (fallback spec.appspec).
+    let pkg_dir = root.packages_dir().join(&name).join(ver);
+    let meta_path = pkg_dir.join("meta.json");
+    let spec_filename = if meta_path.is_file() {
+        std::fs::read_to_string(&meta_path)
+            .ok()
+            .and_then(|t| serde_json::from_str::<crate::repo::meta::MetaV1>(&t).ok())
+            .map(|m| m.spec_filename)
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| "spec.appspec".into())
+    } else {
+        "spec.appspec".into()
+    };
+    let spec_path = pkg_dir.join(&spec_filename);
+    let spec_path = if spec_path.is_file() {
+        spec_path
+    } else {
+        // Fallback to canonical name for legacy repos.
+        pkg_dir.join("spec.appspec")
+    };
     let setup = if spec_path.is_file() {
         crate::load_spec(&spec_path)
             .ok()
@@ -267,7 +288,7 @@ pub fn resolve_base(
     cache_dir: &Path,
     base_dir: &Path,
     allow_build: bool,
-    root: &crate::repo::layout::RepoRoot,
+    root: Option<&crate::repo::layout::RepoRoot>,
     trusted: &[crate::repo::sign::TrustedKey],
     allow_unsigned: bool,
 ) -> Result<ResolvedBase> {

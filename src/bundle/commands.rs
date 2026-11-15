@@ -1,4 +1,4 @@
-use anyhow::{anyhow, Context, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use clap::Args;
 use std::collections::{HashSet, VecDeque};
 use std::path::PathBuf;
@@ -13,16 +13,15 @@ pub struct BuildArgs {
     pub output: Option<String>,
     #[arg(long)]
     pub no_build: bool,
-    /// Игнорировать bundle.lock.toml (даже если он есть)
     #[arg(long)]
     pub no_lock: bool,
-    /// Path to the repository root. Default: $APPSPEC_REPO / XDG.
+    /// Strict lock: require bundle.lock.toml, fail on drift
+    #[arg(long, conflicts_with = "no_lock")]
+    pub locked: bool,
     #[arg(long)]
     pub repo: Option<PathBuf>,
-    /// Trusted signing key(s) for index.json verification. Repeatable.
     #[arg(long = "trusted-key")]
     pub trusted_keys: Vec<PathBuf>,
-    /// Accept unsigned index.json (explicit opt-out).
     #[arg(long)]
     pub allow_unsigned: bool,
 }
@@ -44,13 +43,13 @@ pub struct LsArgs {
 #[derive(Debug, Args)]
 pub struct CheckArgs {
     pub spec: String,
-    /// Path to the repository root. Default: $APPSPEC_REPO / XDG.
+    /// Strict lock: require bundle.lock.toml, fail on drift
+    #[arg(long)]
+    pub locked: bool,
     #[arg(long)]
     pub repo: Option<PathBuf>,
-    /// Trusted signing key(s) for index.json verification. Repeatable.
     #[arg(long = "trusted-key")]
     pub trusted_keys: Vec<PathBuf>,
-    /// Accept unsigned index.json (explicit opt-out).
     #[arg(long)]
     pub allow_unsigned: bool,
 }
@@ -154,7 +153,7 @@ fn resolve_all(
     base_dir: &std::path::Path,
     cache: &std::path::Path,
     allow_fetch: bool,
-    repo_root: &crate::repo::layout::RepoRoot,
+    repo_root: Option<&crate::repo::layout::RepoRoot>,
     trusted: &[crate::repo::sign::TrustedKey],
     allow_unsigned: bool,
 ) -> Result<Resolved> {
@@ -268,22 +267,20 @@ fn entry_hint(file: &model::BundleFile) -> Option<&str> {
     None
 }
 
+/// 0.5.4: return Option — explicit absence of repo. Bundle without `repo:`
+/// sources and without explicit --repo/$APPSPEC_REPO → None. Callers must
+/// not use the root then (resolve_repo_source is not called).
 fn open_repo_root_for(
     file: &model::BundleFile,
     a: Option<PathBuf>,
-) -> Result<crate::repo::layout::RepoRoot> {
+) -> Result<Option<crate::repo::layout::RepoRoot>> {
     let has_repo = file.bundle.base.source.repo.is_some()
         || file.components.iter().any(|c| c.source.repo.is_some());
     let explicit = a.is_some() || std::env::var_os("APPSPEC_REPO").is_some();
     if has_repo || explicit {
-        return open_repo_root(a);
+        return Ok(Some(open_repo_root(a)?));
     }
-    // Bundle has no `repo:` sources and no explicit --repo/$APPSPEC_REPO.
-    // Return a stub root; never read because resolve_repo_source is not
-    // called (no `repo:` source in any component or base).
-    Ok(crate::repo::layout::RepoRoot::with_default_config(
-        &PathBuf::from("/nonexistent-appspec-repo"),
-    ))
+    Ok(None)
 }
 
 pub fn build(a: BuildArgs) -> Result<i32> {
@@ -304,7 +301,7 @@ pub fn build(a: BuildArgs) -> Result<i32> {
         &file,
         &base_dir,
         &cache,
-        &repo_root,
+        repo_root.as_ref(),
         &trusted,
         a.allow_unsigned,
     );
@@ -316,17 +313,41 @@ pub fn build(a: BuildArgs) -> Result<i32> {
     }
 
     // bundle.lock.toml: если есть — сверяем, но идём по индексу (§9.2).
+    if a.locked {
+        let lock_path_l = super::lock::default_path(&spec_path);
+        if !lock_path_l.is_file() {
+            bail!(
+                "locked mode requires bundle.lock.toml at {}; \
+                 run `appspec bundle lock {}`",
+                lock_path_l.display(),
+                a.spec
+            );
+        }
+    }
+
     let lock_path = super::lock::default_path(&spec_path);
     if !a.no_lock && lock_path.is_file() {
         match super::lock::LockFile::load(&lock_path) {
-            Ok(lk) => match super::lock::check_drift(&lk, &repo_root, &trusted, a.allow_unsigned) {
-                Ok(warns) => {
-                    for w in warns {
-                        eprintln!("warning: {w}");
+            Ok(lk) => {
+                match super::lock::check_drift(&lk, repo_root.as_ref(), &trusted, a.allow_unsigned)
+                {
+                    Ok(warns) => {
+                        if !warns.is_empty() {
+                            for w in &warns {
+                                eprintln!("warning: {w}");
+                            }
+                            if a.locked {
+                                bail!(
+                                    "lock drift detected and --locked was passed; \
+                                 rerun `appspec bundle lock {}` or drop --locked",
+                                    a.spec
+                                );
+                            }
+                        }
                     }
+                    Err(e) => eprintln!("warning: не могу сверить lock: {e:#}"),
                 }
-                Err(e) => eprintln!("warning: не могу сверить lock: {e:#}"),
-            },
+            }
             Err(e) => eprintln!("warning: не читается {}: {e:#}", lock_path.display()),
         }
     }
@@ -336,7 +357,7 @@ pub fn build(a: BuildArgs) -> Result<i32> {
         &base_dir,
         &cache,
         allow_fetch,
-        &repo_root,
+        repo_root.as_ref(),
         &trusted,
         a.allow_unsigned,
     )?;
@@ -401,7 +422,13 @@ pub fn lock(a: LockArgs) -> Result<i32> {
     let file = loader::load_bundle(&spec_path)?;
     let repo_root = open_repo_root_for(&file, a.repo)?;
     let trusted = load_trusted_all(&a.trusted_keys)?;
-    let lk = super::lock::generate(&file, &spec_path, &repo_root, &trusted, a.allow_unsigned)?;
+    let lk = super::lock::generate(
+        &file,
+        &spec_path,
+        repo_root.as_ref(),
+        &trusted,
+        a.allow_unsigned,
+    )?;
     let out = a
         .output
         .unwrap_or_else(|| super::lock::default_path(&spec_path));
@@ -420,6 +447,18 @@ pub fn check(a: CheckArgs) -> Result<i32> {
     let repo_root = open_repo_root_for(&file, a.repo)?;
     let trusted = load_trusted_all(&a.trusted_keys)?;
 
+    if a.locked {
+        let lock_path = super::lock::default_path(&spec_path);
+        if !lock_path.is_file() {
+            bail!(
+                "locked mode requires bundle.lock.toml at {}; \
+                 run `appspec bundle lock {}`",
+                lock_path.display(),
+                a.spec
+            );
+        }
+    }
+
     let static_issues = validate::validate_static(
         &file.bundle.base.source,
         entry_hint(&file),
@@ -431,7 +470,7 @@ pub fn check(a: CheckArgs) -> Result<i32> {
         &file,
         &base_dir,
         &cache,
-        &repo_root,
+        repo_root.as_ref(),
         &trusted,
         a.allow_unsigned,
     );
@@ -447,7 +486,7 @@ pub fn check(a: CheckArgs) -> Result<i32> {
         &base_dir,
         &cache,
         false,
-        &repo_root,
+        repo_root.as_ref(),
         &trusted,
         a.allow_unsigned,
     ) {
@@ -482,7 +521,7 @@ pub fn ls(a: LsArgs) -> Result<i32> {
         &file,
         &base_dir,
         &cache,
-        &repo_root,
+        repo_root.as_ref(),
         &trusted,
         a.allow_unsigned,
     );

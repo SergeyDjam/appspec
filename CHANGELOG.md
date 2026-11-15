@@ -4,6 +4,52 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+## [0.5.4] - 2026-11-15
+
+### Added
+
+- **`bundle build --locked`**: strict lock mode. Requires `bundle.lock.toml`;
+  any drift in `sif_sha256` (base or components) → hard error (exit != 0).
+  Conflicts with `--no-lock`.
+
+- **`[[base]]` in `bundle.lock.toml`**: if base source is `repo:`,
+  its `sif_sha256`/`spec_sha256`/`base_digest` are now locked. Previously
+  only components were locked; base could drift silently.
+
+- **`pull --to PATH`**: alias for `pull --root PATH` (symmetry with
+  `push --to URL`).
+
+### Fixed
+
+- **`bundle {build,check,lock}` with `source = repo`**: `resolve_repo_source`
+  read `packages/<name>/<ver>/spec.appspec` hard-coded. Now reads
+  `meta.spec_filename` (fallback `spec.appspec`) — supports repositories
+  that store specs under different names.
+
+- **`open_repo_root_for` fake stub**: previously constructed
+  `RepoRoot::with_default_config("/nonexistent-appspec-repo")` when
+  no `repo:` sources. Now returns `Option<RepoRoot>` — explicit
+  absence, no fake path that could be accidentally read.
+
+### Changed
+
+- **`bundle build`** (without `--locked`): behavior unchanged — drift
+  in lock emits warning and proceeds with fresh index (§9.2).
+  `--locked` is opt-in strictness.
+
+
+### Part B: repo + icons polish
+
+- **`publish --ipns --sign`**; auto-sign when `--pin-all` rebuilt the
+  index and `[signing].key` is configured.
+- **`publish --ipns`** info summary after `--pin-all` (fresh index).
+- **`repo check`** verifies `icon_sha256` (I2 for icons).
+- **`appspec install`** tries SIF icon labels even when `[install].icon`
+  is absent (repo-pulled packages).
+- **`resolve_icon`** explicit hint when `apptainer` missing / SIF unreadable.
+- **`pull --to`** alias truly implemented.
+- test: `nonexistent_repo_root_yields_directory_not_found`.
+
 ## [0.5.3] - 2026-11-15
 
 ### Fixed
