@@ -52,6 +52,26 @@ pub fn preflight(
     allow_unsigned: bool,
 ) -> Vec<Issue> {
     let mut out = Vec::new();
+
+    // Пути, которые существуют не на хосте, а внутри container'ов:
+    // mount-точки других компонентов и каталоги instance-сокетов.
+    // Для них warning "отсутствует на хосте" бессмыслен.
+    let mut container_paths: HashSet<String> = HashSet::new();
+    for c in &file.components {
+        container_paths.insert(c.mount());
+        if let Some(ds) = c.daemon_socket() {
+            container_paths.insert(ds.to_string());
+            if let Some(parent) = Path::new(ds).parent() {
+                container_paths.insert(parent.to_string_lossy().into_owned());
+            }
+        }
+    }
+    let is_container_path = |m: &str| {
+        container_paths
+            .iter()
+            .any(|p| m == p || m.starts_with(&format!("{p}/")))
+    };
+
     check_source(
         "base",
         &file.bundle.base.source,
@@ -105,6 +125,9 @@ pub fn preflight(
         }
         for m in c.mounts() {
             if !m.starts_with('/') {
+                continue;
+            }
+            if is_container_path(&m) {
                 continue;
             }
             let p = Path::new(&m);
@@ -336,6 +359,19 @@ pub fn validate_static(
                 format!("component:{}", c.name),
                 format!("provide `{}` уже занят `{}`", c.provide(), prev),
             ));
+        }
+    }
+    let mut seen_targets = std::collections::BTreeMap::<String, String>::new();
+    for c in components {
+        let mut targets = vec![c.target()];
+        targets.extend(c.bins.iter().map(|b| b.target()));
+        for t in targets {
+            if let Some(prev) = seen_targets.insert(t.clone(), c.name.clone()) {
+                out.push(Issue::error(
+                    format!("component:{}", c.name),
+                    format!("target `{t}` уже занят компонентом `{prev}`"),
+                ));
+            }
         }
     }
     for e in extensions {

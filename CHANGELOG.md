@@ -4,6 +4,85 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+## [0.5.5] - 2026-11-19
+
+### Added
+
+- **`[[components]].bins`** — дополнительные бинари компонента. Codegen
+  генерирует для них bridge'и в `/opt/appspec/bin` внутри base-instance
+  и создаёт symlink'и в `target`
+  (`/usr/bin/NAME` → `/usr/local/bin/NAME`, либо `{ name, path, target }`).
+  `bins` требует `mode = "chroot"` или `"both"`.
+
+- **Вложенные bridge'и**: каждый bridge перед chroot монтирует
+  `/opt/appspec/bin` и mount-пути остальных sandbox-компонентов, а также
+  добавляет `/opt/appspec/bin` в PATH. Цепочки вида
+  `tofu -> qemu-img -> libvirtd` теперь работают.
+
+- **`bridge = "exec"`** — запуск бинаря компонента из его rootfs без
+  chroot, в namespace base. Нужен `tofu`: его `local-exec` должен видеть
+  base-tools (`ansible-playbook`, `qemu-img`, `ssh`) и текущий проект,
+  а не пустой chroot opentofu-sandbox. Компонент при этом остаётся
+  отдельным атомарным sandbox'ом.
+
+### Fixed
+
+- **VSCodium снова видит подготовленные расширения.** Если в
+  `--extensions-dir` оставался пустой `extensions.json` (`[]`) от
+  прошлого запуска, VS Code/VSCodium доверял манифесту и не сканировал
+  каталоги — GUI показывал «no installed extensions». Launcher теперь
+  удаляет `extensions.json` перед стартом редактора, чтобы он
+  пересканировал каталог и пересобрал манифест.
+
+- **`APPSPEC_DISABLE_KVM` пробрасывается в base-instance**, а bridge'и
+  при `APPSPEC_DISABLE_KVM=1` не монтируют `/dev/kvm` в satellite-chroot.
+  Раньше qemu внутри virt-daemon chroot всё равно получал нерабочий
+  `/dev/kvm` и падал с `failed to initialize kvm: Inappropriate ioctl
+  for device`. Проверка `[ -e /dev/kvm ]` в lesson'ах должна
+  дополнительно учитывать `APPSPEC_DISABLE_KVM`.
+
+- **`appspec run` останавливает старые instance'ы этого bundle**
+  (`<name>-*`) перед запуском нового. Иначе уже запущенный codium с тем же
+  `--user-data-dir` перехватывал новый запуск, и терминалы оставались в
+  старом instance со старыми `/opt/utils`.
+
+- **Bridge-скрипты пишутся внутрь base-instance в `/opt/appspec/bin`**
+  (снимок на запуск), а не в общий cache. Это убирает ситуацию, когда
+  старый instance видит новые bridge'и, но старые `/opt/utils`.
+
+- **`/dev/kvm` больше не превращается в пустой файл.** Bridge для
+  device-файлов биндит родительский каталог (`/dev`), а не создаёт
+  regular-file заглушку. `/dev/kvm` попадает в base только если на хосте
+  это char/block device. Добавлен `APPSPEC_DISABLE_KVM=1` для TCG.
+
+- **Каталог расширений внутри `/config/home` создаётся до старта
+  instance.** Иначе bind `$BUNDLE_DIR/extensions:/config/home/.vscodium/extensions`
+  мог быть скрыт home-bind'ом, и VSCodium не видел расширения. Launcher
+  также печатает список смонтированных расширений.
+
+- **bundle пересобирает SIF, если spec новее SIF.** Раньше
+  `resolve_source` собирал только отсутствующий SIF, поэтому изменения в
+  `virt-daemon.appspec` (например добавление `cloud-image-utils`) не
+  попадали в старый `virt-daemon.sif`, и `bins`-bridge падал с
+  `exec: /usr/bin/cloud-localds: not found`. Теперь при
+  `spec.mtime > sif.mtime` вызывается `appspec build --force`.
+
+- **bundle home больше не лежит в cache.** `[runtime]` базового спека
+  наследуется полностью: `vars`, `state_dirs`, `binds`, `optional_binds`,
+  `create_dirs`, `env_passthrough`, `xauthority_auto`, `pulse_auto`.
+  Для `vscodium-bundle` home теперь `~/vscodium_config/home`, как у
+  одиночного `vscodium.appspec`. Fallback для base'ов без bind на
+  `/config/home` — `APPSPEC_BUNDLE_HOME`/XDG data.
+
+- **`appspec clean` больше не удаляет persistent state.** Удаляется только
+  cache. Для удаления state — `appspec clean --purge BUNDLE`.
+
+### Changed
+
+- `APPSPEC_BUNDLE_HOME` теперь действительно означает state, а не cache.
+  Cache переопределяется через `APPSPEC_BUNDLE_CACHE`.
+
 ## [0.5.4] - 2026-11-16
 
 ### Added

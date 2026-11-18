@@ -401,7 +401,7 @@ pub struct Scratch {
 
 // --- runtime (без изменений) ----------------------------------------------
 
-#[derive(Debug, Default, Deserialize, Serialize)]
+#[derive(Debug, Default, Clone, Deserialize, Serialize)]
 pub struct Runtime {
     #[serde(default)]
     pub sif_file: Option<String>,

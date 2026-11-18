@@ -676,7 +676,7 @@ fn heredoc_tag() -> String {
 // Построение shell-строк для bind'ов
 // ===========================================================================
 
-fn build_bind_lines(rt: &Runtime) -> Vec<String> {
+pub(crate) fn build_bind_lines(rt: &Runtime) -> Vec<String> {
     let mut lines: Vec<String> = Vec::new();
 
     for b in &rt.binds {

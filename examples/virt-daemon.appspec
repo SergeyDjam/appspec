@@ -22,6 +22,8 @@ extra = [
     # --- QEMU ---
     "qemu-system-x86",
     "qemu-utils",
+    # --- cloud-init seed ISO / provisioning ---
+    "cloud-image-utils",
     # --- network / storage backend ---
     "dnsmasq-base",
     "iproute2",
@@ -30,6 +32,9 @@ extra = [
     # --- утилиты ---
     "procps", "psmisc",
     "dbus",
+    # --- shell/coreutils для bridge'ей из bundle (seq, timeout, bash) ---
+    "bash",
+    "coreutils",
 ]
 
 [build.collect]

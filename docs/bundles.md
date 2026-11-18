@@ -52,6 +52,7 @@ source (у base и у компонентов) — ровно один из:
 | binary | path | /usr/bin/NAME | Бинарь внутри sandbox |
 | target | path | /usr/local/bin/NAME | Куда положить bridge-скрипт |
 | mounts | [string] | PWD, HOME | Что пробрасывать внутрь chroot |
+| bins | [string \| table] | [] | Дополнительные бинари компонента, пробрасываемые в base через bridge (`/usr/bin/NAME` → `/usr/local/bin/NAME`; таблица `{ name, path, target }`) |
 | forward | [string] | TERM, LANG, LC_ALL | Какие env пробрасывать |
 | env | map | пусто | Env для sandbox или instance |
 | contain | bool | true | --contain для instance |
@@ -60,7 +61,14 @@ source (у base и у компонентов) — ровно один из:
 
 Только для chroot (и both):
 
-- bridge — chroot (по умолчанию) или apptainer.
+- bridge — стратегия запуска:
+  - `chroot` (по умолчанию) — chroot в sandbox компонента;
+  - `apptainer` — зарезервировано;
+  - `exec` — запуск бинаря из rootfs компонента **без chroot**, в
+    namespace base. Нужен инструментам, чей дочерний процесс должен
+    видеть base (`tofu` и его `local-exec`: `ansible-playbook`,
+    `qemu-img`, `ssh`) и текущий проект. Компонент при этом остаётся
+    отдельным атомарным sandbox'ом — bridge лишь запускает его бинарь.
 
 Только для instance (и both):
 
@@ -68,6 +76,22 @@ source (у base и у компонентов) — ровно один из:
 - state_dir — каталог на хосте под state.
 - daemon — команда, запускающая демон в instance.
 - daemon_socket — путь к сокету внутри instance.
+
+Пример `bins`:
+
+~~~toml
+[[components]]
+name    = "libvirtd"
+spec    = "./virt-daemon.appspec"
+mode    = "both"          # bins требуют sandbox
+bins    = ["qemu-img", "qemu-system-x86_64", "cloud-localds"]
+~~~
+
+Для нестандартных путей:
+
+~~~toml
+bins = [{ name = "mytool", path = "/usr/sbin/mytool", target = "/usr/local/bin/mytool" }]
+~~~
 
 ## Как работает mode = chroot
 
@@ -79,6 +103,17 @@ source (у base и у компонентов) — ровно один из:
    - пропускает SSH_AUTH_SOCK, если задан;
    - пропускает файлы из mounts, начинающиеся со слеша;
    - делает exec chroot SANDBOX BINARY со всеми аргументами.
+
+Все bridge-скрипты (primary `provide` и дополнительные `bins`)
+записываются внутрь base-instance в `/opt/appspec/bin` (writable tmpfs,
+снимок на каждый запуск). Каждый bridge перед chroot монтирует внутрь
+sandbox `/opt/appspec/bin` и mount-пути остальных sandbox-компонентов,
+а также добавляет `/opt/appspec/bin` в PATH. Поэтому инструменты
+компонентов доступны не только в base, но и внутри chroot других
+компонентов.
+
+`bins` требует `mode = "chroot"` или `"both"`: у `instance`-компонента
+нет sandbox. Для таких компонентов используйте `mode = "both"`.
 
 ## Как работает mode = instance
 
@@ -153,26 +188,41 @@ appspec clean bundle.appspec — удалить launcher и кэш.
 
 ## Кэш и state
 
-По умолчанию: HOME/.cache/appspec/bundles/NAME.
+По умолчанию:
 
-Переопределяется через APPSPEC_BUNDLE_CACHE или APPSPEC_BUNDLE_HOME.
+- cache: `XDG_CACHE_HOME/appspec/bundles/NAME` (или `~/.cache/appspec/bundles/NAME`);
+- state: `XDG_DATA_HOME/appspec/bundles/NAME` (или `~/.local/share/appspec/bundles/NAME`).
 
-Структура каталога:
+Переопределяется через `APPSPEC_BUNDLE_CACHE` (cache) и
+`APPSPEC_BUNDLE_HOME` (state).
+
+**Важно:** `[runtime]` базового спека наследуется bundle-ом. Если base
+задаёт bind на `/config/home` (например `vscodium.appspec`:
+`CONFIG_DIR="$HOME/vscodium_config"` и `$CONFIG_DIR/home:/config/home`),
+bundle использует именно его. Home не попадает в cache и переживает
+`appspec clean`. Fallback для base'ов без такого bind'а —
+`STATE/NAME/home`.
+
+Структура cache:
 
 ~~~
 NAME/
-  sandboxes/         распакованные SIF компонентов с mode=chroot
-    COMPONENT/
-      .fingerprint   size-mtime SIF, для инвалидации
-  home/              HOME base-инстанса
+  sandboxes/         распакованные SIF компонентов с mode=chroot|both
+    COMPONENT-HASH/   HASH — первые 12 символов sha256 SIF
+      .ready          маркер завершённой распаковки
+    COMPONENT         symlink → COMPONENT-HASH (монтируется как /opt/utils/COMPONENT)
   extensions/        подготовленные .vsix
   run/               сокеты и state podman-компонентов
   state/             прочий state
 ~~~
 
-Fingerprint — простая пара size-mtime. Если SIF пересобран с тем же
-размером и mtime, sandbox не обновится. Для большинства сценариев
-этого достаточно.
+`appspec clean BUNDLE` удаляет cache и launcher. Persistent state
+сохраняется; `appspec clean --purge BUNDLE` удаляет и его.
+
+Fingerprint sandbox'а — `sha256` SIF в имени каталога
+(`COMPONENT-<hash12>`). Новая версия SIF получает новый sandbox, а
+запущенные instance'ы продолжают видеть свой старый — без `rm -rf`
+поверх активного bind'а.
 
 ### Trust и выбор репозитория (0.4.5)
 

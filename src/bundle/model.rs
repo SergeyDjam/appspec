@@ -3,6 +3,8 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
+use crate::spec::Runtime;
+
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
 pub struct SourceSpec {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -64,6 +66,9 @@ impl SourceSpec {
 pub struct ResolvedSource {
     pub sif: PathBuf,
     pub setup: Option<String>,
+    /// Полный `[runtime]` базового спека, если источник — `spec` или `repo`.
+    /// Нужен bundle-codegen, чтобы унаследовать vars/state_dirs/binds.
+    pub runtime: Option<Runtime>,
     pub origin: String,
 }
 
@@ -112,6 +117,50 @@ pub enum ComponentMode {
     Both,
 }
 
+/// Один дополнительный бинарь компонента.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(untagged)]
+pub enum BinSpec {
+    Name(String),
+    Full(BinFull),
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct BinFull {
+    pub name: String,
+    #[serde(default)]
+    pub path: Option<String>,
+    #[serde(default)]
+    pub target: Option<String>,
+}
+
+impl BinSpec {
+    pub fn name(&self) -> &str {
+        match self {
+            BinSpec::Name(n) => n,
+            BinSpec::Full(f) => &f.name,
+        }
+    }
+    pub fn binary(&self) -> String {
+        match self {
+            BinSpec::Name(n) => format!("/usr/bin/{n}"),
+            BinSpec::Full(f) => f
+                .path
+                .clone()
+                .unwrap_or_else(|| format!("/usr/bin/{}", f.name)),
+        }
+    }
+    pub fn target(&self) -> String {
+        match self {
+            BinSpec::Name(n) => format!("/usr/local/bin/{n}"),
+            BinSpec::Full(f) => f
+                .target
+                .clone()
+                .unwrap_or_else(|| format!("/usr/local/bin/{}", f.name)),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct Component {
     pub name: String,
@@ -128,6 +177,12 @@ pub struct Component {
     pub target: Option<String>,
     #[serde(default)]
     pub bridge: Option<String>,
+
+    /// Дополнительные бинари компонента, которые нужно пробросить в base
+    /// через bridge. Строка — имя (`/usr/bin/NAME` → `/usr/local/bin/NAME`),
+    /// таблица — `{ name, path, target }`.
+    #[serde(default)]
+    pub bins: Vec<BinSpec>,
 
     #[serde(default)]
     pub mounts: Vec<String>,
@@ -459,6 +514,8 @@ pub struct ResolvedBase {
     pub sif: PathBuf,
     pub pre: String,
     pub entry: String,
+    /// `[runtime]` базового спека (если он был доступен).
+    pub runtime: Option<Runtime>,
     pub origin: String,
 }
 

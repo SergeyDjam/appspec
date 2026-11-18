@@ -263,6 +263,12 @@ name = "ms-azuretools.vscode-docker"
 Компоненты бывают трёх режимов: `chroot`, `instance`, `both`.
 Расширения — четырёх источников: file, cid, url, online (Open VSX).
 
+`[[components]].bins` пробрасывает дополнительные бинари компонента в
+base через `/opt/appspec/bin` (по умолчанию `/usr/bin/NAME` →
+`/usr/local/bin/NAME`); `bins` требует `mode = "chroot"` или `"both"`.
+Home наследуется из `[runtime]` base-спека: для `vscodium.appspec` это
+`~/vscodium_config/home`, а не каталог кэша.
+
 ### Типы расширений
 
 `[[extensions]].type` — `vsix` (default), `file`, `archive`, `auto`.
@@ -545,10 +551,6 @@ Unit-тесты внутри `src/bundle/loader.rs`, `src/bundle/model.rs`,
 - [`docs/troubleshooting.md`](docs/troubleshooting.md) — типичные проблемы.
 - [`docs/repo.md`](docs/repo.md) — локальный и удалённый репозиторий SIF.
 
-## Лицензия
-
-GPL-2.0-or-later. See [LICENSE](LICENSE) for the full text.
-
 ## IPNS (mutable-имя репозитория)
 
 С 0.4.4 репозиторий можно адресовать по IPNS. Index по-прежнему
@@ -567,3 +569,7 @@ appspec repo pull pkg:1.0.0-1 --profile corp
 Конфигурация (`[ipfs].ipns_key`, `source.ipns`), latency и fail-closed
 семантика — см. [`docs/repo.md`](docs/repo.md) и
 [`docs/repo-config.md`](docs/repo-config.md).
+
+## Лицензия
+
+GPL-2.0-or-later. See [LICENSE](LICENSE) for the full text.
