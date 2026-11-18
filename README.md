@@ -547,10 +547,6 @@ Unit tests inside `src/bundle/loader.rs`, `src/bundle/model.rs`,
 - [`docs/troubleshooting.md`](docs/troubleshooting.md) — common problems (Russian).
 - [`docs/repo.md`](docs/repo.md) — local and remote SIF repository (Russian).
 
-## License
-
-GPL-2.0-or-later. See [LICENSE](LICENSE) for the full text.
-
 ## IPNS (mutable repository name)
 
 Since 0.4.4 a repository can be addressed by IPNS. The index is still
@@ -569,3 +565,7 @@ appspec repo pull pkg:1.0.0-1 --profile corp
 For configuration (`[ipfs].ipns_key`, `source.ipns`), latency and
 fail-closed semantics see [`docs/repo.md`](docs/repo.md) and
 [`docs/repo-config.md`](docs/repo-config.md).
+
+## License
+
+GPL-2.0-or-later. See [LICENSE](LICENSE) for the full text.

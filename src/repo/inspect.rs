@@ -28,6 +28,28 @@ fn apptainer_bin() -> String {
     std::env::var("APPSPEC_APPTAINER").unwrap_or_else(|_| "apptainer".to_string())
 }
 
+/// ETXTBSY (os error 26) — «Text file busy». На некоторых ФС/в тестах
+/// `apptainer` (или мок-скрипт) может быть ещё открыт на запись в момент
+/// exec. Это транзиентная ошибка: несколько коротких повторов безопасны.
+fn run_inspect(bin: &str, sif: &Path) -> std::io::Result<std::process::Output> {
+    let mut last: Option<std::io::Error> = None;
+    for attempt in 0..8 {
+        match Command::new(bin)
+            .args(["inspect", "--json", "--labels"])
+            .arg(sif)
+            .output()
+        {
+            Ok(out) => return Ok(out),
+            Err(e) if e.raw_os_error() == Some(26) => {
+                last = Some(e);
+                std::thread::sleep(std::time::Duration::from_millis(10 * (attempt + 1)));
+            }
+            Err(e) => return Err(e),
+        }
+    }
+    Err(last.expect("at least one ETXTBSY attempt"))
+}
+
 pub fn inspect(sif: &Path) -> Result<SifLabels> {
     if !sif.is_file() {
         bail!("SIF not found: {}", sif.display());
@@ -39,10 +61,7 @@ pub fn inspect(sif: &Path) -> Result<SifLabels> {
             bin
         );
     }
-    let out = Command::new(&bin)
-        .args(["inspect", "--json", "--labels"])
-        .arg(sif)
-        .output()
+    let out = run_inspect(&bin, sif)
         .with_context(|| format!("running {} inspect on {}", bin, sif.display()))?;
     if !out.status.success() {
         bail!(

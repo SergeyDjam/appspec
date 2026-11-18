@@ -80,7 +80,12 @@ enum Cmd {
     },
 
     /// Удалить сгенерированные артефакты
-    Clean { spec: PathBuf },
+    Clean {
+        spec: PathBuf,
+        /// Для bundle: удалить ещё и persistent state (home/logs)
+        #[arg(long)]
+        purge: bool,
+    },
 
     /// Установить SIF + launcher + desktop-интеграцию
     Install {
@@ -174,7 +179,7 @@ fn main() {
                 .and_then(|_| cmd_run(&s, None, None, None, &[], false, false))
                 .map(|_| 0)
         }
-        Cmd::Clean { spec } => cmd_clean(&spec).map(|_| 0),
+        Cmd::Clean { spec, purge } => cmd_clean(&spec, purge).map(|_| 0),
 
         Cmd::Install {
             spec,
@@ -1008,6 +1013,12 @@ fn cmd_run_bundle(bundle_path: &Path) -> Result<()> {
     }
 
     let name = bundle_name(bundle_path)?;
+
+    // Убиваем старые base-instance'ы этого bundle до запуска нового.
+    // Иначе codium с тем же --user-data-dir перехватывает запуск, и
+    // пользователь остаётся в старом instance со старыми /opt/utils.
+    stop_bundle_base_instances(&name);
+
     let launcher = bundle_path
         .parent()
         .unwrap_or_else(|| Path::new("."))
@@ -1026,6 +1037,27 @@ fn cmd_run_bundle(bundle_path: &Path) -> Result<()> {
         bail!("bundle launcher вернул ошибку");
     }
     Ok(())
+}
+
+fn stop_bundle_base_instances(name: &str) {
+    let prefix = format!("{name}-");
+    let Ok(out) = Command::new("apptainer")
+        .args(["instance", "list"])
+        .output()
+    else {
+        return;
+    };
+    for line in String::from_utf8_lossy(&out.stdout).lines().skip(1) {
+        let Some(inst) = line.split_whitespace().next() else {
+            continue;
+        };
+        if inst.starts_with(&prefix) {
+            log(format!("Stopping stale instance: {inst}"));
+            let _ = Command::new("apptainer")
+                .args(["instance", "stop", inst])
+                .status();
+        }
+    }
 }
 
 /// Остановить instance, оставленный `appspec run` в режиме persist.
@@ -1080,10 +1112,10 @@ fn cmd_stop(spec_path: &Path) -> Result<()> {
     }
 }
 
-fn cmd_clean(spec_path: &Path) -> Result<()> {
+fn cmd_clean(spec_path: &Path, purge: bool) -> Result<()> {
     match spec_kind(spec_path)? {
         SpecKind::App => cmd_clean_app(spec_path),
-        SpecKind::Bundle => cmd_clean_bundle(spec_path),
+        SpecKind::Bundle => cmd_clean_bundle(spec_path, purge),
     }
 }
 
@@ -1110,7 +1142,7 @@ fn cmd_clean_app(spec_path: &Path) -> Result<()> {
     Ok(())
 }
 
-fn cmd_clean_bundle(bundle_path: &Path) -> Result<()> {
+fn cmd_clean_bundle(bundle_path: &Path, purge: bool) -> Result<()> {
     use crate::bundle;
 
     let name = bundle_name(bundle_path)?;
@@ -1130,6 +1162,20 @@ fn cmd_clean_bundle(bundle_path: &Path) -> Result<()> {
         fs::remove_dir_all(&cache)
             .with_context(|| format!("removing cache {}", cache.display()))?;
         log(format!("Removed {}", cache.display()));
+    }
+
+    if purge {
+        let state = bundle::loader::bundle_state_dir(&name);
+        if state.exists() {
+            fs::remove_dir_all(&state)
+                .with_context(|| format!("removing state {}", state.display()))?;
+            log(format!("Removed {}", state.display()));
+        }
+    } else {
+        let state = bundle::loader::bundle_state_dir(&name);
+        if state.exists() {
+            log(format!("Kept state: {}", state.display()));
+        }
     }
     Ok(())
 }

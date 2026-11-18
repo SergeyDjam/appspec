@@ -13,6 +13,7 @@
 //! (НЕ `process::exit(0)` — иначе пропадают все остальные тесты).
 
 use assert_cmd::Command;
+use predicates::prelude::*;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command as StdCommand;
@@ -63,6 +64,25 @@ fn cached_exts(cache_dir: &Path, bundle_name: &str) -> PathBuf {
 
 fn read_launcher(dir: &Path, bundle_name: &str) -> String {
     fs::read_to_string(dir.join(format!("run.{bundle_name}.sh"))).unwrap()
+}
+
+/// Setup-скрипт base-instance упакован в launcher как base64.
+/// Тесты, проверяющие bridges/install/ready, должны смотреть в него,
+/// а не в текст launcher'а.
+fn setup_script(launcher: &str) -> String {
+    for line in launcher.lines() {
+        let Some(rest) = line.strip_prefix("printf %s ") else {
+            continue;
+        };
+        let Some(b64) = rest.split_whitespace().next() else {
+            continue;
+        };
+        use base64::Engine as _;
+        if let Ok(bytes) = base64::engine::general_purpose::STANDARD.decode(b64) {
+            return String::from_utf8_lossy(&bytes).into_owned();
+        }
+    }
+    panic!("setup script not found in launcher");
 }
 
 /// Собирает минимальный `.vsix` в `dst` с `extension/package.json`.
@@ -122,24 +142,25 @@ install   = "tool-install --input {target} --id {id} --ver {version} --legacy {f
         .success();
 
     let launcher = read_launcher(tmp.path(), "testfile");
+    let setup = setup_script(&launcher);
 
     assert!(
-        launcher.contains(
+        setup.contains(
             "tool-install --input /opt/extensions/demo.oxt --id demo --ver 1 --legacy /opt/extensions/demo.oxt"
         ),
-        "install command must substitute all placeholders, got:\n{launcher}"
+        "install command must substitute all placeholders, got:\n{setup}"
     );
     assert!(
-        !launcher.contains("--input {target}"),
-        "literal {{target}} left:\n{launcher}"
+        !setup.contains("--input {target}"),
+        "literal {{target}} left:\n{setup}"
     );
     assert!(
-        !launcher.contains("--input {file}"),
-        "literal {{file}} left:\n{launcher}"
+        !setup.contains("--input {file}"),
+        "literal {{file}} left:\n{setup}"
     );
     assert!(
-        launcher.contains("yes yes 2>/dev/null | tool-install --input /opt/extensions/demo.oxt"),
-        "install must be piped through `yes yes 2>/dev/null |`:\n{launcher}"
+        setup.contains("yes yes 2>/dev/null | tool-install --input /opt/extensions/demo.oxt"),
+        "install must be piped through `yes yes 2>/dev/null |`:\n{setup}"
     );
     assert!(
         launcher.contains("--bind $BUNDLE_DIR/extensions:/opt/extensions"),
@@ -291,13 +312,14 @@ install = "codium --install-extension {target} --force"
     // 3. Launcher НЕ содержит `install:` — ни `codium --install-extension`,
     //    ни вообще `yes yes | …`.
     let launcher = read_launcher(tmp.path(), "testvsix");
+    let setup = setup_script(&launcher);
     assert!(
-        !launcher.contains("install:"),
-        "vsix must NOT produce install command, got:\n{launcher}"
+        !setup.contains("install:"),
+        "vsix must NOT produce install command, got:\n{setup}"
     );
     assert!(
-        !launcher.contains("codium --install-extension"),
-        "codium --install-extension must not appear in launcher:\n{launcher}"
+        !setup.contains("codium --install-extension"),
+        "codium --install-extension must not appear in setup:\n{setup}"
     );
 
     // 4. Bind на default mount_dir (без [bundle.extensions].mount_dir).
@@ -308,8 +330,8 @@ install = "codium --install-extension {target} --force"
 
     // 5. Печатается ready с пометкой (vsix).
     assert!(
-        launcher.contains("ready: demo.widget v1.0.0 (vsix)"),
-        "missing `ready:` line, got:\n{launcher}"
+        setup.contains("ready: demo.widget v1.0.0 (vsix)"),
+        "missing `ready:` line, got:\n{setup}"
     );
 }
 
@@ -347,8 +369,9 @@ install   = "codium --install-extension {target}"
         .success();
 
     let launcher = read_launcher(tmp.path(), "testvsixdir");
+    let setup = setup_script(&launcher);
     // install для vsix всё равно не генерируется.
-    assert!(!launcher.contains("install:"));
+    assert!(!setup.contains("install:"));
     // mount_dir работает для bind.
     assert!(launcher.contains("--bind $BUNDLE_DIR/extensions:/opt/extensions"));
 }
@@ -397,16 +420,17 @@ install   = "tool {target}"
         .success();
 
     let launcher = read_launcher(tmp.path(), "testmix");
+    let setup = setup_script(&launcher);
 
     // Для file — install есть, через `yes yes |`.
     assert!(
-        launcher.contains("yes yes 2>/dev/null | tool /opt/extensions/demo.oxt"),
-        "file install missing:\n{launcher}"
+        setup.contains("yes yes 2>/dev/null | tool /opt/extensions/demo.oxt"),
+        "file install missing:\n{setup}"
     );
     // Для vsix — install нет.
     assert!(
-        !launcher.contains("tool /opt/extensions/demo.widget-1.0.0"),
-        "vsix must not produce install command:\n{launcher}"
+        !setup.contains("tool /opt/extensions/demo.widget-1.0.0"),
+        "vsix must not produce install command:\n{setup}"
     );
     // В кэше: file — файл, vsix — каталог.
     let exts = cached_exts(&cache, "testmix");
@@ -414,8 +438,8 @@ install   = "tool {target}"
     assert!(exts.join("demo.widget-1.0.0").is_dir());
 
     // ready для обоих, с разными kind.
-    assert!(launcher.contains("ready: grammalecte v1 (file)"));
-    assert!(launcher.contains("ready: demo.widget v1.0.0 (vsix)"));
+    assert!(setup.contains("ready: grammalecte v1 (file)"));
+    assert!(setup.contains("ready: demo.widget v1.0.0 (vsix)"));
 }
 
 // ===========================================================================
@@ -457,4 +481,222 @@ type = "file"
         .clone();
     let s = String::from_utf8_lossy(&out);
     assert!(!s.contains("demo.oxt не скачан"));
+}
+
+// ===========================================================================
+// bundle: persistent home наследуется из [runtime] base-спека
+// ===========================================================================
+
+fn write_min_spec(dir: &Path, file: &str, pkg: &str, runtime_body: &str) {
+    let body = format!(
+        r#"
+[package]
+name    = "{pkg}"
+version = "0.0.1"
+
+[build]
+base     = "alpine:3.21"
+template = "alpine"
+
+[runtime]
+{runtime_body}
+"#
+    );
+    fs::write(dir.join(file), body).unwrap();
+    fs::write(dir.join(format!("{pkg}.sif")), b"fake-sif").unwrap();
+}
+
+fn write_spec_bundle(dir: &Path, name: &str, base_spec: &str, extra: &str) -> PathBuf {
+    let spec = dir.join("bundle.appspec");
+    let body = format!(
+        r#"
+[bundle]
+name = "{name}"
+
+[bundle.base]
+spec  = "{base_spec}"
+entry = "exec /bin/true"
+
+{extra}
+"#
+    );
+    fs::write(&spec, body).unwrap();
+    spec
+}
+
+#[test]
+fn base_runtime_home_bind_is_used() {
+    let tmp = TempDir::new().unwrap();
+    let cache = tmp.path().join("cache");
+    let state = tmp.path().join("state");
+    fs::create_dir_all(&cache).unwrap();
+    fs::create_dir_all(&state).unwrap();
+
+    write_min_spec(
+        tmp.path(),
+        "base.appspec",
+        "base",
+        r#"
+state_dirs = ["home", "log"]
+binds = [
+    "$CONFIG_DIR/home:/config/home",
+    "$CONFIG_DIR/log:/config/log",
+]
+env_passthrough = ["DISPLAY", "XAUTHORITY", "LIBVIRT_DEFAULT_URI"]
+
+[runtime.vars]
+CONFIG_DIR = "$HOME/vscodium_config"
+"#,
+    );
+
+    let spec = write_spec_bundle(tmp.path(), "testhome", "./base.appspec", "");
+    appspec()
+        .env("APPSPEC_BUNDLE_CACHE", &cache)
+        .env("APPSPEC_BUNDLE_HOME", &state)
+        .args(["bundle", "build", spec.to_str().unwrap()])
+        .assert()
+        .success();
+
+    let launcher = read_launcher(tmp.path(), "testhome");
+    assert!(
+        launcher.contains(r#"CONFIG_DIR="$HOME/vscodium_config""#),
+        "runtime.vars not propagated:\n{launcher}"
+    );
+    assert!(
+        launcher.contains("--bind $CONFIG_DIR/home:/config/home"),
+        "base bind for /config/home missing:\n{launcher}"
+    );
+    assert!(
+        launcher.contains(r#"mkdir -p "$CONFIG_DIR/home""#),
+        "state_dirs home not created:\n{launcher}"
+    );
+    assert!(
+        launcher.contains("--env LIBVIRT_DEFAULT_URI"),
+        "env_passthrough not merged:\n{launcher}"
+    );
+    assert!(
+        launcher.contains(r#"mkdir -p "$CONFIG_DIR/home/.vscodium/extensions""#),
+        "extensions dir inside home bind must be created before instance start:\n{launcher}"
+    );
+    assert!(
+        !launcher.contains("--bind $BUNDLE_DIR/home:/config/home"),
+        "cache home bind must be disabled when base provides /config/home:\n{launcher}"
+    );
+}
+
+#[test]
+fn bundle_home_falls_back_to_state_dir() {
+    let tmp = TempDir::new().unwrap();
+    let cache = tmp.path().join("cache");
+    let state = tmp.path().join("state");
+    fs::create_dir_all(&cache).unwrap();
+    fs::create_dir_all(&state).unwrap();
+
+    write_min_spec(tmp.path(), "base.appspec", "base", "");
+    let spec = write_spec_bundle(tmp.path(), "teststate", "./base.appspec", "");
+
+    appspec()
+        .env("APPSPEC_BUNDLE_CACHE", &cache)
+        .env("APPSPEC_BUNDLE_HOME", &state)
+        .args(["bundle", "build", spec.to_str().unwrap()])
+        .assert()
+        .success();
+
+    let launcher = read_launcher(tmp.path(), "teststate");
+    assert!(
+        launcher.contains("--bind $BUNDLE_HOME:/config/home"),
+        "state fallback bind missing:\n{launcher}"
+    );
+    assert!(
+        launcher.contains(r#"mkdir -p "$BUNDLE_HOME/.vscodium/extensions""#),
+        "extensions dir under fallback home missing:\n{launcher}"
+    );
+    assert!(
+        !launcher.contains("--bind $BUNDLE_DIR/home:/config/home"),
+        "home must not live in cache:\n{launcher}"
+    );
+}
+
+// ===========================================================================
+// bundle: bins -> /opt/appspec/bin + symlink в target
+// ===========================================================================
+
+#[test]
+fn component_bins_generate_tool_bridges() {
+    let tmp = TempDir::new().unwrap();
+    let cache = tmp.path().join("cache");
+    fs::create_dir_all(&cache).unwrap();
+
+    write_min_spec(tmp.path(), "base.appspec", "base", "");
+    write_min_spec(tmp.path(), "tools.appspec", "tools", "");
+
+    let spec = write_spec_bundle(
+        tmp.path(),
+        "testbins",
+        "./base.appspec",
+        r#"
+[[components]]
+name = "tools"
+spec = "./tools.appspec"
+bins = ["qemu-img", "cloud-localds"]
+"#,
+    );
+
+    appspec()
+        .env("APPSPEC_BUNDLE_CACHE", &cache)
+        .args(["bundle", "build", spec.to_str().unwrap()])
+        .assert()
+        .success();
+
+    let launcher = read_launcher(tmp.path(), "testbins");
+    let setup = setup_script(&launcher);
+    assert!(
+        setup.contains("mkdir -p /opt/appspec/bin"),
+        "tool dir should be created inside base instance:\n{setup}"
+    );
+    assert!(
+        setup.contains("ln -sf /opt/appspec/bin/qemu-img /usr/local/bin/qemu-img"),
+        "qemu-img bridge link missing:\n{setup}"
+    );
+    assert!(
+        setup.contains("ln -sf /opt/appspec/bin/cloud-localds /usr/local/bin/cloud-localds"),
+        "cloud-localds bridge link missing:\n{setup}"
+    );
+    assert!(
+        setup.contains("/opt/appspec/bin/qemu-img"),
+        "bridge script write missing:\n{setup}"
+    );
+}
+
+#[test]
+fn bins_rejected_for_instance_mode() {
+    let tmp = TempDir::new().unwrap();
+    let cache = tmp.path().join("cache");
+    fs::create_dir_all(&cache).unwrap();
+
+    write_min_spec(tmp.path(), "base.appspec", "base", "");
+    write_min_spec(tmp.path(), "tools.appspec", "tools", "");
+
+    let spec = write_spec_bundle(
+        tmp.path(),
+        "testbinsbad",
+        "./base.appspec",
+        r#"
+[[components]]
+name = "tools"
+spec = "./tools.appspec"
+mode = "instance"
+bins = ["qemu-img"]
+daemon = "podman system service --time=0"
+daemon_socket = "/run/podman/podman.sock"
+socket_dir = "$BUNDLE_DIR/run/podman"
+"#,
+    );
+
+    appspec()
+        .env("APPSPEC_BUNDLE_CACHE", &cache)
+        .args(["bundle", "check", spec.to_str().unwrap()])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("bins"));
 }

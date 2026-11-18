@@ -24,6 +24,25 @@ pub fn load_bundle(path: &Path) -> Result<BundleFile> {
             bail!("[[components]]: дубликат имени `{}`", c.name);
         }
         c.source.validate(&format!("component `{}`", c.name))?;
+        for b in &c.bins {
+            if b.name().is_empty() {
+                bail!("component `{}`: bins: пустое имя", c.name);
+            }
+            if !b.binary().starts_with('/') {
+                bail!(
+                    "component `{}`: bins[{}]: path должен быть абсолютным",
+                    c.name,
+                    b.name()
+                );
+            }
+            if !b.target().starts_with('/') {
+                bail!(
+                    "component `{}`: bins[{}]: target должен быть абсолютным",
+                    c.name,
+                    b.name()
+                );
+            }
+        }
         for f in &c.files {
             f.validate(&format!("component `{}`", c.name))?;
         }
@@ -31,9 +50,14 @@ pub fn load_bundle(path: &Path) -> Result<BundleFile> {
             ComponentMode::Chroot => {
                 if let Some(b) = &c.bridge {
                     match b.as_str() {
-                        "chroot" | "apptainer" => {}
+                        // exec — запуск бинаря из rootfs satellite'а без
+                        // chroot, в namespace base. Нужен для tofu: его
+                        // local-exec должен видеть base-tools (ansible,
+                        // qemu-img) и текущий проект.
+                        "chroot" | "apptainer" | "exec" => {}
                         other => bail!(
-                            "component `{}`: неизвестная стратегия bridge = `{}`",
+                            "component `{}`: неизвестная стратегия bridge = `{}` \
+                             (ожидается chroot, apptainer или exec)",
                             c.name,
                             other
                         ),
@@ -52,6 +76,13 @@ pub fn load_bundle(path: &Path) -> Result<BundleFile> {
                 }
             }
             ComponentMode::Instance | ComponentMode::Both => {
+                if !c.bins.is_empty() && c.mode() == ComponentMode::Instance {
+                    bail!(
+                        "component `{}`: `bins` требует mode = \"chroot\" или \"both\" \
+                         (instance-компонент не имеет sandbox)",
+                        c.name
+                    );
+                }
                 if c.bridge.is_some() {
                     bail!(
                         "component `{}`: bridge несовместим с mode = instance/both",
@@ -100,6 +131,15 @@ pub fn load_bundle(path: &Path) -> Result<BundleFile> {
     Ok(file)
 }
 
+fn spec_newer_than_sif(spec: &Path, sif: &Path) -> bool {
+    let sm = std::fs::metadata(spec).and_then(|m| m.modified()).ok();
+    let im = std::fs::metadata(sif).and_then(|m| m.modified()).ok();
+    match (sm, im) {
+        (Some(s), Some(i)) => s > i,
+        _ => false,
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn resolve_source(
     src: &SourceSpec,
@@ -121,6 +161,7 @@ pub fn resolve_source(
         return Ok(ResolvedSource {
             sif: p,
             setup: None,
+            runtime: None,
             origin: format!("sif:{s}"),
         });
     }
@@ -134,15 +175,31 @@ pub fn resolve_source(
             .parent()
             .unwrap_or_else(|| Path::new("."))
             .join(spec.sif_file());
-        if !sif.is_file() {
+        let stale = sif.is_file() && spec_newer_than_sif(&sp, &sif);
+        if !sif.is_file() || stale {
             if !allow_build {
-                bail!(
-                    "{label}: SIF не собран: {}\n  appspec build {}",
+                if !sif.is_file() {
+                    bail!(
+                        "{label}: SIF не собран: {}\n  appspec build {}",
+                        sif.display(),
+                        sp.display()
+                    );
+                }
+                crate::log(format!(
+                    "bundle: warning: {} старше spec {}; использую stale SIF (--no-build)",
                     sif.display(),
                     sp.display()
-                );
+                ));
+            } else {
+                if stale {
+                    crate::log(format!(
+                        "bundle: spec {} новее SIF {} — пересобираю",
+                        sp.display(),
+                        sif.display()
+                    ));
+                }
+                build_spec_via_self(&sp, stale)?;
             }
-            build_spec_via_self(&sp)?;
         }
         if !sif.is_file() {
             bail!("{label}: после сборки SIF не найден: {}", sif.display());
@@ -150,6 +207,7 @@ pub fn resolve_source(
         return Ok(ResolvedSource {
             sif,
             setup: spec.runtime.setup.clone(),
+            runtime: Some(spec.runtime.clone()),
             origin: format!("spec:{s}"),
         });
     }
@@ -160,6 +218,7 @@ pub fn resolve_source(
             return Ok(ResolvedSource {
                 sif: cached,
                 setup: None,
+                runtime: None,
                 origin: format!("cid:{c}"),
             });
         }
@@ -178,6 +237,7 @@ pub fn resolve_source(
         return Ok(ResolvedSource {
             sif: cached,
             setup: None,
+            runtime: None,
             origin: format!("cid:{c}"),
         });
     }
@@ -199,6 +259,7 @@ pub fn resolve_source(
         return Ok(ResolvedSource {
             sif,
             setup: None,
+            runtime: None,
             origin: format!("manifest:{m}"),
         });
     }
@@ -269,16 +330,16 @@ fn resolve_repo_source(
         // Fallback to canonical name for legacy repos.
         pkg_dir.join("spec.appspec")
     };
-    let setup = if spec_path.is_file() {
-        crate::load_spec(&spec_path)
-            .ok()
-            .and_then(|s| s.runtime.setup)
+    let runtime = if spec_path.is_file() {
+        crate::load_spec(&spec_path).ok().map(|s| s.runtime)
     } else {
         None
     };
+    let setup = runtime.as_ref().and_then(|r| r.setup.clone());
     Ok(ResolvedSource {
         sif,
         setup,
+        runtime,
         origin: format!("repo:{pv}"),
     })
 }
@@ -311,6 +372,7 @@ pub fn resolve_base(
         sif: r.sif,
         pre: split.pre,
         entry,
+        runtime: r.runtime,
         origin: r.origin,
     })
 }
@@ -814,16 +876,24 @@ fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<()> {
     Ok(())
 }
 
-fn build_spec_via_self(spec_path: &Path) -> Result<()> {
+fn build_spec_via_self(spec_path: &Path, force: bool) -> Result<()> {
     let self_exe = std::env::current_exe().context("не могу определить путь к бинарю")?;
     crate::log(format!(
-        "bundle: building {} (SIF отсутствует)",
-        spec_path.display()
+        "bundle: building {} ({})",
+        spec_path.display(),
+        if force {
+            "spec новее SIF — пересборка"
+        } else {
+            "SIF отсутствует"
+        }
     ));
-    let status = Command::new(&self_exe)
-        .arg("build")
-        .arg(spec_path)
-        .status()?;
+    let mut cmd = Command::new(&self_exe);
+    cmd.arg("build");
+    if force {
+        cmd.arg("--force");
+    }
+    cmd.arg(spec_path);
+    let status = cmd.status()?;
     if !status.success() {
         bail!(
             "`appspec build {}` завершился с ошибкой",
@@ -958,6 +1028,27 @@ pub fn bundle_cache_dir(bundle_name: &str) -> PathBuf {
             .join(bundle_name);
     }
     PathBuf::from("/tmp/appspec-bundles").join(bundle_name)
+}
+
+/// Persistent state bundle: home, логи и прочее, что не должно исчезать
+/// при `appspec clean`. Не пересекается с cache (`bundle_cache_dir`).
+pub fn bundle_state_dir(bundle_name: &str) -> PathBuf {
+    if let Ok(v) = std::env::var("APPSPEC_BUNDLE_HOME") {
+        if !v.is_empty() {
+            return PathBuf::from(v).join(bundle_name);
+        }
+    }
+    if let Ok(v) = std::env::var("XDG_DATA_HOME") {
+        if !v.is_empty() {
+            return PathBuf::from(v).join("appspec/bundles").join(bundle_name);
+        }
+    }
+    if let Ok(home) = std::env::var("HOME") {
+        return PathBuf::from(home)
+            .join(".local/share/appspec/bundles")
+            .join(bundle_name);
+    }
+    PathBuf::from("/tmp/appspec-bundles-state").join(bundle_name)
 }
 
 fn which(name: &str) -> bool {

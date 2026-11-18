@@ -671,3 +671,165 @@ appspec repo publish --ipns
 # или на клиенте (осознанно):
 appspec run foo --from ipns://k51... --allow-unsigned
 ```
+
+## В bundle не видны компоненты (`qemu-img`, `cloud-localds`, …)
+
+**Причина.** Bind'ы компонентов создаёт только launcher bundle
+(`run.NAME.sh`, `appspec run bundle.appspec`). Прямой
+`apptainer shell base.sif` их не применяет.
+
+**Решение.** Запускать через launcher. Если инструмент нужен внутри
+чужого chroot (например `tofu` вызывает `qemu-img`), он должен быть
+объявлен в `bins` компонента с `mode = "chroot"` или `"both"`:
+
+```toml
+[[components]]
+name = "libvirtd"
+spec = "./virt-daemon.appspec"
+mode = "both"
+bins = ["qemu-img", "qemu-system-x86_64", "cloud-localds"]
+```
+
+Bridge'и попадают в `/opt/appspec/bin`, который монтируется в base и во
+все sandbox'ы; PATH дополняется этим каталогом.
+
+## `exec: /usr/bin/cloud-localds: not found` (или другой `bins`-бинарь)
+
+**Причина.** Bridge работает, но бинаря нет **внутри sandbox
+компонента**. Обычно это значит, что `*.sif` собран до изменения spec
+(например, до добавления `cloud-image-utils` в `virt-daemon.appspec`),
+либо sandbox не пересоздан.
+
+**Проверка.**
+
+```sh
+# что реально лежит в SIF
+apptainer exec examples/virt-daemon.sif sh -c \
+  'ls -l /usr/bin/cloud-localds /usr/bin/qemu-img /usr/bin/ansible-playbook'
+```
+
+Если файлов нет — пересобрать spec и пересоздать sandbox:
+
+```sh
+appspec build --force examples/virt-daemon.appspec
+appspec bundle build examples/vscodium-bundle.appspec
+# при необходимости удалить старый sandbox:
+rm -rf "${APPSPEC_BUNDLE_CACHE:-$HOME/.cache}/appspec/bundles/vscodium-dev/sandboxes/libvirtd"
+appspec run examples/vscodium-bundle.appspec
+```
+
+С 0.6.0 `bundle build` сам вызывает `appspec build --force`, если
+`spec.mtime` новее `sif.mtime`.
+
+## `bridge[ansible]: /opt/utils/ansible отсутствует (нет .ready)` из `tofu`
+
+**Причина.** `tofu` запускался через `bridge = "chroot"`: его
+`local-exec` оказывался внутри opentofu-sandbox, где нет ни base-tools,
+ни bind'ов соседних компонентов. `seq`/`timeout`/`bash` могли успеть
+отработать, а `ansible-playbook` уже нет.
+
+**Решение.** Для инструментов, чьи дочерние процессы должны видеть base
+и текущий проект, используйте `bridge = "exec"`:
+
+```toml
+[[components]]
+name   = "opentofu"
+spec   = "./opentofu-libvirt.appspec"
+binary = "/usr/local/bin/tofu"
+target = "/usr/local/bin/tofu"
+bridge = "exec"
+```
+
+`exec` запускает бинарь из rootfs компонента **без chroot**, в namespace
+base. Компонент остаётся отдельным атомарным sandbox'ом, но его
+`local-exec` видит `/opt/appspec/bin` (bridge'и ansible/qemu/ssh) и
+`/config/home/...`.
+
+Проверка:
+
+```sh
+pwd    # проект, например /config/home/CyberED/lessons/qemu-hello-world
+/opt/appspec/bin/ansible-playbook --version
+tofu apply
+```
+
+## `qemu-system-x86_64: failed to initialize kvm: Inappropriate ioctl for device`
+
+**Причина.** В контейнере есть `/dev/kvm`, но это не рабочий KVM-девайс
+(например, обычный файл-заглушка или хост без nested virtualization).
+QEMU видит `-enable-kvm` и падает.
+
+Bundle теперь пробрасывает `/dev/kvm` только если на хосте это
+character/block device, а bridge для `/dev/kvm` биндит родительский
+`/dev`, а не создаёт пустой файл.
+
+Если `/dev/kvm` — реальный char-девайс, но KVM всё равно не работает
+(хост в виртуалке без nested virt), отключите его:
+
+```sh
+APPSPEC_DISABLE_KVM=1 appspec run examples/vscodium-bundle.appspec
+```
+
+С 0.5.5 `APPSPEC_DISABLE_KVM` пробрасывается в env base-instance, а
+bridge'и не монтируют `/dev/kvm` в satellite-chroot при
+`APPSPEC_DISABLE_KVM=1`. Но проверка `[ -e /dev/kvm ]` в `main.tf`
+недостаточна: девайс может существовать и быть нерабочим. Надёжнее
+учитывать env:
+
+```sh
+KVM=""
+if [ -e /dev/kvm ] && [ -z "${APPSPEC_DISABLE_KVM:-}" ]; then
+  KVM="-enable-kvm"
+fi
+```
+
+И запускать:
+
+```sh
+APPSPEC_DISABLE_KVM=1 tofu apply
+```
+
+Либо просто перезапустить bundle с `APPSPEC_DISABLE_KVM=1`: тогда
+`/dev/kvm` не попадёт в base и старый `[ -e /dev/kvm ]` сам выберет TCG
+(медленнее, но работает без KVM).
+
+## VSCodium не видит расширения
+
+1. Убедитесь, что запускался `appspec run` / `appspec bundle build`, а не
+   только старый `run.vscodium-dev.sh`: расширения готовятся на этапе
+   build.
+2. Launcher печатает:
+   ```
+   ready: <publisher>.<name> v<version> (vsix)
+   extensions dir: /config/home/.vscodium/extensions
+   ```
+   и список каталогов. Если список пуст — расширения не подготовились.
+3. Проверьте cache и примонтированный каталог:
+   ```sh
+   ls -la "${APPSPEC_BUNDLE_CACHE:-$HOME/.cache}/appspec/bundles/vscodium-dev/extensions"
+   ```
+   Внутри должны быть каталоги `<publisher>.<name>-<version>/` с
+   `package.json`.
+4. Каталог расширений создаётся в persistent home до старта instance:
+   `~/vscodium_config/home/.vscodium/extensions`. Это важно, потому что
+   он лежит внутри bind'а `/config/home`.
+5. Проверьте манифест `extensions.json`:
+   ```sh
+   cat /config/home/.vscodium/extensions/extensions.json
+   ```
+   Если там `[]`, а каталоги расширений есть, VSCodium доверяет пустому
+   манифесту и не сканирует каталог. Launcher теперь удаляет
+   `extensions.json` перед стартом; для старого запуска можно сделать
+   вручную:
+   ```sh
+   rm -f /config/home/.vscodium/extensions/extensions.json
+   ```
+   и полностью перезапустить VSCodium (`appspec run ...`).
+6. Если после этого видны не те расширения, проверьте, что bind вообще
+   применён: создайте маркер в cache на хосте
+   ```sh
+   CACHE="${APPSPEC_BUNDLE_CACHE:-$HOME/.cache}/appspec/bundles/vscodium-dev"
+   touch "$CACHE/extensions/MARKER"
+   ```
+   и посмотрите `/config/home/.vscodium/extensions/MARKER` внутри
+   VSCodium. Если маркера нет — смонтирован persistent home, а не cache.

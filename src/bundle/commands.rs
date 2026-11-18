@@ -384,6 +384,10 @@ pub fn build(a: BuildArgs) -> Result<i32> {
 
     println!("ok: {}", out_path.display());
     println!("    cache      = {}", cache.display());
+    println!(
+        "    state      = {}",
+        loader::bundle_state_dir(&file.bundle.name).display()
+    );
     println!("    base       = {}", r.base.origin);
     println!(
         "    utils      = {}",
@@ -531,6 +535,10 @@ pub fn ls(a: LsArgs) -> Result<i32> {
     println!("Bundle:  {}", file.bundle.name);
     println!("Spec:    {}", spec_path.display());
     println!("Cache:   {}", cache.display());
+    println!(
+        "State:   {}",
+        loader::bundle_state_dir(&file.bundle.name).display()
+    );
     println!();
 
     println!("Components ({}):", file.components.len());
@@ -542,6 +550,16 @@ pub fn ls(a: LsArgs) -> Result<i32> {
         };
         println!("  [{}] {:<8} {}", mode, c.name, c.source.origin());
         println!("       provide: {}", c.provide());
+        if !c.bins.is_empty() {
+            println!(
+                "       bins:    {}",
+                c.bins
+                    .iter()
+                    .map(|b| b.name())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            );
+        }
         if let Some(sd) = c.socket_dir() {
             println!("       socket:  {}", sd);
         }

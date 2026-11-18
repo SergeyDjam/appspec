@@ -1,0 +1,72 @@
+# =============================================================================
+# appspec spec: ansible-core + ssh (provisioning tools)
+#
+# Отдельный компонент, чтобы virt-daemon не тащил Python/Ansible.
+# В bundle пробрасывается через bins: ansible, ansible-playbook,
+# ansible-galaxy, ssh, bash, seq, timeout.
+# =============================================================================
+
+[package]
+name        = "ansible"
+version     = "2.14.0"
+description = "ansible-core + OpenSSH client (containerized provisioning)"
+
+[build]
+base     = "debian:bookworm"
+arch     = "amd64"
+template = "full"
+tools    = ["ca-certificates"]
+
+[build.source]
+type = ""
+url  = ""
+
+[build.apt]
+extra = [
+    "ansible-core",
+    "openssh-client",
+    "python3",
+    "bash",
+    "coreutils",
+    "ca-certificates",
+]
+
+[build.collect]
+binary   = "/usr/bin/ansible-playbook"
+includes = []
+
+[build.scratch]
+workdir = "/work"
+cmd     = ["/usr/bin/ansible-playbook", "--version"]
+
+[build.scratch.env]
+LANG   = "C.UTF-8"
+LC_ALL = "C.UTF-8"
+HOME   = "/work"
+
+# -----------------------------------------------------------------------------
+# runtime — CLI-компонент (в bundle используется через chroot bridge)
+# -----------------------------------------------------------------------------
+[runtime]
+mode    = "cli"
+command = "/usr/bin/ansible-playbook"
+
+sif_file   = "ansible.sif"
+image_name = "ansible:latest"
+
+env_passthrough = ["TERM"]
+binds           = []
+create_dirs     = []
+
+[runtime.vars]
+CONFIG_DIR = "$HOME/.local/share/appspec/ansible"
+
+# -----------------------------------------------------------------------------
+# install (для `appspec install`, если нужен отдельный launcher)
+# -----------------------------------------------------------------------------
+[install]
+scope         = "user"
+launcher_name = "ansible-container"
+desktop       = false
+comment       = "Ansible (containerized)"
+extra_files   = []

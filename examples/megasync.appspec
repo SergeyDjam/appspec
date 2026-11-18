@@ -1,15 +1,27 @@
 # =============================================================================
-# appspec spec: megasync (ROSA 13)
+# appspec spec: megasync (AlmaLinux 9, upstream .rpm MEGA)
+#
+# Сборка из официального .rpm MEGA для AlmaLinux 9 (EL9).
+# skip_depends = true: ставим .rpm без разрешения зависимостей, все
+# зависимости — явно в [build.apt].extra. Это обходит:
+#   * openh264 из Cisco-репо (геоблокировка → 403 из РФ),
+#   * отсутствие пакетов в базовых репо AlmaLinux (patchelf/cryptopp/
+#     libmediainfo/libzen живут в EPEL и CRB).
+#
+# EPEL и CRB включаются через [[build.pkg_ops]] op = "enable_repo".
+# Шаблон rpm-ldd сам поставит dnf-plugins-core и epel-release.
 # =============================================================================
 
 [package]
 name    = "megasync"
-version = "6.7.0.3"
+version = "6.7.0"
+
 release     = "1"
 epoch       = 0
 summary     = "MEGA Desktop App (official sync client)"
 description = """
 MEGAsync — официальный десктоп-клиент для синхронизации файлов с MEGA.
+Собран из upstream .rpm MEGA для AlmaLinux 9 (RHEL 9).
 """
 license  = "MEGA Limited Code Review Licence"
 url      = "https://mega.nz/sync"
@@ -21,25 +33,62 @@ bin      = "megasync"
 # build
 # -----------------------------------------------------------------------------
 [build]
-base     = "rosalab/rosa13:latest"
-arch     = "amd64"
-template = "rpm-ldd"
+base         = "almalinux:9"
+arch         = "amd64"
+template     = "rpm-ldd"
 template_dir = "../templates"
 
+# --- Репозитории и weak deps ------------------------------------------------
+# CRB (CodeReady Builder) — patchelf и др. dev-пакеты.
+# EPEL — cryptopp, libmediainfo, libzen.
+# disable_weak_deps — openh264 не должен тянуться транзитивно (Cisco 403).
+[[build.pkg_ops]]
+op   = "enable_repo"
+name = "crb"
+
+[[build.pkg_ops]]
+op   = "enable_repo"
+name = "epel"
+
+[[build.pkg_ops]]
+op   = "disable_weak_deps"
+
+# --- Источник ---------------------------------------------------------------
+# Прямой .rpm из upstream MEGA. skip_depends = true → dnf install --no-deps.
+# Все зависимости ставятся выше через [build.apt].extra.
 [build.source]
-type    = "repo"
-package = "megasync"
+type         = "rpm"
+url          = "https://mega.nz/linux/repo/AlmaLinux_9/x86_64/megasync-%{version}-1.1.x86_64.rpm"
+skip_depends = true
 
 [build.apt]
-# Только то, что dnf install megasync не тянет, но нужно для GUI.
-# gtk3/mesa-libGL уже в шаблоне (тянут cairo, gdk-pixbuf, libEGL транзитивно).
+# Зависимости megasync 6.7.0 (AlmaLinux 9 / EPEL / CRB).
+# Точный список можно уточнить на хосте:
+#   wget -O /tmp/m.rpm "https://mega.nz/linux/repo/AlmaLinux_9/x86_64/megasync-6.7.0-1.1.x86_64.rpm"
+#   rpm -qpR /tmp/m.rpm
 extra = [
-     "megasync",
-#    "libxcb-cursor0",
-#    "dbus",
-#    "dbus-x11",
-#    "procps-ng",
-#    "psmisc",
+    # --- dev-утилиты для сборки (были в build.tools по умолчанию) ---
+    "patchelf",
+
+    # --- Прямые зависимости megasync (EPEL) ---
+    "cryptopp",        # libcrypto++.so.8
+    "libmediainfo",    # libmediainfo.so.0
+    "libzen",          # libzen.so.0
+    "c-ares",          # libcares.so.2
+
+    # --- Qt5 (AppStream) ---
+    "qt5-qtbase",
+    "qt5-qtsvg",
+    "qt5-qtx11extras",
+
+    # --- Медиа / raw (AppStream) ---
+    "LibRaw",          # libraw.so.23
+
+    # --- Окружение GUI ---
+    "dbus",
+    "dbus-x11",
+    "procps-ng",
+    "psmisc",
 ]
 
 [build.collect]
@@ -77,6 +126,8 @@ env_passthrough = [
     "DBUS_SESSION_BUS_ADDRESS",
 ]
 
+# XAUTHORITY может указывать на несуществующий файл (KDE+sudo) — Apptainer
+# сам мягко обработает его. pulse_auto добавляет bind на pulse/native.
 xauthority_auto = false
 pulse_auto      = true
 
@@ -122,12 +173,17 @@ entry = 'exec %{_prefix}/bin/%{bin} "$@"'
 [runtime.vars]
 CONFIG_DIR = "$HOME/megasync_config"
 
+# -----------------------------------------------------------------------------
+# install (опционально)
+# -----------------------------------------------------------------------------
 [install]
 scope         = "user"
 launcher_name = "megasync-container"
 desktop       = true
 categories    = ["Network", "FileTransfer"]
-comment       = "MEGA Desktop App (containerized, ROSA 13)"
+comment       = "MEGA Desktop App (containerized, AlmaLinux 9)"
 wm_class      = "megasync"
-icon          = "icons/megasync.png"
+# Если icons/megasync.png нет — уберите эту строку или создайте файл.
+# warning при build безобиден, но иконка в SIF не попадёт.
+icon          = "icons/megasync.svg"
 extra_files   = []
