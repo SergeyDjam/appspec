@@ -8,13 +8,13 @@
 
 [package]
 name        = "ansible"
-version     = "2.14.0"
+version     = "2.21.0"
 description = "ansible-core + OpenSSH client (containerized provisioning)"
 
 [build]
-base     = "debian:bookworm"
+base     = "alpine:3.24"
 arch     = "amd64"
-template = "full"
+template = "alpine"
 tools    = ["ca-certificates"]
 
 [build.source]
@@ -51,8 +51,8 @@ HOME   = "/work"
 mode    = "cli"
 command = "/usr/bin/ansible-playbook"
 
-sif_file   = "ansible.sif"
-image_name = "ansible:latest"
+sif_file   = "%{name}-%{version}.sif"
+image_name = "%{name}:%{version}"
 
 env_passthrough = ["TERM"]
 binds           = []

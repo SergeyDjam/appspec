@@ -5,7 +5,7 @@
 
 [package]
 name    = "opencode-desktop"
-version = "2.3.0"
+version = "2.3.2"
 
 release     = "1"
 epoch       = 0
@@ -165,7 +165,19 @@ CONFIG_DIR = "$HOME/opencode-desktop_config"
 scope         = "user"
 launcher_name = "opencode-desktop-container"
 desktop       = true
+icon          = "icons/opencode.png"
 categories    = ["Development", "IDE", "TextEditor"]
 comment       = "OpenCode Desktop (containerized, Electron)"
 wm_class      = "opencode-desktop"
 extra_files   = []
+
+[install.global]
+sif_dir   = "/opt/appspec/%{name}"
+bin_dir   = "/usr/local/bin"
+state_dir = "/var/lib/appspec/%{name}"
+
+[install.ipfs]
+enabled = false
+pin     = true
+gateway = "https://ipfs.io/ipfs"
+api_url = "http://127.0.0.1:5001"

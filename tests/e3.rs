@@ -176,7 +176,7 @@ fn bundle_check_accepts_repo_source() {
         "test",
         r#"[[components]]
 name    = "demo"
-repo    = "demo:0.0.1-1"
+spec    = "demo:0.0.1-1"
 provide = "demo"
 "#,
     );
@@ -198,7 +198,7 @@ fn bundle_check_rejects_missing_package() {
         "test",
         r#"[[components]]
 name    = "nope"
-repo    = "nope:0.0.1-1"
+spec    = "nope:0.0.1-1"
 provide = "nope"
 "#,
     );
@@ -219,7 +219,7 @@ fn bundle_lock_writes_file() {
         "test",
         r#"[[components]]
 name    = "demo"
-repo    = "demo:0.0.1-1"
+spec    = "demo:0.0.1-1"
 provide = "demo"
 "#,
     );
@@ -258,7 +258,7 @@ fn bundle_check_ok_with_drifted_lock() {
         "test",
         r#"[[components]]
 name    = "demo"
-repo    = "demo:0.0.1-1"
+spec    = "demo:0.0.1-1"
 provide = "demo"
 "#,
     );

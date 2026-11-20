@@ -1,0 +1,76 @@
+# =============================================================================
+# appspec spec: ipfs (Kubo)
+# Официальный бинарник IPFS Kubo из dist.ipfs.tech.
+# =============================================================================
+
+[package]
+name    = "ipfs-cli"
+version = "0.43.1"
+
+release     = "1"
+epoch       = 0
+summary     = "IPFS Kubo (go-ipfs) — InterPlanetary File System"
+description = """
+Kubo — наиболее широко используемая реализация IPFS на Go. Предоставляет
+CLI для управления узлом, HTTP-шлюз, RPC API и WebUI.
+"""
+license  = "Apache-2.0 / MIT"
+url      = "https://ipfs.tech"
+vendor   = "Protocol Labs"
+packager = "appspec <appspec@example.invalid>"
+bin      = "ipfs"
+
+# -----------------------------------------------------------------------------
+# build
+# -----------------------------------------------------------------------------
+[build]
+base     = "alpine:3.24"
+arch     = "amd64"
+# static: tar + busybox (для /bin/sh) + startscript. Бинарник Kubo —
+# статический Go-бинарник, поэтому подходит scratch/static.
+template = "static"
+
+[build.source]
+type             = "tar"
+# Официальный дистрибутив Kubo. Архив содержит папку kubo/,
+# поэтому срезаем один уровень.
+#url              = "https://dist.ipfs.tech/kubo/v%{version}/kubo_v%{version}_linux-amd64.tar.gz"
+url              = "https://github.com/ipfs/kubo/releases/download/v%{version}/kubo_v%{version}_linux-amd64.tar.gz"
+extract_to       = "/usr/local/bin"
+strip_components = 1
+
+[build.collect]
+binary = "/usr/local/bin/ipfs"
+
+[build.scratch]
+workdir = "/work"
+cmd     = ["/usr/local/bin/ipfs", "--version"]
+
+[build.scratch.env]
+LANG   = "C.UTF-8"
+LC_ALL = "C.UTF-8"
+
+# -----------------------------------------------------------------------------
+# runtime — CLI
+# -----------------------------------------------------------------------------
+[runtime]
+mode    = "cli"
+command = "/usr/local/bin/ipfs"
+
+sif_file   = "%{name}-%{version}.sif"
+image_name = "%{name}:%{version}"
+
+# Проброс переменных: терминал и путь к репозиторию IPFS (по умолчанию ~/.ipfs).
+env_passthrough = ["TERM", "IPFS_PATH"]
+
+# В CLI-режиме шаблон run-cli.sh.j2 монтирует $HOME хоста в $HOME контейнера,
+# поэтому ~/.ipfs будет доступен автоматически. Явный bind не нужен.
+binds       = []
+create_dirs = []
+
+[install]
+scope         = "user"
+launcher_name = "ipfs-container"
+desktop       = false
+comment       = "IPFS Kubo (containerized)"
+extra_files   = []

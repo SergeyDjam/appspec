@@ -345,24 +345,29 @@ type = "file"
 Полный пример со всеми типами — `examples/libreoffice-bundle.appspec`.
 Инструкция по подготовке локальных `.oxt`/`.vsix` — `examples/extensions/README.md`.
 
-### `source = repo` и `bundle.lock` (E3)
+### `spec` (универсальный источник) и `bundle.lock`
 
 ```toml
 [bundle]
 name = "vscodium-dev"
-base = { repo = "vscodium:1.135.06055" }
+base = { spec = "vscodium:1.135.06055" }
 
 [[components]]
 name    = "git"
-repo    = "git:2.47.2"
+spec    = "git:2.47.2"
 provide = "git"
 ```
 
-`repo = "name:ver"` — пятый источник наравне с `spec|sif|cid|manifest`.
-Резолвится через локальный `index.json` (`$APPSPEC_REPO`).
+`spec = "name[:ver]"` разрешается через `index.json` (`$APPSPEC_REPO`) по
+тем же правилам, что `appspec run`: без версии — `latest`, `git:2.47.2` —
+максимальный release этой версии, `git:2.47.2-1` — точный ключ.
+Значение без `/`, оканчивающееся на `.appspec`, сначала ищется локально,
+затем как `name:latest`. Старая форма `repo = "name:ver"` — deprecated
+alias, будет удалена в 0.7.0.
 
 `appspec bundle lock` создаёт `bundle.lock.toml` с `sif_sha256` и `spec_sha256`
-каждого `repo`-компонента. `bundle build` сверяет `sif_sha256`: при дрейфе —
+для base и каждого repo-ref компонента, сохраняя канонический
+`name:version-release`. `bundle build` сверяет `sif_sha256`: при дрейфе —
 warning, но идёт по свежему индексу.
 
 Полное описание — [`docs/bundles.md`](docs/bundles.md).
@@ -499,6 +504,7 @@ appspec repo pull pkg:1.0.0-1 --from oci://ghcr.io/user/appspec-index:latest
 | `APPSPEC_CONFIG_PATH` | Доп. каталоги конфигов |
 | `APPSPEC_BUNDLE_CACHE` | Каталог кэша bundles |
 | `APPSPEC_BUNDLE_HOME` | Каталог state bundles |
+| `APPSPEC_DISABLE_KVM` | 1 — не пробрасывать `/dev/kvm` в bundle (qemu пойдёт через TCG) |
 | `APPSPEC_REPO` | Path \| URL \| profile name. Для локальных команд — путь; для read/pull/push — также URL или имя профиля |
 | `APPSPEC_REPO_TOKEN` | **Только токен** для `repo push`. Не destination. |
 | `APPSPEC_REPO_SERVER_CONFIG` | Путь к `repo-server.toml` (после `--config`) |
@@ -551,6 +557,10 @@ Unit-тесты внутри `src/bundle/loader.rs`, `src/bundle/model.rs`,
 - [`docs/troubleshooting.md`](docs/troubleshooting.md) — типичные проблемы.
 - [`docs/repo.md`](docs/repo.md) — локальный и удалённый репозиторий SIF.
 
+## Лицензия
+
+GPL-2.0-or-later. See [LICENSE](LICENSE) for the full text.
+
 ## IPNS (mutable-имя репозитория)
 
 С 0.4.4 репозиторий можно адресовать по IPNS. Index по-прежнему
@@ -569,7 +579,3 @@ appspec repo pull pkg:1.0.0-1 --profile corp
 Конфигурация (`[ipfs].ipns_key`, `source.ipns`), latency и fail-closed
 семантика — см. [`docs/repo.md`](docs/repo.md) и
 [`docs/repo-config.md`](docs/repo-config.md).
-
-## Лицензия
-
-GPL-2.0-or-later. See [LICENSE](LICENSE) for the full text.

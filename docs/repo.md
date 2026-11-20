@@ -206,21 +206,24 @@ base_digest = "sha256:<64 lowercase hex>"
 `appspec build` подменяет `base` на `<repo>@<digest>` (тег отбрасывается).
 В Dockerfile — `FROM debian@sha256:…`. В `meta.json` — поле `base_digest`.
 
-## Bundle: `source = repo` и `bundle.lock` (E3)
+## Bundle: repo-ref `spec` и `bundle.lock`
 
 ```toml
 [bundle]
 name = "vscodium-dev"
-base = { repo = "vscodium:1.135.06055" }
+base = { spec = "vscodium:1.135.06055" }
 
 [[components]]
 name    = "git"
-repo    = "git:2.47.2"
+spec    = "git:2.47.2"
 provide = "git"
 ```
 
-`repo = "name:ver"` — пятый источник наравне с `spec|sif|cid|manifest`.
-Резолвится через локальный `index.json` (или `$APPSPEC_REPO`).
+`spec = "name[:ver]"` — универсальный источник (0.6.0). Для repo-ref
+резолвится через локальный `index.json` (или `$APPSPEC_REPO`) по тем же
+правилам, что `appspec run`: `latest`, max release для `name:ver`, точный
+ключ для `name:ver-rel`. Старая форма `repo = "name:ver"` — deprecated
+alias.
 
 `appspec bundle lock` создаёт `bundle.lock.toml`:
 
@@ -229,15 +232,20 @@ provide = "git"
 name      = "vscodium-dev"
 locked_at = "2026-11-01T00:00:00Z"
 
+[base]
+repo        = "vscodium:1.135.06055"
+sif_sha256  = "0123ab…"
+spec_sha256 = "a1b2c3…"
+
 [[components]]
 name        = "git"
-repo        = "git:2.47.2"
+repo        = "git:2.47.2-1"   # канонический name:version-release
 sif_sha256  = "74df01f…"
 spec_sha256 = "a1b2c3…"
 ```
 
 `bundle build` при наличии lock'а сверяет `sif_sha256`; при дрейфе — warning,
-но идёт по свежему индексу.
+но идёт по свежему индексу. `--locked` превращает дрейф в ошибку.
 
 ## HTTP API
 

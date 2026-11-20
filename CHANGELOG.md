@@ -5,6 +5,44 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.0] - 2026-11-20
+
+### Added
+
+- **`spec = "..."` is universal in bundle sources** (base and components).
+  Resolution is three-tier:
+  - **explicit path** (`./foo.appspec`, `/abs/foo.appspec`,
+    `sub/foo.appspec`, `~/foo.appspec`): local file only; error if missing.
+  - **ambiguous** (`foo.appspec` — no path separator, ends with
+    `.appspec`): try local `./foo.appspec` first; if missing, fall back to
+    `foo:latest` from the repository.
+  - **repo ref** (`foo`, `foo:latest`, `foo:1.0`, `foo:1.0-1`): resolve
+    through `index.json` with the same rules as `appspec run <package>`
+    (`latest`, max release for version-only, exact key).
+
+### Deprecated
+
+- **`repo = "name[:ver]"`** in `SourceSpec`: alias for
+  `spec = "name[:ver]"`. Normalized at `load_bundle` with a warning.
+  Removed in 0.7.0.
+
+### Changed
+
+- `resolve_repo_source` / `check_repo_source` accept `latest` and
+  version-only refs (`foo:1.0` → max release) via
+  `run_package::pick_version`.
+- **`bundle.lock.toml` stores canonical repo refs** (`name:version-release`),
+  so `foo`, `foo:latest` and `foo:1.0` are locked and drift-checked
+  correctly.
+- `lock::generate` detects repo sources from `spec` (not only the
+  deprecated `repo` field).
+
+### Migration
+
+- Old: `repo = "git:2.47.2-1"` → New: `spec = "git:2.47.2-1"`.
+- Local (unchanged): `spec = "./git.appspec"`.
+- New: `spec = "git.appspec"` — local if present, otherwise `git:latest`.
+
 ## [0.5.5] - 2026-11-19
 
 ### Added

@@ -179,6 +179,24 @@ pub fn preflight(
     out
 }
 
+fn check_local_spec(scope: &str, p: &Path, out: &mut Vec<Issue>) {
+    match crate::load_spec(p) {
+        Ok(spec) => {
+            let sif = p.parent().unwrap_or(Path::new(".")).join(spec.sif_file());
+            if !sif.is_file() {
+                out.push(Issue::warn(
+                    scope,
+                    format!("SIF не собран (соберётся при build): {}", sif.display()),
+                ));
+            }
+        }
+        Err(_) => out.push(Issue::error(
+            scope,
+            format!("spec не парсится: {}", p.display()),
+        )),
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn check_source(
     scope: &str,
@@ -197,28 +215,43 @@ fn check_source(
         return;
     }
     if let Some(s) = &src.spec {
-        let p = loader::resolve_relative(s, base_dir);
-        if !p.is_file() {
-            out.push(Issue::error(
-                scope,
-                format!("spec не найден: {}", p.display()),
-            ));
-            return;
-        }
-        match crate::load_spec(&p) {
-            Ok(spec) => {
-                let sif = p.parent().unwrap_or(Path::new(".")).join(spec.sif_file());
-                if !sif.is_file() {
-                    out.push(Issue::warn(
+        match loader::classify_spec_source(s) {
+            loader::SpecSource::LocalPath(_) => {
+                let p = loader::resolve_relative(s, base_dir);
+                if !p.is_file() {
+                    out.push(Issue::error(
                         scope,
-                        format!("SIF не собран (соберётся при build): {}", sif.display()),
+                        format!("spec not found: {}", p.display()),
                     ));
+                    return;
+                }
+                check_local_spec(scope, &p, out);
+            }
+            loader::SpecSource::Ambiguous(_) => {
+                let p = loader::resolve_relative(s, base_dir);
+                if p.is_file() {
+                    check_local_spec(scope, &p, out);
+                } else {
+                    let pkg = s.strip_suffix(".appspec").unwrap_or(s);
+                    let repo_ref = format!("{}:latest", pkg);
+                    match root {
+                        Some(rt) => {
+                            check_repo_source(scope, &repo_ref, out, rt, trusted, allow_unsigned)
+                        }
+                        None => out.push(Issue::error(
+                            scope,
+                            format!("`{}` not found locally and no repo configured", s),
+                        )),
+                    }
                 }
             }
-            Err(_) => out.push(Issue::error(
-                scope,
-                format!("spec не парсится: {}", p.display()),
-            )),
+            loader::SpecSource::RepoRef(_) => match root {
+                Some(rt) => check_repo_source(scope, s, out, rt, trusted, allow_unsigned),
+                None => out.push(Issue::error(
+                    scope,
+                    format!("`spec: {}` requires repo (pass --repo)", s),
+                )),
+            },
         }
     } else if let Some(s) = &src.sif {
         let p = loader::resolve_relative(s, base_dir);
@@ -260,13 +293,7 @@ fn check_repo_source(
     trusted: &[crate::repo::sign::TrustedKey],
     allow_unsigned: bool,
 ) {
-    let Some((name, ver)) = pv.split_once(':') else {
-        out.push(Issue::error(
-            scope,
-            format!("repo source must be `NAME:VERSION-RELEASE`, got `{pv}`"),
-        ));
-        return;
-    };
+    let (name, ver) = pv.split_once(':').unwrap_or((pv, "latest"));
     let name = name.to_ascii_lowercase();
     let Ok(text) = std::fs::read_to_string(root.index_path()) else {
         out.push(Issue::error(scope, "index.json not readable".to_string()));
@@ -280,19 +307,15 @@ fn check_repo_source(
         out.push(Issue::error(scope, "index.json not parseable".to_string()));
         return;
     };
-    let Some(pkg) = index.packages.get(&name) else {
-        out.push(Issue::error(
-            scope,
-            format!("package `{name}` not in repo index"),
-        ));
-        return;
-    };
-    let Some(v) = pkg.versions.get(ver) else {
-        out.push(Issue::error(
-            scope,
-            format!("{name}:{ver} not in repo index"),
-        ));
-        return;
+    let v = match crate::repo::run_package::pick_version(&index, &name, Some(ver)) {
+        Ok((_, v)) => v,
+        Err(_) => {
+            out.push(Issue::error(
+                scope,
+                format!("{name}:{ver} not in repo index"),
+            ));
+            return;
+        }
     };
     let blob = crate::repo::util::blob_path(&root.path, &v.sif_sha256);
     if !blob.is_file() {
