@@ -35,10 +35,44 @@ name = "ms-azuretools.vscode-docker"
 
 source (у base и у компонентов) — ровно один из:
 
-- spec = "./foo.appspec" — соберём SIF, если нет.
-- sif = "./foo.sif" — уже собранный.
-- cid = "bafy..." — IPFS CID.
-- manifest = "./installed-dir" — по manifest.json от appspec install.
+- `spec = "..."` — универсальный источник (0.6.0), см. ниже.
+- `sif = "./foo.sif"` — уже собранный.
+- `cid = "bafy..."` — IPFS CID.
+- `manifest = "./installed-dir"` — по manifest.json от appspec install.
+- `repo = "foo:1.0"` — deprecated alias для `spec`, удаляется в 0.7.0.
+
+### `spec` — universal source (0.6.0)
+
+`spec = "..."` в `[bundle.base]` и `[[components]]` принимает три формы:
+
+| Значение | Классификация | Разрешение |
+|---|---|---|
+| `./foo.appspec`, `/abs/foo.appspec`, `sub/foo.appspec` | explicit path | только локальный файл; ошибка, если его нет |
+| `foo.appspec` (без `/`) | ambiguous | сначала `./foo.appspec`; если нет — `foo:latest` из репозитория |
+| `foo`, `foo:latest`, `foo:1.0`, `foo:1.0-1` | repo ref | `latest` / max release для `foo:1.0` / точный ключ |
+
+Правило классификации совпадает с `appspec run <package-or-file>`.
+
+~~~toml
+[bundle.base]
+spec  = "./vscodium.appspec"
+# или
+# spec  = "vscodium:1.135.06055"
+# spec  = "vscodium"
+entry = "exec codium"
+
+[[components]]
+name = "git"
+spec = "git.appspec"     # локально, иначе git:latest
+provide = "git"
+~~~
+
+`spec = "foo.appspec"` и `repo = "foo"` означают «пакет foo, latest», но
+`spec` сначала проверяет локальный файл. `spec = "./foo.appspec"` —
+строго локальный вариант.
+
+`bundle.lock.toml` хранит канонический ref (`foo:1.2.3-1`) независимо от
+того, что было написано в `spec`.
 
 ## Секция components
 
@@ -233,8 +267,9 @@ Fingerprint sandbox'а — `sha256` SIF в имени каталога
 | `--repo PATH` | `$APPSPEC_REPO` → XDG | Путь к локальному репозиторию |
 | `--trusted-key PATH` | — | ed25519 pubkey для проверки `index.json`. Repeatable. Мержится с `~/.config/appspec/trusted-keys.toml` |
 | `--allow-unsigned` | `false` | Осознанный opt-out: принять неподписанный индекс (warning) |
+| `--locked` | `false` | (build/check) требовать `bundle.lock.toml`; дрейф — ошибка |
 
-Поведение при `source = repo`:
+Поведение при repo-ref source (`spec = "name[:ver]"`):
 
 - `trusted_keys` пуст и `--allow-unsigned` не задан → warning
   "no trusted keys configured; index signature not verified".

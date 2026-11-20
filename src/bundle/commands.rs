@@ -267,18 +267,50 @@ fn entry_hint(file: &model::BundleFile) -> Option<&str> {
     None
 }
 
-/// 0.5.4: return Option — explicit absence of repo. Bundle without `repo:`
-/// sources and without explicit --repo/$APPSPEC_REPO → None. Callers must
-/// not use the root then (resolve_repo_source is not called).
+/// Return Option — explicit absence of repo. Bundle without repo refs and
+/// without explicit --repo/$APPSPEC_REPO → None. Callers must not use the
+/// root then (resolve_repo_source is not called).
+fn source_needs_repo(src: &model::SourceSpec) -> bool {
+    loader::source_repo_ref(src).is_some() || src.repo.is_some()
+}
+
+fn source_may_need_repo(src: &model::SourceSpec) -> bool {
+    loader::source_repo_ref(src).is_some()
+        || matches!(
+            src.spec.as_deref().map(loader::classify_spec_source),
+            Some(loader::SpecSource::Ambiguous(_))
+        )
+        || src.repo.is_some()
+}
+
 fn open_repo_root_for(
     file: &model::BundleFile,
     a: Option<PathBuf>,
 ) -> Result<Option<crate::repo::layout::RepoRoot>> {
-    let has_repo = file.bundle.base.source.repo.is_some()
-        || file.components.iter().any(|c| c.source.repo.is_some());
+    let needs_repo = source_needs_repo(&file.bundle.base.source)
+        || file.components.iter().any(|c| source_needs_repo(&c.source));
+    let may_need_repo = source_may_need_repo(&file.bundle.base.source)
+        || file
+            .components
+            .iter()
+            .any(|c| source_may_need_repo(&c.source));
     let explicit = a.is_some() || std::env::var_os("APPSPEC_REPO").is_some();
-    if has_repo || explicit {
-        return Ok(Some(open_repo_root(a)?));
+    if needs_repo || explicit {
+        return Ok(Some(open_repo_root(a.clone())?));
+    }
+    if may_need_repo {
+        // `foo.appspec` may fall back to `foo:latest`. Use an existing default
+        // repo, but do not fail when it is absent: local files still work.
+        let candidate = a
+            .or_else(|| {
+                std::env::var_os("APPSPEC_REPO")
+                    .map(PathBuf::from)
+                    .filter(|p| !p.as_os_str().is_empty())
+            })
+            .unwrap_or_else(crate::repo::default_root);
+        if candidate.join("index.json").is_file() {
+            return Ok(Some(open_repo_root(Some(candidate))?));
+        }
     }
     Ok(None)
 }
@@ -458,6 +490,18 @@ pub fn check(a: CheckArgs) -> Result<i32> {
                 "locked mode requires bundle.lock.toml at {}; \
                  run `appspec bundle lock {}`",
                 lock_path.display(),
+                a.spec
+            );
+        }
+        let lk = super::lock::LockFile::load(&lock_path)?;
+        let warns = super::lock::check_drift(&lk, repo_root.as_ref(), &trusted, a.allow_unsigned)?;
+        if !warns.is_empty() {
+            for w in &warns {
+                eprintln!("warning: {w}");
+            }
+            bail!(
+                "lock drift detected and --locked was passed; \
+                 rerun `appspec bundle lock {}` or drop --locked",
                 a.spec
             );
         }

@@ -166,7 +166,7 @@ CONFIG_DIR = "$HOME/vscodium_config"
 scope         = "user"
 launcher_name = "codium-container"
 desktop       = true
-icon          = "icons/vscodium.png"
+icon          = "icons/vscodium.svg"
 categories    = ["Development", "TextEditor", "IDE"]
 mime_types    = [
     "text/plain",

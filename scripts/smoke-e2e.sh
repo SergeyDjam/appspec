@@ -357,7 +357,7 @@ ok "verify" "signature ok"
 
 kill -TERM "$SERVE_PID" 2>/dev/null || true; SERVE_PID=; wait 2>/dev/null || true
 
-step "7/11  bundle check с source = repo"
+step "7/11  bundle check с repo-ref spec"
 BUNDLE_DIR="$TMP/bundle"; mkdir -p "$BUNDLE_DIR"
 cat > "$BUNDLE_DIR/base.appspec" <<'TOML'
 [package]
@@ -375,7 +375,7 @@ name = "smoke-bundle"
 spec = "./base.appspec"
 [[components]]
 name    = "$PKG"
-repo    = "$PKG:$KEY"
+spec    = "$PKG:$KEY"
 provide = "$PKG"
 TOML
 APPSPEC_REPO="$REPO" "$APPSPEC" bundle check "$BUNDLE_DIR/bundle.appspec" >/dev/null \
@@ -438,7 +438,8 @@ step "11/11  repo resolve <ipns_name>"
 : > "$MOCK_IPFS_LOG"
 RESOLVED=$("$APPSPEC" repo resolve "k51smoketestname123") \
     || fail "repo resolve"
-grep -qF "bafkreismoketestaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" <<< "$RESOLVED" \
+printf '%s\n' "$RESOLVED" \
+    | grep -qF "bafkreismoketestaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" \
     || fail "resolve: expected CID in output, got: $RESOLVED"
 grep -qF "name resolve k51smoketestname123" "$MOCK_IPFS_LOG" \
     || fail "resolve: mock ipfs not called with expected name"

@@ -1,0 +1,73 @@
+# =============================================================================
+# appspec spec: termsvg (минимальный CLI, scratch)
+# =============================================================================
+
+[package]
+name    = "termsvg"
+version = "0.13.0"
+
+release     = "1"
+epoch       = 0
+summary     = "Record, replay and export terminal sessions to animated SVG"
+description = """
+TermSVG — CLI-инструмент для записи, воспроизведения и экспорта терминальных
+сессий в анимированный SVG. Использует формат asciicast v2/v3, совместим с
+asciinema.
+"""
+license  = "MIT"
+url      = "https://github.com/MrMarble/termsvg"
+vendor   = "MrMarble"
+packager = "appspec <appspec@example.invalid>"
+bin      = "termsvg"
+
+# -----------------------------------------------------------------------------
+# build
+# -----------------------------------------------------------------------------
+[build]
+base     = "alpine:3.24"
+arch     = "amd64"
+# scratch: минимальный SIF (только бинарник + CA-сертификаты).
+# Для CLI-утилиты этого достаточно.
+template = "scratch"
+
+[build.source]
+type             = "tar"
+url              = "https://github.com/MrMarble/termsvg/releases/download/v%{version}/termsvg-%{version}-linux-amd64.tar.gz"
+extract_to       = "/usr/local/bin"
+# В архиве бинарник лежит в корне, strip_components не нужен.
+# Если в будущем структура изменится — добавить strip_components = 1.
+strip_components = 1
+
+[build.collect]
+binary = "/usr/local/bin/termsvg"
+
+[build.scratch]
+workdir = "/work"
+cmd     = ["/usr/local/bin/termsvg", "--version"]
+
+[build.scratch.env]
+LANG   = "C.UTF-8"
+LC_ALL = "C.UTF-8"
+
+# -----------------------------------------------------------------------------
+# runtime — CLI
+# -----------------------------------------------------------------------------
+[runtime]
+mode    = "cli"
+command = "/usr/local/bin/termsvg"
+
+sif_file   = "termsvg.sif"
+image_name = "%{name}:%{version}"
+
+# TERM важен для корректной записи (rec) и воспроизведения (play).
+env_passthrough = ["TERM"]
+
+binds       = []
+create_dirs = []
+
+[install]
+scope         = "user"
+launcher_name = "termsvg-container"
+desktop       = false
+comment       = "TermSVG (containerized, scratch)"
+extra_files   = []

@@ -60,6 +60,22 @@ impl SourceSpec {
         }
         "?".into()
     }
+
+    /// 0.6.0: `repo = "..."` is a deprecated alias for `spec = "..."`.
+    /// Normalize after parsing so all later code sees a single field.
+    pub fn normalize(&mut self) -> anyhow::Result<()> {
+        if self.repo.is_some() && self.spec.is_some() {
+            anyhow::bail!("use either `spec` or `repo`, not both");
+        }
+        if let Some(r) = self.repo.take() {
+            eprintln!(
+                "warning: `repo = \"{}\"` is deprecated; use `spec = \"{}\"`",
+                r, r
+            );
+            self.spec = Some(r);
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -79,6 +95,17 @@ pub struct BundleFile {
     pub components: Vec<Component>,
     #[serde(default)]
     pub extensions: Vec<Extension>,
+}
+
+impl BundleFile {
+    /// Normalize deprecated `repo = "..."` sources (base + components).
+    pub fn normalize(&mut self) -> anyhow::Result<()> {
+        self.bundle.base.source.normalize()?;
+        for c in &mut self.components {
+            c.source.normalize()?;
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]

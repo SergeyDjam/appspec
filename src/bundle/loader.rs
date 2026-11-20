@@ -7,8 +7,10 @@ use super::model::*;
 pub fn load_bundle(path: &Path) -> Result<BundleFile> {
     let text = std::fs::read_to_string(path)
         .with_context(|| format!("bundle spec не читается: {}", path.display()))?;
-    let file: BundleFile = toml::from_str(&text)
+    let mut file: BundleFile = toml::from_str(&text)
         .with_context(|| format!("bundle spec не парсится: {}", path.display()))?;
+    file.normalize()
+        .with_context(|| format!("normalizing bundle {}", path.display()))?;
 
     if file.bundle.name.is_empty() {
         bail!("[bundle].name обязателен");
@@ -140,6 +142,88 @@ fn spec_newer_than_sif(spec: &Path, sif: &Path) -> bool {
     }
 }
 
+/// 0.6.0: `spec = "..."` is universal. Three-tier classification:
+/// - explicit path (`./x`, `/x`, `dir/x`, `~x`) — local file only;
+/// - `x.appspec` — local first, then `x:latest` from repo;
+/// - `x[:ver]` — repository ref.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SpecSource<'a> {
+    LocalPath(&'a str),
+    Ambiguous(&'a str),
+    RepoRef(&'a str),
+}
+
+pub(crate) fn classify_spec_source(s: &str) -> SpecSource<'_> {
+    if s.contains('/') || s.starts_with('.') || s.starts_with('~') {
+        SpecSource::LocalPath(s)
+    } else if s.ends_with(".appspec") {
+        SpecSource::Ambiguous(s)
+    } else {
+        SpecSource::RepoRef(s)
+    }
+}
+
+/// Repo ref if `spec` is a repository reference (`foo`, `foo:1.0`).
+/// Ambiguous `foo.appspec` is *not* a repo ref: it may resolve locally.
+pub(crate) fn source_repo_ref(src: &SourceSpec) -> Option<&str> {
+    let s = src.spec.as_deref()?;
+    match classify_spec_source(s) {
+        SpecSource::RepoRef(_) => Some(s),
+        _ => None,
+    }
+}
+
+/// Build (if needed) and return the SIF for a local spec path.
+fn resolve_local_spec(
+    sp: &Path,
+    orig: &str,
+    label: &str,
+    allow_build: bool,
+) -> Result<ResolvedSource> {
+    let spec = crate::load_spec(sp)?;
+    let sif = sp
+        .parent()
+        .unwrap_or_else(|| Path::new("."))
+        .join(spec.sif_file());
+    let stale = sif.is_file() && spec_newer_than_sif(sp, &sif);
+    if !sif.is_file() || stale {
+        if !allow_build {
+            if !sif.is_file() {
+                bail!(
+                    "{label}: SIF не собран: {}\n  appspec build {}",
+                    sif.display(),
+                    sp.display()
+                );
+            }
+            crate::log(format!(
+                "bundle: warning: {} старше spec {}; использую stale SIF (--no-build)",
+                sif.display(),
+                sp.display()
+            ));
+        } else {
+            if stale {
+                crate::log(format!(
+                    "bundle: spec {} новее SIF {} — пересобираю",
+                    sp.display(),
+                    sif.display()
+                ));
+            }
+            build_spec_via_self(sp, stale)?;
+        }
+    }
+    if !sif.is_file() {
+        bail!("{label}: после сборки SIF не найден: {}", sif.display());
+    }
+    let runtime = spec.runtime;
+    let setup = runtime.setup.clone();
+    Ok(ResolvedSource {
+        sif,
+        setup,
+        runtime: Some(runtime),
+        origin: format!("spec:{}", orig),
+    })
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn resolve_source(
     src: &SourceSpec,
@@ -166,50 +250,48 @@ pub fn resolve_source(
         });
     }
     if let Some(s) = &src.spec {
-        let sp = resolve_relative(s, base_dir);
-        if !sp.is_file() {
-            bail!("{label}: spec не найден: {}", sp.display());
-        }
-        let spec = crate::load_spec(&sp)?;
-        let sif = sp
-            .parent()
-            .unwrap_or_else(|| Path::new("."))
-            .join(spec.sif_file());
-        let stale = sif.is_file() && spec_newer_than_sif(&sp, &sif);
-        if !sif.is_file() || stale {
-            if !allow_build {
-                if !sif.is_file() {
-                    bail!(
-                        "{label}: SIF не собран: {}\n  appspec build {}",
-                        sif.display(),
-                        sp.display()
-                    );
+        match classify_spec_source(s) {
+            SpecSource::LocalPath(_) => {
+                let sp = resolve_relative(s, base_dir);
+                if !sp.is_file() {
+                    bail!("{label}: spec not found: {}", sp.display());
                 }
+                return resolve_local_spec(&sp, s, label, allow_build);
+            }
+            SpecSource::Ambiguous(_) => {
+                let sp = resolve_relative(s, base_dir);
+                if sp.is_file() {
+                    return resolve_local_spec(&sp, s, label, allow_build);
+                }
+                let pkg = s.strip_suffix(".appspec").unwrap_or(s);
+                if pkg.is_empty() {
+                    bail!("{label}: invalid spec name `{}`", s);
+                }
+                let repo_ref = format!("{}:latest", pkg);
                 crate::log(format!(
-                    "bundle: warning: {} старше spec {}; использую stale SIF (--no-build)",
-                    sif.display(),
-                    sp.display()
+                    "bundle: `{}` not found locally, resolving as `{}` from repo",
+                    s, repo_ref
                 ));
-            } else {
-                if stale {
-                    crate::log(format!(
-                        "bundle: spec {} новее SIF {} — пересобираю",
-                        sp.display(),
-                        sif.display()
-                    ));
-                }
-                build_spec_via_self(&sp, stale)?;
+                let rt = root.ok_or_else(|| {
+                    anyhow!(
+                        "{label}: `{}` not found locally and no repo configured \
+                         (pass --repo, $APPSPEC_REPO, or server config `[repo].root`)",
+                        s
+                    )
+                })?;
+                return resolve_repo_source(&repo_ref, label, rt, trusted, allow_unsigned);
+            }
+            SpecSource::RepoRef(_) => {
+                let rt = root.ok_or_else(|| {
+                    anyhow!(
+                        "{label}: `spec: {}` requires repo \
+                         (pass --repo, $APPSPEC_REPO, or server config `[repo].root`)",
+                        s
+                    )
+                })?;
+                return resolve_repo_source(s, label, rt, trusted, allow_unsigned);
             }
         }
-        if !sif.is_file() {
-            bail!("{label}: после сборки SIF не найден: {}", sif.display());
-        }
-        return Ok(ResolvedSource {
-            sif,
-            setup: spec.runtime.setup.clone(),
-            runtime: Some(spec.runtime.clone()),
-            origin: format!("spec:{s}"),
-        });
     }
     if let Some(c) = &src.cid {
         std::fs::create_dir_all(cache_dir)?;
@@ -282,12 +364,9 @@ fn resolve_repo_source(
     trusted: &[crate::repo::sign::TrustedKey],
     allow_unsigned: bool,
 ) -> Result<ResolvedSource> {
-    let (name, ver) = pv.split_once(':').ok_or_else(|| {
-        anyhow!(
-            "{label}: repo source must be `NAME:VERSION-RELEASE`, got `{}`",
-            pv
-        )
-    })?;
+    // 0.6.0: `foo`, `foo:latest`, `foo:1.0` and `foo:1.0-1` all go through
+    // the same resolver as `appspec run`.
+    let (name, ver) = pv.split_once(':').unwrap_or((pv, "latest"));
     let name = name.to_ascii_lowercase();
     let index_text = std::fs::read_to_string(root.index_path())
         .with_context(|| format!("reading {}", root.index_path().display()))?;
@@ -295,14 +374,8 @@ fn resolve_repo_source(
         .with_context(|| format!("{label}: verifying {}", root.index_path().display()))?;
     let index: crate::repo::meta::IndexV1 =
         serde_json::from_str(&index_text).with_context(|| "parsing repo index.json".to_string())?;
-    let pkg = index
-        .packages
-        .get(&name)
-        .ok_or_else(|| anyhow!("{label}: package `{name}` not found in repo index"))?;
-    let v = pkg
-        .versions
-        .get(ver)
-        .ok_or_else(|| anyhow!("{label}: {name}:{ver} not found in repo index"))?;
+    let (ver_key, v) = crate::repo::run_package::pick_version(&index, &name, Some(ver))
+        .map_err(|e| anyhow!("{label}: {:#}", e))?;
     let sif = crate::repo::util::blob_path(&root.path, &v.sif_sha256);
     if !sif.is_file() {
         bail!(
@@ -311,7 +384,7 @@ fn resolve_repo_source(
         );
     }
     // A1 (0.5.4): resolve spec via meta.spec_filename (fallback spec.appspec).
-    let pkg_dir = root.packages_dir().join(&name).join(ver);
+    let pkg_dir = root.packages_dir().join(&name).join(ver_key.as_str());
     let meta_path = pkg_dir.join("meta.json");
     let spec_filename = if meta_path.is_file() {
         std::fs::read_to_string(&meta_path)

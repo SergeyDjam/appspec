@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use super::model::BundleFile;
+use super::model::{BundleFile, SourceSpec};
 
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct LockFile {
@@ -79,17 +79,63 @@ pub fn default_path(spec_path: &Path) -> PathBuf {
         .join("bundle.lock.toml")
 }
 
+/// Repo ref from `spec` (0.6.0) or deprecated `repo`.
+/// `foo.appspec` is locked only when the local file is absent and it falls
+/// back to `foo:latest`.
+fn source_ref(src: &SourceSpec, base_dir: &Path) -> Option<String> {
+    if let Some(r) = crate::bundle::loader::source_repo_ref(src) {
+        return Some(r.to_string());
+    }
+    if let Some(r) = &src.repo {
+        return Some(r.clone());
+    }
+    let s = src.spec.as_deref()?;
+    match crate::bundle::loader::classify_spec_source(s) {
+        crate::bundle::loader::SpecSource::Ambiguous(_) => {
+            let p = crate::bundle::loader::resolve_relative(s, base_dir);
+            if p.is_file() {
+                None
+            } else {
+                let pkg = s.strip_suffix(".appspec").unwrap_or(s);
+                Some(format!("{}:latest", pkg))
+            }
+        }
+        _ => None,
+    }
+}
+
+/// Resolve `foo`, `foo:latest`, `foo:1.0`, `foo:1.0-1` to a canonical
+/// `name:version-release` key plus the index version.
+fn lock_ref<'a>(
+    index: &'a crate::repo::meta::IndexV1,
+    r: &str,
+    ctx: &str,
+) -> Result<(String, &'a crate::repo::meta::IndexVersion)> {
+    let (name, ver) = r.split_once(':').unwrap_or((r, "latest"));
+    let name = name.to_ascii_lowercase();
+    let (ver_key, v) = crate::repo::run_package::pick_version(index, &name, Some(ver))
+        .map_err(|e| anyhow!("{ctx}: {e:#}"))?;
+    Ok((format!("{name}:{ver_key}"), v))
+}
+
 /// Сгенерировать lock по текущему индексу для всех `repo`-компонентов.
 /// Компоненты без `repo` пропускаются (у них другая природа: spec/sif/cid/manifest).
 pub fn generate(
     file: &BundleFile,
-    _spec_path: &Path,
+    spec_path: &Path,
     root: Option<&crate::repo::layout::RepoRoot>,
     trusted: &[crate::repo::sign::TrustedKey],
     allow_unsigned: bool,
 ) -> Result<LockFile> {
-    let has_repo = file.bundle.base.source.repo.is_some()
-        || file.components.iter().any(|c| c.source.repo.is_some());
+    let base_dir = spec_path
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    let has_repo = source_ref(&file.bundle.base.source, base_dir).is_some()
+        || file
+            .components
+            .iter()
+            .any(|c| source_ref(&c.source, base_dir).is_some());
     if !has_repo {
         return Ok(LockFile {
             bundle: LockBundle {
@@ -115,24 +161,13 @@ pub fn generate(
     let index: crate::repo::meta::IndexV1 =
         serde_json::from_str(&index_text).context("parsing repo index.json")?;
 
-    let base_lock = if let Some(r) = &file.bundle.base.source.repo {
-        let (bn, bv) = r
-            .split_once(':')
-            .ok_or_else(|| anyhow!("bundle.base.repo must be `NAME:VERSION-RELEASE`, got `{r}`"))?;
-        let bn = bn.to_ascii_lowercase();
-        let bp = index
-            .packages
-            .get(&bn)
-            .ok_or_else(|| anyhow!("base package `{bn}` not in repo index"))?;
-        let bvv = bp
-            .versions
-            .get(bv)
-            .ok_or_else(|| anyhow!("{bn}:{bv} not in repo index"))?;
+    let base_lock = if let Some(r) = source_ref(&file.bundle.base.source, base_dir) {
+        let (repo, v) = lock_ref(&index, &r, "base")?;
         Some(BaseLock {
-            repo: r.clone(),
-            sif_sha256: bvv.sif_sha256.clone(),
-            spec_sha256: bvv.spec_sha256.clone(),
-            base_digest: bvv.base_digest.clone(),
+            repo,
+            sif_sha256: v.sif_sha256.clone(),
+            spec_sha256: v.spec_sha256.clone(),
+            base_digest: v.base_digest.clone(),
         })
     } else {
         None
@@ -140,25 +175,13 @@ pub fn generate(
 
     let mut components = Vec::new();
     for c in &file.components {
-        let Some(r) = &c.source.repo else { continue };
-        let (name, ver) = r.split_once(':').ok_or_else(|| {
-            anyhow!(
-                "component `{}`: repo source must be `NAME:VERSION-RELEASE`, got `{r}`",
-                c.name
-            )
-        })?;
-        let pkg_name = name.to_ascii_lowercase();
-        let pkg = index
-            .packages
-            .get(&pkg_name)
-            .ok_or_else(|| anyhow!("package `{pkg_name}` not in repo index"))?;
-        let v = pkg
-            .versions
-            .get(ver)
-            .ok_or_else(|| anyhow!("{pkg_name}:{ver} not in repo index"))?;
+        let Some(r) = source_ref(&c.source, base_dir) else {
+            continue;
+        };
+        let (repo, v) = lock_ref(&index, &r, &format!("component `{}`", c.name))?;
         components.push(LockComponent {
             name: c.name.clone(),
-            repo: r.clone(),
+            repo,
             sif_sha256: v.sif_sha256.clone(),
             spec_sha256: v.spec_sha256.clone(),
             base_digest: v.base_digest.clone(),
@@ -204,28 +227,21 @@ pub fn check_drift(
     let mut warns = Vec::new();
 
     if let Some(b) = &lock.base {
-        if let Some((n, v)) = b.repo.split_once(':') {
-            let n = n.to_ascii_lowercase();
-            match index.packages.get(&n).and_then(|p| p.versions.get(v)) {
-                Some(iv) if iv.sif_sha256 == b.sif_sha256 => {}
-                Some(iv) => warns.push(format!(
-                    "lock drift: base `{}` sif_sha256 {} != index {}; using index",
-                    b.repo, b.sif_sha256, iv.sif_sha256
-                )),
-                None => warns.push(format!(
-                    "lock drift: base `{}` not in current index",
-                    b.repo
-                )),
-            }
+        match find_index_version(&index, &b.repo) {
+            Some(iv) if iv.sif_sha256 == b.sif_sha256 => {}
+            Some(iv) => warns.push(format!(
+                "lock drift: base `{}` sif_sha256 {} != index {}; using index",
+                b.repo, b.sif_sha256, iv.sif_sha256
+            )),
+            None => warns.push(format!(
+                "lock drift: base `{}` not in current index",
+                b.repo
+            )),
         }
     }
 
     for c in &lock.components {
-        let Some((n, v)) = c.repo.split_once(':') else {
-            continue;
-        };
-        let n = n.to_ascii_lowercase();
-        match index.packages.get(&n).and_then(|p| p.versions.get(v)) {
+        match find_index_version(&index, &c.repo) {
             Some(iv) if iv.sif_sha256 == c.sif_sha256 => {}
             Some(iv) => warns.push(format!(
                 "lock drift: {} sif_sha256 {} != index {}; using index",
@@ -238,4 +254,18 @@ pub fn check_drift(
         }
     }
     Ok(warns)
+}
+
+/// Look up a lock ref (`foo`, `foo:latest`, `foo:1.0`, `foo:1.0-1`) in the
+/// current index. Old locks used exact keys; new locks store canonical
+/// `name:version-release`.
+fn find_index_version<'a>(
+    index: &'a crate::repo::meta::IndexV1,
+    r: &str,
+) -> Option<&'a crate::repo::meta::IndexVersion> {
+    let (name, ver) = r.split_once(':').unwrap_or((r, "latest"));
+    let name = name.to_ascii_lowercase();
+    crate::repo::run_package::pick_version(index, &name, Some(ver))
+        .ok()
+        .map(|(_, v)| v)
 }

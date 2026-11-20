@@ -341,25 +341,30 @@ type = "file"
 Full example with all types — `examples/libreoffice-bundle.appspec`.
 Instructions for local `.oxt`/`.vsix` — `examples/extensions/README.md`.
 
-### `source = repo` and `bundle.lock` (E3)
+### `spec` (universal source) and `bundle.lock`
 
 ```toml
 [bundle]
 name = "vscodium-dev"
-base = { repo = "vscodium:1.135.06055" }
+base = { spec = "vscodium:1.135.06055" }
 
 [[components]]
 name    = "git"
-repo    = "git:2.47.2"
+spec    = "git:2.47.2"
 provide = "git"
 ```
 
-`repo = "name:ver"` — the fifth source alongside `spec|sif|cid|manifest`.
-Resolved via local `index.json` (`$APPSPEC_REPO`).
+`spec = "name[:ver]"` resolves through `index.json` (`$APPSPEC_REPO`) with
+the same rules as `appspec run`: no version means `latest`, `git:2.47.2`
+means the max release of that version, and `git:2.47.2-1` is exact.
+Without `/`, a value ending in `.appspec` is tried locally first, then as
+`name:latest`. The old `repo = "name:ver"` form is a deprecated alias and
+will be removed in 0.7.0.
 
 `appspec bundle lock` creates `bundle.lock.toml` with `sif_sha256` and
-`spec_sha256` for each `repo` component. `bundle build` verifies
-`sif_sha256`: on drift — warning, but goes with the fresh index.
+`spec_sha256` for the base and each repo-ref component, storing canonical
+`name:version-release` refs. `bundle build` verifies `sif_sha256`: on
+drift — warning, but goes with the fresh index.
 
 Full description — [`docs/bundles.md`](docs/bundles.md) (Russian).
 
@@ -495,6 +500,7 @@ becomes the "current repository".
 | `APPSPEC_CONFIG_PATH` | Extra config directories |
 | `APPSPEC_BUNDLE_CACHE` | Bundle cache directory |
 | `APPSPEC_BUNDLE_HOME` | Bundle state directory |
+| `APPSPEC_DISABLE_KVM` | 1 — do not bind `/dev/kvm` into bundles (force QEMU TCG) |
 | `APPSPEC_REPO` | Path \| URL \| profile name. Local commands need a path; read/pull/push also accept URL or profile name |
 | `APPSPEC_REPO_TOKEN` | Token only, for `repo push`. Not the destination. |
 | `APPSPEC_REPO_SERVER_CONFIG` | Path to `repo-server.toml` (after `--config`) |
@@ -547,6 +553,10 @@ Unit tests inside `src/bundle/loader.rs`, `src/bundle/model.rs`,
 - [`docs/troubleshooting.md`](docs/troubleshooting.md) — common problems (Russian).
 - [`docs/repo.md`](docs/repo.md) — local and remote SIF repository (Russian).
 
+## License
+
+GPL-2.0-or-later. See [LICENSE](LICENSE) for the full text.
+
 ## IPNS (mutable repository name)
 
 Since 0.4.4 a repository can be addressed by IPNS. The index is still
@@ -565,7 +575,3 @@ appspec repo pull pkg:1.0.0-1 --profile corp
 For configuration (`[ipfs].ipns_key`, `source.ipns`), latency and
 fail-closed semantics see [`docs/repo.md`](docs/repo.md) and
 [`docs/repo-config.md`](docs/repo-config.md).
-
-## License
-
-GPL-2.0-or-later. See [LICENSE](LICENSE) for the full text.
