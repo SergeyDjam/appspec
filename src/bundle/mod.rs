@@ -12,6 +12,7 @@ pub mod codegen;
 pub mod commands;
 pub mod loader;
 pub mod lock;
+pub mod manifest;
 pub mod model;
 pub mod validate;
 

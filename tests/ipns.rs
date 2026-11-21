@@ -441,6 +441,7 @@ fn make_repo_with_blob(root: &Path, name: &str, ver_key: &str, blob_bytes: &[u8]
         icon_mimetype: None,
         icon_size: None,
         icon_filename: None,
+        ..Default::default()
     };
     let pd = root.join("packages").join(name).join(ver_key);
     fs::create_dir_all(&pd).unwrap();
@@ -493,6 +494,7 @@ fn make_repo_with_blob(root: &Path, name: &str, ver_key: &str, blob_bytes: &[u8]
             requires: vec![],
             provides: vec![],
             ipfs_cid: None,
+            ..Default::default()
         },
     );
     let mut packages = BTreeMap::new();
@@ -611,6 +613,7 @@ fn pull_ipns_succeeds_with_mock() {
             requires: vec![],
             provides: vec![],
             ipfs_cid: Some(blob_cid.into()),
+            ..Default::default()
         },
     );
     let mut packages = BTreeMap::new();

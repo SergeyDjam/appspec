@@ -127,6 +127,7 @@ fn make_repo_with_packages(packages: &[(&str, &str, &str, &[u8])]) -> (TempDir, 
             requires: vec![],
             provides: vec![],
             ipfs_cid: None,
+            ..Default::default()
         };
         pkg_map
             .entry(name.to_string())
@@ -174,6 +175,7 @@ fn make_repo_with_packages(packages: &[(&str, &str, &str, &[u8])]) -> (TempDir, 
             icon_mimetype: None,
             icon_size: None,
             icon_filename: None,
+            ..Default::default()
         };
         fs::write(
             pd.join("meta.json"),

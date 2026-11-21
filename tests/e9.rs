@@ -200,6 +200,7 @@ fn make_index(sha: &str) -> String {
             requires: vec![],
             provides: vec![],
             ipfs_cid: None,
+            ..Default::default()
         },
     );
     let mut packages = BTreeMap::new();

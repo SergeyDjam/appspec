@@ -76,6 +76,12 @@ Repository root — **data-only** (`index.json`, `blobs/`, `packages/`,
 └── .lock                   # flock на write-операции
 ```
 
+`meta.json` и `index.json` содержат `kind = "sif" | "bundle"` (0.6.1;
+старые записи без поля считаются `sif`). У bundle-пакета в каталоге
+дополнительно лежит `manifest.json` с закреплёнными `name:version-release`
+и хешами, а в meta/index заполнены `bundle_sha256`, `manifest_sha256` и
+`manifest_ipfs_cid`.
+
 Корень по умолчанию: `$APPSPEC_REPO` → `$XDG_DATA_HOME/appspec/repo` → `$HOME/.local/share/appspec/repo`.
 
 ## Команды

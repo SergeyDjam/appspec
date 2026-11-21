@@ -170,6 +170,7 @@ fn make_index_with_ipfs_cid(
             requires: vec![],
             provides: vec![],
             ipfs_cid: cid.map(str::to_string),
+            ..Default::default()
         },
     );
     let mut packages = BTreeMap::new();

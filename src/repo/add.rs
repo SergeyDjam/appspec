@@ -237,6 +237,7 @@ pub fn add_one(root: &RepoRoot, p: AddParams) -> Result<AddOutcome> {
 
     let meta = MetaV1 {
         schema: 1,
+        kind: super::meta::PackageKind::Sif,
         name: name.clone(),
         version: version.clone(),
         release: release.clone(),
@@ -258,6 +259,11 @@ pub fn add_one(root: &RepoRoot, p: AddParams) -> Result<AddOutcome> {
             .map(str::to_string),
         sif_sha256: sif_sha.clone(),
         sif_size,
+        bundle_sha256: None,
+        bundle_size: None,
+        manifest_sha256: None,
+        manifest_size: None,
+        manifest_ipfs_cid: None,
         spec_sha256: spec_sha,
         spec_size: spec_bytes.len() as u64,
         spec_filename,

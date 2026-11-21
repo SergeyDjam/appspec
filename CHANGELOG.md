@@ -5,6 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.1] - 2026-11-21
+
+### Added
+
+- **Repository schema groundwork for bundles** (A.2 of bundle-as-artifact):
+  - `MetaV1.kind` / `IndexVersion.kind` with `sif` (default) and `bundle`;
+    old `meta.json`/`index.json` entries without `kind` still parse as `sif`.
+  - `bundle_sha256`/`bundle_size`, `manifest_sha256`/`manifest_size` and
+    `manifest_ipfs_cid` fields for bundle packages.
+  - `BundleManifestV1` (`src/bundle/manifest.rs`): resolved base/components/
+    extensions with canonical `name:version-release` refs and hashes.
+  - `PackageKind`, `MetaV1::is_bundle()`, `IndexVersion::is_bundle()`,
+    `artifact_sha256()` helpers.
+
+`repo add`/`pull`/`index` currently write `kind = "sif"`; publishing and
+running bundles are the next steps (B/C).
+
 ## [0.6.0] - 2026-11-20
 
 ### Added
@@ -65,6 +82,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   отдельным атомарным sandbox'ом.
 
 ### Fixed
+
+- **Bridge для `bins`/`binary` ищет `/usr/bin/NAME` и `/bin/NAME`.** Alpine
+  кладёт `bash` в `/bin/bash`, а спецификация `bins = ["bash"]` по
+  умолчанию даёт `/usr/bin/bash` — bridge падал с
+  `bridge[ansible]: /usr/bin/bash отсутствует`. Теперь путь
+  переразрешается в парный каталог, если в sandbox есть только он.
+  Ошибка стала показывать реально проверенный путь.
 
 - **VSCodium снова видит подготовленные расширения.** Если в
   `--extensions-dir` оставался пустой `extensions.json` (`[]`) от
