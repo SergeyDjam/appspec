@@ -127,6 +127,10 @@ bins    = ["qemu-img", "qemu-system-x86_64", "cloud-localds"]
 bins = [{ name = "mytool", path = "/usr/sbin/mytool", target = "/usr/local/bin/mytool" }]
 ~~~
 
+Если `bins = ["bash"]` даёт `/usr/bin/bash`, а в sandbox (например,
+Alpine) он лежит в `/bin/bash`, bridge автоматически пробует парный
+каталог `/bin` ↔ `/usr/bin`.
+
 ## Как работает mode = chroot
 
 1. SIF компонента разворачивается в sandbox: BUNDLE_DIR/sandboxes/NAME.
@@ -298,3 +302,20 @@ appspec bundle build vscodium-bundle.appspec \
 
 `bundle.lock.toml` пишется через `bundle lock --repo PATH`, что гарантирует
 согласованность lock'а и подписанного индекса на момент создания.
+
+## Публикация bundle в репозиторий (0.6.2)
+
+```sh
+appspec repo add vscodium-bundle.appspec --version 1.0
+# или явно:
+appspec repo add-bundle vscodium-bundle.appspec --version 1.0 --release 2
+```
+
+`repo add` распознаёт `[bundle]` автоматически. Для публикации источники
+base/components должны быть repo-ref (`foo`, `foo:1.0`, `foo:1.0-1`) или
+`cid`; локальные `spec`/`sif`/`manifest` и локальные файлы расширений
+отклоняются. В пакет пишутся `spec.appspec`, `manifest.json` (резолвнутые
+refs + хеши) и `meta.json` с `kind = "bundle"`.
+
+`repo pull`/`run` bundle и `repo pin` bundle пока не реализованы (следующий
+шаг); `repo ls|show|check|gc` уже понимают `kind = "bundle"`.

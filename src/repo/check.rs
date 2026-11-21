@@ -39,13 +39,41 @@ pub fn run(root: &RepoRoot, deep: bool) -> Result<CheckOutcome> {
                 continue;
             }
             let m: MetaV1 = serde_json::from_str(&std::fs::read_to_string(&meta_path)?)?;
-            let blob = blob_path(&root.path, &m.sif_sha256);
+            let sha = if m.is_bundle() {
+                m.bundle_sha256.clone().unwrap_or_default()
+            } else {
+                m.sif_sha256.clone()
+            };
+            let blob = if sha.len() >= 2 {
+                Some(blob_path(&root.path, &sha))
+            } else {
+                None
+            };
             items.push((meta_path, blob, m));
         }
     }
 
-    // 1) blob sha256
+    // 1) artifact blob sha256 (SIF for sif, bundle spec for bundle)
     for (meta_path, blob, m) in &items {
+        let expected = if m.is_bundle() {
+            m.bundle_sha256.as_deref().unwrap_or("")
+        } else {
+            m.sif_sha256.as_str()
+        };
+        if expected.is_empty() {
+            eprintln!("error: missing artifact sha256 for {}", meta_path.display());
+            errors += 1;
+            continue;
+        }
+        let Some(blob) = blob else {
+            eprintln!(
+                "error: malformed artifact sha256 `{}` for {}",
+                expected,
+                meta_path.display()
+            );
+            errors += 1;
+            continue;
+        };
         if !blob.is_file() {
             eprintln!(
                 "error: blob missing for {}: {}",
@@ -56,11 +84,45 @@ pub fn run(root: &RepoRoot, deep: bool) -> Result<CheckOutcome> {
             continue;
         }
         let actual = sha256_file(blob)?;
-        if actual != m.sif_sha256 {
+        if actual != expected {
             eprintln!(
                 "error: blob sha256 mismatch for {}: expected {}, got {}",
                 blob.display(),
-                m.sif_sha256,
+                expected,
+                actual
+            );
+            errors += 1;
+        }
+    }
+
+    // 1.5) bundle manifest
+    for (meta_path, _blob, m) in &items {
+        if !m.is_bundle() {
+            continue;
+        }
+        let manifest = meta_path.parent().unwrap().join("manifest.json");
+        let Some(expected) = &m.manifest_sha256 else {
+            eprintln!(
+                "error: manifest_sha256 missing for bundle {}",
+                meta_path.display()
+            );
+            errors += 1;
+            continue;
+        };
+        if !manifest.is_file() {
+            eprintln!(
+                "error: manifest.json missing for bundle {}",
+                meta_path.display()
+            );
+            errors += 1;
+            continue;
+        }
+        let actual = sha256_file(&manifest)?;
+        if &actual != expected {
+            eprintln!(
+                "error: manifest sha256 mismatch for {}: expected {}, got {}",
+                manifest.display(),
+                expected,
                 actual
             );
             errors += 1;
@@ -99,7 +161,15 @@ pub fn run(root: &RepoRoot, deep: bool) -> Result<CheckOutcome> {
     //      (битый CID → «cannot decode», а не «derived != cid») и
     //      использует обратное направление `sha256_from_cid`.
     for (meta_path, _blob, m) in &items {
-        let Some(cid) = &m.ipfs_cid else { continue };
+        let (cid_opt, expected) = if m.is_bundle() {
+            (
+                m.manifest_ipfs_cid.as_ref(),
+                m.manifest_sha256.as_deref().unwrap_or(""),
+            )
+        } else {
+            (m.ipfs_cid.as_ref(), m.sif_sha256.as_str())
+        };
+        let Some(cid) = cid_opt else { continue };
         // Legacy dag-pb CID (from appspec 0.4.3 --pin-ipfs on SIF >256 KB):
         // sha256 is not recoverable from CID; skip with warning.
         if !cid.starts_with("bafkrei") {
@@ -111,12 +181,12 @@ pub fn run(root: &RepoRoot, deep: bool) -> Result<CheckOutcome> {
             continue;
         }
         match sha256_from_cid(cid) {
-            Ok(digest) if digest == m.sif_sha256 => {}
+            Ok(digest) if digest == expected => {}
             Ok(digest) => {
                 eprintln!(
-                    "error: ipfs_cid mismatch for {}: meta sif_sha256={},                      but ipfs_cid {} decodes to {}",
+                    "error: ipfs_cid mismatch for {}: meta artifact sha256={},                      but ipfs_cid {} decodes to {}",
                     meta_path.display(),
-                    m.sif_sha256,
+                    expected,
                     cid,
                     digest
                 );
@@ -191,6 +261,12 @@ pub fn run(root: &RepoRoot, deep: bool) -> Result<CheckOutcome> {
                     break;
                 }
                 let (_meta_path, blob, m) = &items[i];
+                if m.is_bundle() {
+                    continue;
+                }
+                let Some(blob) = blob else {
+                    continue;
+                };
                 match super::inspect::inspect(Path::new(blob)) {
                     Ok(labels) => {
                         let actual = labels.get("org.appspec.spec.sha256").unwrap_or("");

@@ -14,6 +14,7 @@ pub mod loader;
 pub mod lock;
 pub mod manifest;
 pub mod model;
+pub mod publish;
 pub mod validate;
 
 use anyhow::Result;

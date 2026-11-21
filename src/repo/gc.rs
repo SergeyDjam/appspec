@@ -69,7 +69,15 @@ pub fn run(root: &RepoRoot, dry_run: bool, keep: Option<usize>) -> Result<GcOutc
     for versions in per_pkg.values() {
         let n = keep.unwrap_or(usize::MAX).min(versions.len());
         for m in versions.iter().take(n) {
-            referenced.insert(m.sif_sha256.clone());
+            if !m.sif_sha256.is_empty() {
+                referenced.insert(m.sif_sha256.clone());
+            }
+            if let Some(sha) = &m.bundle_sha256 {
+                referenced.insert(sha.clone());
+            }
+            if let Some(sha) = &m.manifest_sha256 {
+                referenced.insert(sha.clone());
+            }
         }
     }
 

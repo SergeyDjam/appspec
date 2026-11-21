@@ -57,6 +57,17 @@ pub fn pull(local_root: &RepoRoot, name_ver: &str, opts: PullOpts) -> Result<()>
     bail!("repo pull requires --from URL|PATH|ipns://, --profile NAME, or --via ipfs")
 }
 
+fn ensure_sif_pull(name: &str, ver: &str, v: &IndexVersion) -> Result<()> {
+    if v.is_bundle() {
+        bail!(
+            "bundle pull is not supported yet: {}:{} (bundle-as-artifact pull is the next step)",
+            name,
+            ver
+        );
+    }
+    Ok(())
+}
+
 fn pull_one(
     local_root: &RepoRoot,
     name: &str,
@@ -115,6 +126,7 @@ fn pull_from_http(
         .versions
         .get(ver)
         .ok_or_else(|| anyhow!("{}:{} not in remote index", name, ver))?;
+    ensure_sif_pull(name, ver, v)?;
 
     let spec_url = format!("{}/packages/{}/{}/spec.appspec", base, name, ver);
     let (s, _h, spec_body) = http_request(&spec_url, "GET", &[], None)?;
@@ -208,6 +220,13 @@ fn pull_from_path(
         bail!("not found in {}: {}:{}", from.display(), name, ver);
     }
     let meta: MetaV1 = serde_json::from_str(&std::fs::read_to_string(&meta_path)?)?;
+    if meta.is_bundle() {
+        bail!(
+            "bundle pull is not supported yet: {}:{} (bundle-as-artifact pull is the next step)",
+            name,
+            ver
+        );
+    }
     let spec_src = meta_path.parent().unwrap().join("spec.appspec");
     let blob_src = super::util::blob_path(&src_root.path, &meta.sif_sha256);
 
@@ -271,6 +290,7 @@ fn pull_via_ipfs(local_root: &RepoRoot, name: &str, ver: &str, opts: &PullOpts) 
         .versions
         .get(ver)
         .ok_or_else(|| anyhow!("{}:{} not in local index", name, ver))?;
+    ensure_sif_pull(name, ver, v)?;
 
     let cid = v.ipfs_cid.as_deref().ok_or_else(|| {
         anyhow!(
@@ -321,6 +341,7 @@ fn pull_from_ipfs_index(
         .versions
         .get(ver)
         .ok_or_else(|| anyhow!("{}:{} not in IPFS index", name, ver))?;
+    ensure_sif_pull(name, ver, v)?;
 
     let cid = v.ipfs_cid.as_deref().ok_or_else(|| {
         anyhow!(
@@ -376,6 +397,7 @@ fn pull_from_ipns(
         .versions
         .get(ver)
         .ok_or_else(|| anyhow!("{}:{} not in IPNS index (ipns://{})", name, ver, ipns_name))?;
+    ensure_sif_pull(name, ver, v)?;
 
     let cid = v.ipfs_cid.as_deref().ok_or_else(|| {
         anyhow!(
@@ -547,6 +569,7 @@ fn pull_from_oci(
         .versions
         .get(ver)
         .ok_or_else(|| anyhow!("{}:{} not in OCI index", name, ver))?;
+    ensure_sif_pull(name, ver, v)?;
 
     let meta = build_meta(name, v);
 

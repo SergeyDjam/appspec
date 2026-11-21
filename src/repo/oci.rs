@@ -123,6 +123,13 @@ pub fn export_oci(root: &RepoRoot, opts: OciExportOpts) -> Result<OciExportOutco
     // 2. SIF'ы
     for (name, pkg) in &index.packages {
         for (ver_key, v) in &pkg.versions {
+            if v.is_bundle() {
+                eprintln!(
+                    "warning: skip {}:{} — bundle packages are not exported to OCI yet",
+                    name, ver_key
+                );
+                continue;
+            }
             let blob = blob_path(&root.path, &v.sif_sha256);
             if !blob.is_file() {
                 eprintln!(

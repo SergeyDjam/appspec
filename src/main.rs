@@ -232,7 +232,10 @@ fn main() {
 
         Cmd::Bundle { cmd } => bundle::run(cmd),
 
-        Cmd::Repo { cmd } => repo::run(cmd),
+        Cmd::Repo { cmd } => match cmd {
+            repo::RepoCommand::Add(a) => cmd_repo_add(a),
+            other => repo::run(other),
+        },
     };
 
     match result {
@@ -702,6 +705,47 @@ fn is_package_name(s: &str) -> bool {
         return false;
     }
     true
+}
+
+/// `repo add` accepts SIFs and bundle specs. Bundle publishing lives in
+/// `bundle::publish` (repo integration tests compile `src/repo` standalone).
+fn cmd_repo_add(mut a: repo::commands::AddArgs) -> Result<i32> {
+    let mut sif = Vec::new();
+    let mut bundles = Vec::new();
+    for p in a.sif.drain(..) {
+        if bundle::publish::is_bundle_spec(&p) {
+            bundles.push(p);
+        } else {
+            sif.push(p);
+        }
+    }
+    if sif.is_empty() && bundles.is_empty() {
+        bail!("no SIF or bundle arguments");
+    }
+
+    if !sif.is_empty() {
+        let mut sif_args = a.clone();
+        sif_args.sif = sif;
+        repo::commands::add(sif_args)?;
+    }
+    if bundles.is_empty() {
+        return Ok(0);
+    }
+
+    let root = repo::commands::require_local_root(a.root.clone(), None, "add")?;
+    let _lock = repo::util::FileLock::acquire(&root.lock_path())?;
+    let opts = bundle::publish::AddOpts {
+        version: a.version.as_deref(),
+        release: a.bundle_release.as_deref(),
+        epoch: a.bundle_epoch,
+        force: a.force,
+        pin_ipfs: a.pin_ipfs,
+    };
+    let changed = bundle::publish::add_bundles(&root, &bundles, &opts)?;
+    if changed {
+        repo::index_build::rebuild_all(&root)?;
+    }
+    Ok(0)
 }
 
 fn cmd_run(

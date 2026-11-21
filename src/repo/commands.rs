@@ -74,7 +74,7 @@ fn open_root(a: Option<PathBuf>, sc: Option<PathBuf>) -> Result<layout::RepoRoot
 /// initialized» вместо «передайте --root PATH».
 ///
 /// `--root` и `--server-config` отключают проверку: явный путь побеждает.
-fn require_local_root(
+pub(crate) fn require_local_root(
     a: Option<PathBuf>,
     sc: Option<PathBuf>,
     cmd: &str,
@@ -261,6 +261,7 @@ fn print_meta_fields(m: &meta::MetaV1) {
         m.version, m.release, m.epoch
     );
     println!("Arch:        {}", m.arch);
+    println!("Kind:        {}", m.kind.as_str());
     if let Some(s) = &m.summary {
         println!("Summary:     {}", s);
     }
@@ -276,8 +277,28 @@ fn print_meta_fields(m: &meta::MetaV1) {
     if let Some(s) = &m.base_digest {
         println!("Base digest: {}", s);
     }
-    println!("SIF sha256:  {}", m.sif_sha256);
-    println!("SIF size:    {}", m.sif_size);
+    if m.is_bundle() {
+        println!(
+            "Bundle sha256: {}",
+            m.bundle_sha256.as_deref().unwrap_or("-")
+        );
+        println!(
+            "Bundle size:   {}",
+            m.bundle_size
+                .map(|v| v.to_string())
+                .unwrap_or_else(|| "-".into())
+        );
+        println!(
+            "Manifest sha256: {}",
+            m.manifest_sha256.as_deref().unwrap_or("-")
+        );
+        if let Some(cid) = &m.manifest_ipfs_cid {
+            println!("Manifest CID:  {}", cid);
+        }
+    } else {
+        println!("SIF sha256:  {}", m.sif_sha256);
+        println!("SIF size:    {}", m.sif_size);
+    }
     println!("Spec sha256: {}", m.spec_sha256);
     println!("Built at:    {}", m.built_at);
     if !m.requires.is_empty() {
@@ -437,7 +458,7 @@ pub fn init(a: InitArgs) -> Result<i32> {
 // add / check / gc / reindex — require local
 // ===========================================================================
 
-#[derive(Debug, Args)]
+#[derive(Debug, Clone, Args)]
 pub struct AddArgs {
     pub sif: Vec<PathBuf>,
     #[arg(long)]
@@ -448,6 +469,15 @@ pub struct AddArgs {
     pub release_suffix: Option<String>,
     #[arg(long)]
     pub pin_ipfs: bool,
+    /// Bundle version (required when adding a `[bundle]` spec).
+    #[arg(long)]
+    pub version: Option<String>,
+    /// Bundle release (default: 1).
+    #[arg(long = "release")]
+    pub bundle_release: Option<String>,
+    /// Bundle epoch (default: 0).
+    #[arg(long = "epoch")]
+    pub bundle_epoch: Option<u32>,
     #[arg(long)]
     pub tag: Option<String>,
     #[arg(long)]
@@ -461,15 +491,15 @@ pub fn add(a: AddArgs) -> Result<i32> {
     let root = require_local_root(a.root, None, "add")?;
     let _lock = util::FileLock::acquire(&root.lock_path())?;
 
-    if a.pin_ipfs {
-        eprintln!("warning: --pin-ipfs ignored (IPFS support arrives in E6)");
-    }
     if a.tag.is_some() {
         eprintln!("warning: --tag ignored for now; use `refs/<name>.toml`");
     }
 
     let mut changed = false;
     for sif in &a.sif {
+        if a.version.is_some() || a.bundle_release.is_some() || a.bundle_epoch.is_some() {
+            eprintln!("warning: --version/--release/--epoch apply only to bundles");
+        }
         let out = add::add_one(
             &root,
             add::AddParams {
@@ -558,6 +588,10 @@ fn backfill_ipfs_cid(root: &layout::RepoRoot) -> Result<usize> {
             }
             let text = std::fs::read_to_string(&meta_path)?;
             let mut meta: meta::MetaV1 = serde_json::from_str(&text)?;
+            if meta.is_bundle() {
+                // Bundle CIDs are written by `repo add` together with the manifest.
+                continue;
+            }
             if meta.ipfs_cid.is_some() {
                 continue;
             }
@@ -672,13 +706,20 @@ pub fn ls(a: LsArgs) -> Result<i32> {
                     pkg.versions.iter().collect();
                 versions.sort_by_cached_key(|(_, v)| std::cmp::Reverse(v.sort_key()));
                 for (k, v) in versions {
+                    let size = if v.is_bundle() {
+                        v.bundle_size.unwrap_or(0)
+                    } else {
+                        v.sif_size
+                    };
+                    let sha = v.artifact_sha256().unwrap_or("");
                     println!(
-                        "{:<24}  {:>12}  tags=[{}]  arch={}  sha={}",
+                        "{:<24}  {:>12}  kind={}  tags=[{}]  arch={}  sha={}",
                         k,
-                        v.sif_size,
+                        size,
+                        v.kind.as_str(),
                         v.tags.join(","),
                         v.arch,
-                        v.sif_sha256.get(..12).unwrap_or(&v.sif_sha256)
+                        sha.get(..12).unwrap_or(sha)
                     );
                 }
             }
@@ -796,7 +837,10 @@ pub fn search(a: SearchArgs) -> Result<i32> {
                         "version": v.version,
                         "release": v.release,
                         "arch": v.arch,
+                        "kind": v.kind.as_str(),
                         "sif_sha256": v.sif_sha256,
+                        "bundle_sha256": v.bundle_sha256,
+                        "manifest_sha256": v.manifest_sha256,
                     })).collect::<Vec<_>>(),
                 })
             })
@@ -809,12 +853,14 @@ pub fn search(a: SearchArgs) -> Result<i32> {
                 println!("  {}", s);
             }
             for v in versions {
+                let sha = v.artifact_sha256().unwrap_or("");
                 println!(
-                    "  {}-{}  arch={}  sha={}",
+                    "  {}-{}  kind={}  arch={}  sha={}",
                     v.version,
                     v.release,
+                    v.kind.as_str(),
                     v.arch,
-                    v.sif_sha256.get(..12).unwrap_or(&v.sif_sha256)
+                    sha.get(..12).unwrap_or(sha)
                 );
             }
         }
@@ -874,6 +920,13 @@ pub fn show(a: ShowArgs) -> Result<i32> {
 
     if let Some(out) = a.sif {
         let m: meta::MetaV1 = serde_json::from_str(&std::fs::read_to_string(&meta_path)?)?;
+        if m.is_bundle() {
+            bail!(
+                "{}:{} is a bundle; `--sif` is only for SIF packages (use `--spec`)",
+                pkg,
+                ver
+            );
+        }
         let blob = util::blob_path(&root.path, &m.sif_sha256);
         if !a.no_verify {
             let actual = util::sha256_file(&blob)?;
@@ -927,6 +980,13 @@ fn show_http(origin: &str, pkg: &str, ver: &str, a: &ShowArgs) -> Result<i32> {
     let m: meta::MetaV1 = serde_json::from_slice(&meta_body).context("parsing remote meta.json")?;
 
     if let Some(out) = &a.sif {
+        if m.is_bundle() {
+            bail!(
+                "{}:{} is a bundle; `--sif` is only for SIF packages (use `--spec`)",
+                pkg,
+                ver
+            );
+        }
         if m.sif_sha256.len() < 2 {
             bail!("malformed sif_sha256: {}", m.sif_sha256);
         }
