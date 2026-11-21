@@ -276,6 +276,7 @@ fn make_repo_with_demo_versions() -> (TempDir, PathBuf) {
                 requires: vec![],
                 provides: vec![],
                 ipfs_cid: None,
+                ..Default::default()
             },
         );
 
@@ -313,6 +314,7 @@ fn make_repo_with_demo_versions() -> (TempDir, PathBuf) {
             icon_mimetype: None,
             icon_size: None,
             icon_filename: None,
+            ..Default::default()
         };
         fs::write(
             pd.join("meta.json"),

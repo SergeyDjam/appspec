@@ -475,6 +475,7 @@ fn write_version(
 fn build_meta(name: &str, v: &IndexVersion) -> MetaV1 {
     MetaV1 {
         schema: 1,
+        kind: v.kind,
         name: name.to_string(),
         version: v.version.clone(),
         release: v.release.clone(),
@@ -488,6 +489,11 @@ fn build_meta(name: &str, v: &IndexVersion) -> MetaV1 {
         packager: None,
         sif_sha256: v.sif_sha256.clone(),
         sif_size: v.sif_size,
+        bundle_sha256: v.bundle_sha256.clone(),
+        bundle_size: v.bundle_size,
+        manifest_sha256: v.manifest_sha256.clone(),
+        manifest_size: v.manifest_size,
+        manifest_ipfs_cid: v.manifest_ipfs_cid.clone(),
         spec_sha256: v.spec_sha256.clone(),
         spec_size: v.spec_size,
         spec_filename: "spec.appspec".into(),

@@ -97,6 +97,7 @@ mod tests {
             requires: vec![],
             provides: vec![],
             ipfs_cid: None,
+            ..Default::default()
         }
     }
 

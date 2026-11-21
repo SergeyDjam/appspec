@@ -139,6 +139,15 @@ fn emit_bridge(
         let _ = writeln!(w, "    done");
         let _ = writeln!(w, "fi");
         let _ = writeln!(w, "BIN=\"$SANDBOX{binary}\"");
+        let _ = writeln!(w, "_short={}", sh_quote(short));
+        let _ = writeln!(
+            w,
+            "if [ ! -x \"$BIN\" ] && [ -x \"$SANDBOX/bin/$_short\" ]; then BIN=\"$SANDBOX/bin/$_short\"; fi"
+        );
+        let _ = writeln!(
+            w,
+            "if [ ! -x \"$BIN\" ] && [ -x \"$SANDBOX/usr/bin/$_short\" ]; then BIN=\"$SANDBOX/usr/bin/$_short\"; fi"
+        );
         let _ = writeln!(
             w,
             "if [ ! -x \"$BIN\" ]; then echo \"bridge[{name}]: $BIN отсутствует (satellite не смонтирован)\" >&2; exit 127; fi",
@@ -294,11 +303,30 @@ fn emit_bridge(
         "    echo \"bridge[{name}] (instance $(cat /opt/appspec/bin/.instance-id 2>/dev/null || echo unknown)): $SANDBOX отсутствует (sandbox bind не виден; нет .ready)\" >&2; exit 127",
         name = c.name);
     let _ = writeln!(w, "fi");
+
+    // Alpine кладёт bash в /bin/bash, Debian — в /usr/bin/bash.
+    // Если основного пути нет в sandbox, пробуем парный каталог.
+    let _ = writeln!(w, "BIN_PATH={}", sh_quote(binary));
+    let _ = writeln!(w, "case \"$BIN_PATH\" in");
+    let _ = writeln!(w, "  /usr/bin/*)");
+    let _ = writeln!(w, "    _alt=\"/bin/${{BIN_PATH#/usr/bin/}}\"");
     let _ = writeln!(
         w,
-        "[ -e \"$SANDBOX{}\" ] || {{ echo \"bridge[{name}] (instance $(cat /opt/appspec/bin/.instance-id 2>/dev/null || echo unknown)): {} отсутствует в $SANDBOX (SIF устарел? пересоберите spec)\" >&2; exit 127; }}",
-        binary,
-        binary,
+        "    if [ ! -e \"$SANDBOX$BIN_PATH\" ] && [ -e \"$SANDBOX$_alt\" ]; then BIN_PATH=\"$_alt\"; fi"
+    );
+    let _ = writeln!(w, "    ;;");
+    let _ = writeln!(w, "  /bin/*)");
+    let _ = writeln!(w, "    _alt=\"/usr/bin/${{BIN_PATH#/bin/}}\"");
+    let _ = writeln!(
+        w,
+        "    if [ ! -e \"$SANDBOX$BIN_PATH\" ] && [ -e \"$SANDBOX$_alt\" ]; then BIN_PATH=\"$_alt\"; fi"
+    );
+    let _ = writeln!(w, "    ;;");
+    let _ = writeln!(w, "esac");
+
+    let _ = writeln!(
+        w,
+        "[ -e \"$SANDBOX$BIN_PATH\" ] || {{ echo \"bridge[{name}] (instance $(cat /opt/appspec/bin/.instance-id 2>/dev/null || echo unknown)): $BIN_PATH отсутствует в $SANDBOX (SIF устарел? пересоберите spec)\" >&2; exit 127; }}",
         name = c.name
     );
     let _ = writeln!(w);
@@ -582,13 +610,13 @@ fn emit_bridge(
     let _ = writeln!(w, "        cd \"$1\" || exit 1");
     let _ = writeln!(w, "        shift");
     let _ = writeln!(w, "        exec \"$@\"");
-    let _ = writeln!(w, "    ' sh \"$PWD_REAL\" {} \"$@\"", sh_quote(binary));
+    let _ = writeln!(w, "    ' sh \"$PWD_REAL\" \"$BIN_PATH\" \"$@\"");
     let _ = writeln!(w, "else");
     let _ = writeln!(
         w,
         "    # fallback: в sandbox нет /bin/sh — запускаем без cd"
     );
-    let _ = writeln!(w, "    run_chroot \"$SANDBOX\" {} \"$@\"", sh_quote(binary));
+    let _ = writeln!(w, "    run_chroot \"$SANDBOX\" \"$BIN_PATH\" \"$@\"");
     let _ = writeln!(w, "fi");
     s
 }
@@ -1941,6 +1969,39 @@ mod install_command_tests {
 mod content_tests {
     use super::*;
     use crate::bundle::model::{FileScope, ResolvedFile};
+
+    /// `/usr/bin/NAME` и `/bin/NAME` должны взаимно подставляться:
+    /// Alpine кладёт bash в /bin, Debian — в /usr/bin.
+    #[test]
+    fn chroot_bridge_falls_back_between_usr_bin_and_bin() {
+        let c: Component = toml::from_str(
+            r#"
+name = "ansible"
+spec = "./ansible.appspec"
+"#,
+        )
+        .expect("component");
+        let sh = emit_bridge(
+            &c,
+            "/opt/utils/ansible",
+            "/usr/bin/bash",
+            "/usr/local/bin/bash",
+            &[] as &[String],
+            true,
+        );
+        assert!(
+            sh.contains("BIN_PATH=/usr/bin/bash") || sh.contains("BIN_PATH='/usr/bin/bash'"),
+            "missing BIN_PATH:\n{sh}"
+        );
+        assert!(
+            sh.contains("/bin/${BIN_PATH#/usr/bin/}"),
+            "missing /bin fallback:\n{sh}"
+        );
+        assert!(
+            sh.contains("run_chroot \"$SANDBOX\" /bin/sh"),
+            "chroot must still run /bin/sh:\n{sh}"
+        );
+    }
 
     /// `/dev/kvm` не должен пробрасываться в chroot satellite, когда
     /// KVM отключён через APPSPEC_DISABLE_KVM.

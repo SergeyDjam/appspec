@@ -1,9 +1,31 @@
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+/// 0.6.1: repository packages can be either a SIF or a bundle.
+/// Old meta/index entries have no `kind` and default to `sif`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum PackageKind {
+    #[default]
+    Sif,
+    Bundle,
+}
+
+#[allow(dead_code)] // reserved: repo ls/show output for bundles
+impl PackageKind {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            PackageKind::Sif => "sif",
+            PackageKind::Bundle => "bundle",
+        }
+    }
+}
+
+#[derive(Debug, Default, Serialize, Deserialize, Clone)]
 pub struct MetaV1 {
     pub schema: u32,
+    #[serde(default)]
+    pub kind: PackageKind,
     pub name: String,
     pub version: String,
     pub release: String,
@@ -23,6 +45,18 @@ pub struct MetaV1 {
     pub packager: Option<String>,
     pub sif_sha256: String,
     pub sif_size: u64,
+    /// Bundle artifact (the bundle spec stored as `spec.appspec`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bundle_sha256: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bundle_size: Option<u64>,
+    /// Resolved bundle manifest (`manifest.json`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub manifest_sha256: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub manifest_size: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub manifest_ipfs_cid: Option<String>,
     pub spec_sha256: String,
     pub spec_size: u64,
     pub spec_filename: String,
@@ -76,14 +110,26 @@ pub struct IndexPackage {
     pub versions: BTreeMap<String, IndexVersion>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct IndexVersion {
+    #[serde(default)]
+    pub kind: PackageKind,
     pub epoch: u32,
     pub version: String,
     pub release: String,
     pub arch: String,
     pub sif_sha256: String,
     pub sif_size: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bundle_sha256: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bundle_size: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub manifest_sha256: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub manifest_size: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub manifest_ipfs_cid: Option<String>,
     pub spec_sha256: String,
     pub spec_size: u64,
     pub built_at: String,
@@ -138,6 +184,21 @@ impl IndexVersion {
     pub fn sort_key(&self) -> (Vec<i64>, String, i64) {
         ver_key(&self.version, &self.release, self.epoch)
     }
+
+    #[allow(dead_code)] // reserved: B/C
+    pub fn is_bundle(&self) -> bool {
+        self.kind == PackageKind::Bundle
+    }
+
+    /// Hash of the primary artifact: SIF for `kind = sif`, bundle spec for
+    /// `kind = bundle`.
+    #[allow(dead_code)] // reserved: B/C
+    pub fn artifact_sha256(&self) -> Option<&str> {
+        match self.kind {
+            PackageKind::Sif => Some(self.sif_sha256.as_str()),
+            PackageKind::Bundle => self.bundle_sha256.as_deref(),
+        }
+    }
 }
 
 impl MetaV1 {
@@ -145,11 +206,75 @@ impl MetaV1 {
     pub fn sort_key(&self) -> (Vec<i64>, String, i64) {
         ver_key(&self.version, &self.release, self.epoch)
     }
+
+    #[allow(dead_code)] // reserved: B/C
+    pub fn is_bundle(&self) -> bool {
+        self.kind == PackageKind::Bundle
+    }
+
+    /// Hash of the primary artifact: SIF for `kind = sif`, bundle spec for
+    /// `kind = bundle`.
+    #[allow(dead_code)] // reserved: B/C
+    pub fn artifact_sha256(&self) -> Option<&str> {
+        match self.kind {
+            PackageKind::Sif => Some(self.sif_sha256.as_str()),
+            PackageKind::Bundle => self.bundle_sha256.as_deref(),
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::ver_key;
+    use super::{ver_key, IndexVersion, MetaV1, PackageKind};
+
+    #[test]
+    fn old_index_version_defaults_to_sif() {
+        let v: IndexVersion = serde_json::from_str(
+            r#"{
+                "epoch": 0, "version": "1.0", "release": "1", "arch": "amd64",
+                "sif_sha256": "aa", "sif_size": 1,
+                "spec_sha256": "bb", "spec_size": 2,
+                "built_at": "2026-11-21T00:00:00Z", "generator": "test"
+            }"#,
+        )
+        .unwrap();
+        assert_eq!(v.kind, PackageKind::Sif);
+        assert!(v.bundle_sha256.is_none());
+        assert_eq!(v.artifact_sha256(), Some("aa"));
+    }
+
+    #[test]
+    fn bundle_meta_roundtrip_keeps_kind_and_hashes() {
+        let m = MetaV1 {
+            schema: 1,
+            kind: PackageKind::Bundle,
+            name: "dev".into(),
+            version: "1.0".into(),
+            release: "1".into(),
+            arch: "noarch".into(),
+            sif_sha256: String::new(),
+            sif_size: 0,
+            bundle_sha256: Some("ab".repeat(32)),
+            bundle_size: Some(10),
+            manifest_sha256: Some("cd".repeat(32)),
+            manifest_size: Some(20),
+            manifest_ipfs_cid: Some("bafkrei-test".into()),
+            spec_sha256: "ef".repeat(32),
+            spec_size: 5,
+            spec_filename: "spec.appspec".into(),
+            generator: "test".into(),
+            built_at: "2026-11-21T00:00:00Z".into(),
+            ..Default::default()
+        };
+        let json = serde_json::to_string(&m).unwrap();
+        assert!(json.contains("\"kind\":\"bundle\""), "{json}");
+        assert!(json.contains("manifest_sha256"), "{json}");
+
+        let back: MetaV1 = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.kind, PackageKind::Bundle);
+        assert_eq!(back.manifest_ipfs_cid.as_deref(), Some("bafkrei-test"));
+        assert_eq!(back.artifact_sha256(), m.bundle_sha256.as_deref());
+    }
 
     #[test]
     fn ver_key_compares_version_numerically() {

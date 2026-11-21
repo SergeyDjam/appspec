@@ -62,12 +62,18 @@ pub fn rebuild_all(root: &RepoRoot) -> Result<IndexV1> {
                 pkg.versions.insert(
                     key,
                     IndexVersion {
+                        kind: m.kind,
                         epoch: m.epoch,
                         version: m.version,
                         release: m.release,
                         arch: m.arch,
                         sif_sha256: m.sif_sha256,
                         sif_size: m.sif_size,
+                        bundle_sha256: m.bundle_sha256,
+                        bundle_size: m.bundle_size,
+                        manifest_sha256: m.manifest_sha256,
+                        manifest_size: m.manifest_size,
+                        manifest_ipfs_cid: m.manifest_ipfs_cid,
                         spec_sha256: m.spec_sha256,
                         spec_size: m.spec_size,
                         built_at: m.built_at,
