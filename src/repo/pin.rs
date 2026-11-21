@@ -172,6 +172,19 @@ fn pin_one(
     let ver_key = format!("{}-{}", meta.version, meta.release);
     let label = format!("{}:{}", meta.name, ver_key);
     let eta = format_eta(idx, total, elapsed_ms);
+    if meta.is_bundle() {
+        if opts.progress {
+            eprintln!(
+                "[{}/{}] {} — SKIP: bundle pin not implemented yet (manifest {})",
+                idx,
+                total,
+                label,
+                meta.manifest_sha256.as_deref().unwrap_or("-")
+            );
+        }
+        s.failed = 1;
+        return s;
+    }
     let blob = util::blob_path(root_path, &meta.sif_sha256);
 
     // 1. cid = None → add from local blob file

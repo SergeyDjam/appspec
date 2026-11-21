@@ -35,7 +35,8 @@ pub use config::RepoProfile;
 pub enum RepoCommand {
     /// Создать новый локальный репозиторий (data-only).
     Init(commands::InitArgs),
-    /// Добавить SIF в репозиторий
+    /// Добавить SIF или bundle в репозиторий (alias: add-bundle)
+    #[command(visible_alias = "add-bundle")]
     Add(commands::AddArgs),
     /// Список пакетов или версий пакета
     Ls(commands::LsArgs),

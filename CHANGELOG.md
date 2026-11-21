@@ -5,6 +5,34 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.2] - 2026-11-22
+
+### Added
+
+- **`repo add <bundle.appspec>`** publishes a bundle as a repository
+  package (`kind = "bundle"`). `repo add-bundle` is a visible alias.
+  Bundle version is passed with `--version` (`--release` default `1`,
+  `--epoch` default `0`).
+- Bundle publishing writes:
+  - `spec.appspec` — original bundle TOML;
+  - `manifest.json` — `BundleManifestV1` with canonical
+    `name:version-release` refs and SIF/spec hashes;
+  - `meta.json` + index entry with `bundle_sha256`, `manifest_sha256`,
+    `manifest_ipfs_cid` and `kind = "bundle"`;
+  - blobs for the bundle spec and manifest (so `gc`/IPFS see them).
+- Bundle sources must be repo refs (`foo`, `foo:1.0`, `foo:1.0-1`) or
+  `cid`; local `spec`/`sif`/`manifest` paths and local extension files
+  are rejected with a hint.
+- `repo check` verifies bundle/manifest blobs and hashes;
+  `repo ls`/`show`/`search` display `kind` and the correct artifact hash;
+  `repo gc` keeps bundle + manifest blobs.
+
+### Notes
+
+- `repo pull` of a bundle, `repo pin` of bundles and OCI export of bundles
+  currently fail with a clear "not supported yet" message; these are the
+  next step (C).
+
 ## [0.6.1] - 2026-11-21
 
 ### Added

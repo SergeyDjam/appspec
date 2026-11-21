@@ -49,19 +49,21 @@ pub struct ManifestComponent {
     pub name: String,
     pub provide: String,
     pub mode: String,
-    #[serde(flatten)]
     pub source: ManifestSource,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ManifestExtension {
     pub name: String,
+    /// `cid:...` / `url:...`, or `None` for Open VSX online.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cid: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub url: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub requires: Vec<String>,
 }
 
 #[cfg(test)]
@@ -102,6 +104,7 @@ mod tests {
                 source: None,
                 cid: None,
                 url: None,
+                requires: vec![],
             }],
             built_at: "2026-11-21T00:00:00Z".into(),
             generator: "appspec test".into(),

@@ -100,7 +100,8 @@ appspec repo init [PATH] [--name NAME] [--description TEXT] [--token NAME]
 
 | Команда | Что делает |
 |---|---|
-| `repo add <SIF>… [--arch A] [--force] [--release-suffix N] [--pin-ipfs]` | Добавить SIF |
+| `repo add <SIF\|bundle.appspec>… [--arch A] [--force] [--release-suffix N] [--pin-ipfs]` | Добавить SIF или bundle |
+| `repo add-bundle <bundle.appspec> --version V [--release R] [--epoch N]` | Явный alias для bundle |
 | `repo ls [PKG] [--json]` | Список пакетов / версий |
 | `repo show PKG:VER [--json] [--spec] [--sif PATH]` | Метаданные / спек / копия SIF |
 | `repo reindex` | Пересобрать index.json из packages/ (идемпотентно) |
@@ -110,6 +111,18 @@ appspec repo init [PATH] [--name NAME] [--description TEXT] [--token NAME]
 
 `repo add` идемпотентен по ключу `(name, version, release, epoch, arch)`.
 `--release-suffix N` даёт `release = "<original>.N"` (например `1.2`).
+
+Bundle-спек (`[bundle]`) определяется автоматически. Для него обязателен
+`--version`; `--release` по умолчанию `1`. Источники base/components должны
+быть repo-ref (`foo`, `foo:1.0`, `foo:1.0-1`) или `cid`; локальные
+`spec`/`sif`/`manifest` и локальные файлы расширений отклоняются. В пакет
+пишутся `spec.appspec`, `manifest.json` и `meta.json` с `kind = "bundle"`,
+`bundle_sha256`, `manifest_sha256` и `manifest_ipfs_cid`.
+
+~~~sh
+appspec repo add vscodium-bundle.appspec --version 1.0
+appspec repo add-bundle vscodium-bundle.appspec --version 1.0 --release 2
+~~~
 
 ### Подписи
 
