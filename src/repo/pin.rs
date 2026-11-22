@@ -158,6 +158,235 @@ fn add_from_blob(
 }
 
 #[allow(clippy::too_many_arguments)]
+fn pin_bundle_artifact(
+    label: &str,
+    kind: &str,
+    blob: &Path,
+    expected: Option<&str>,
+    opts: &PinOpts,
+    idx: usize,
+    total: usize,
+    eta: &str,
+    pinned_set: &HashSet<String>,
+    s: &mut PerEntry,
+) -> Option<String> {
+    let prefix = format!("[{}/{}] {} [{}]", idx, total, label, kind);
+    if let Some(exp) = expected {
+        if pinned_set.contains(exp) {
+            s.already_pinned += 1;
+            if opts.progress {
+                eprintln!("{} — already pinned ({})", prefix, short(exp));
+            }
+            return None;
+        }
+        if blob.is_file() {
+            if opts.dry_run {
+                if opts.progress {
+                    eprintln!("{} — would add+pin (local file)", prefix);
+                }
+                return None;
+            }
+            match ipfs::add_file(blob, true) {
+                Ok(actual) if actual == exp => {
+                    s.added += 1;
+                    if opts.progress {
+                        eprintln!("{} — OK {}", prefix, short(&actual));
+                    }
+                    None
+                }
+                Ok(actual) => {
+                    s.failed += 1;
+                    if opts.progress {
+                        eprintln!(
+                            "{} — FAILED: ipfs add returned {} but meta cid is {}",
+                            prefix,
+                            short(&actual),
+                            short(exp)
+                        );
+                    }
+                    None
+                }
+                Err(e) => {
+                    s.failed += 1;
+                    if opts.progress {
+                        eprintln!("{} — FAILED: {:#}", prefix, e);
+                    }
+                    None
+                }
+            }
+        } else {
+            let is_local = ipfs::is_local_block(exp).unwrap_or(false);
+            if !is_local && !opts.dht {
+                s.skipped_not_local += 1;
+                if opts.progress {
+                    eprintln!(
+                        "{} — SKIP not local (no blob file; use --dht), cid {}",
+                        prefix,
+                        short(exp)
+                    );
+                }
+                return None;
+            }
+            if opts.dry_run {
+                if opts.progress {
+                    eprintln!(
+                        "{} — would pin ({}), timeout {}s",
+                        prefix,
+                        if is_local { "local" } else { "DHT" },
+                        opts.pin_timeout_secs
+                    );
+                }
+                return None;
+            }
+            match ipfs::pin_with_timeout(exp, opts.pin_timeout_secs) {
+                Ok(()) => {
+                    s.pinned_new += 1;
+                    if opts.progress {
+                        eprintln!("{} — pinned ({}s)", prefix, eta);
+                    }
+                }
+                Err(e) if format!("{e:#}").contains("timed out") => {
+                    s.timed_out += 1;
+                    if opts.progress {
+                        eprintln!("{} — TIMEOUT {}s, skip", prefix, opts.pin_timeout_secs);
+                    }
+                }
+                Err(e) => {
+                    s.failed += 1;
+                    if opts.progress {
+                        eprintln!("{} — FAILED: {:#}", prefix, e);
+                    }
+                }
+            }
+            None
+        }
+    } else {
+        if !blob.is_file() {
+            s.missing_blob += 1;
+            if opts.progress {
+                eprintln!("{} — MISSING blob {}", prefix, blob.display());
+            }
+            return None;
+        }
+        if opts.dry_run {
+            if opts.progress {
+                eprintln!("{} — would add+pin (local file)", prefix);
+            }
+            return None;
+        }
+        match ipfs::add_file(blob, true) {
+            Ok(actual) => {
+                s.added += 1;
+                if opts.progress {
+                    eprintln!("{} — OK {} {}", prefix, short(&actual), eta);
+                }
+                Some(actual)
+            }
+            Err(e) => {
+                s.failed += 1;
+                if opts.progress {
+                    eprintln!("{} — FAILED: {:#}", prefix, e);
+                }
+                None
+            }
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn pin_bundle_one(
+    root_path: &Path,
+    meta_path: &Path,
+    meta: &MetaV1,
+    opts: &PinOpts,
+    idx: usize,
+    total: usize,
+    elapsed_ms: u128,
+    pinned_set: &HashSet<String>,
+) -> PerEntry {
+    let mut s = PerEntry::default();
+    let ver_key = format!("{}-{}", meta.version, meta.release);
+    let label = format!("{}:{}", meta.name, ver_key);
+    let eta = format_eta(idx, total, elapsed_ms);
+
+    let bundle_sha = meta.bundle_sha256.clone().unwrap_or_default();
+    let manifest_sha = meta.manifest_sha256.clone().unwrap_or_default();
+    let new_bundle = if bundle_sha.is_empty() {
+        s.missing_blob += 1;
+        if opts.progress {
+            eprintln!(
+                "[{}/{}] {} [bundle] — missing bundle_sha256",
+                idx, total, label
+            );
+        }
+        None
+    } else {
+        pin_bundle_artifact(
+            &label,
+            "bundle",
+            &util::blob_path(root_path, &bundle_sha),
+            meta.ipfs_cid.as_deref(),
+            opts,
+            idx,
+            total,
+            &eta,
+            pinned_set,
+            &mut s,
+        )
+    };
+    let new_manifest = if manifest_sha.is_empty() {
+        s.missing_blob += 1;
+        if opts.progress {
+            eprintln!(
+                "[{}/{}] {} [manifest] — missing manifest_sha256",
+                idx, total, label
+            );
+        }
+        None
+    } else {
+        pin_bundle_artifact(
+            &label,
+            "manifest",
+            &util::blob_path(root_path, &manifest_sha),
+            meta.manifest_ipfs_cid.as_deref(),
+            opts,
+            idx,
+            total,
+            &eta,
+            pinned_set,
+            &mut s,
+        )
+    };
+
+    if !opts.dry_run && (new_bundle.is_some() || new_manifest.is_some()) {
+        let mut updated = meta.clone();
+        if let Some(cid) = new_bundle {
+            updated.ipfs_cid = Some(cid);
+        }
+        if let Some(cid) = new_manifest {
+            updated.manifest_ipfs_cid = Some(cid);
+        }
+        match serde_json::to_vec_pretty(&updated) {
+            Ok(bytes) => {
+                if let Err(e) = util::atomic_write(meta_path, &bytes) {
+                    s.failed += 1;
+                    if opts.progress {
+                        eprintln!("[{}/{}] {} — write failed: {:#}", idx, total, label, e);
+                    }
+                }
+            }
+            Err(e) => {
+                s.failed += 1;
+                if opts.progress {
+                    eprintln!("[{}/{}] {} — serialize failed: {:#}", idx, total, label, e);
+                }
+            }
+        }
+    }
+    s
+}
+
+#[allow(clippy::too_many_arguments)]
 fn pin_one(
     root_path: &Path,
     meta_path: &Path,
@@ -173,17 +402,9 @@ fn pin_one(
     let label = format!("{}:{}", meta.name, ver_key);
     let eta = format_eta(idx, total, elapsed_ms);
     if meta.is_bundle() {
-        if opts.progress {
-            eprintln!(
-                "[{}/{}] {} — SKIP: bundle pin not implemented yet (manifest {})",
-                idx,
-                total,
-                label,
-                meta.manifest_sha256.as_deref().unwrap_or("-")
-            );
-        }
-        s.failed = 1;
-        return s;
+        return pin_bundle_one(
+            root_path, meta_path, meta, opts, idx, total, elapsed_ms, pinned_set,
+        );
     }
     let blob = util::blob_path(root_path, &meta.sif_sha256);
 

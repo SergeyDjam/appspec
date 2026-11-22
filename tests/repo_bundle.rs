@@ -415,6 +415,68 @@ fn run_bundle_package_dry_run_builds_launcher() {
     );
 }
 
+#[cfg(unix)]
+#[test]
+fn pin_bundle_pins_spec_and_manifest() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let (tmp, root) = make_repo();
+    let bundle = write_bundle(tmp.path(), "testbundle", "base:0.0.1-1", "git:0.0.1-1");
+    appspec()
+        .args([
+            "repo",
+            "add",
+            bundle.to_str().unwrap(),
+            "--version",
+            "1.0",
+            "--root",
+            root.to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+
+    let meta_path = root.join("packages/testbundle/1.0-1/meta.json");
+    let mut meta: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&meta_path).unwrap()).unwrap();
+    meta["ipfs_cid"] = serde_json::Value::Null;
+    meta["manifest_ipfs_cid"] = serde_json::Value::Null;
+    fs::write(&meta_path, serde_json::to_vec_pretty(&meta).unwrap()).unwrap();
+
+    let bin = tmp.path().join("bin");
+    fs::create_dir_all(&bin).unwrap();
+    let log = tmp.path().join("ipfs.log");
+    let script = format!(
+        "#!/bin/sh\nprintf '%s\\n' \"$*\" >> '{}'\ncase \"$1\" in\n  add) echo 'bafkreipinnedbundle' ;;\n  pin) exit 0 ;;\n  *) exit 0 ;;\nesac\n",
+        log.display()
+    );
+    let ipfs = bin.join("ipfs");
+    fs::write(&ipfs, script).unwrap();
+    fs::set_permissions(&ipfs, fs::Permissions::from_mode(0o755)).unwrap();
+
+    appspec()
+        .args(["repo", "pin", "--root", root.to_str().unwrap()])
+        .env(
+            "PATH",
+            format!(
+                "{}:{}",
+                bin.display(),
+                std::env::var("PATH").unwrap_or_default()
+            ),
+        )
+        .assert()
+        .success();
+
+    let meta: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&meta_path).unwrap()).unwrap();
+    assert_eq!(meta["ipfs_cid"], "bafkreipinnedbundle");
+    assert_eq!(meta["manifest_ipfs_cid"], "bafkreipinnedbundle");
+    let log_text = fs::read_to_string(&log).unwrap();
+    assert!(
+        log_text.lines().filter(|l| l.starts_with("add ")).count() >= 2,
+        "expected ipfs add calls for bundle + manifest:\n{log_text}"
+    );
+}
+
 #[test]
 fn add_bundle_requires_version() {
     let (_tmp, root) = make_repo();
