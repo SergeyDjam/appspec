@@ -112,12 +112,15 @@ appspec repo init [PATH] [--name NAME] [--description TEXT] [--token NAME]
 `repo add` идемпотентен по ключу `(name, version, release, epoch, arch)`.
 `--release-suffix N` даёт `release = "<original>.N"` (например `1.2`).
 
-Bundle-спек (`[bundle]`) определяется автоматически. Для него обязателен
-`--version`; `--release` по умолчанию `1`. Источники base/components должны
-быть repo-ref (`foo`, `foo:1.0`, `foo:1.0-1`) или `cid`; локальные
-`spec`/`sif`/`manifest` и локальные файлы расширений отклоняются. В пакет
-пишутся `spec.appspec`, `manifest.json` и `meta.json` с `kind = "bundle"`,
-`bundle_sha256`, `manifest_sha256` и `manifest_ipfs_cid`.
+Bundle-спек (`[bundle]`) определяется автоматически. Версия берётся из
+`[bundle] version` (или `--version`); `release` по умолчанию `1`.
+Источники base/components могут быть repo-ref (`foo`, `foo:1.0`,
+`foo:1.0-1`), `cid` или локальный `spec = "./foo.appspec"` — тогда пакет
+с тем же name/version должен уже быть в репозитории. Локальные
+`sif`/`manifest` не публикуются. Локальный файл расширения пинится в IPFS
+и сохраняется как `cid`. В пакет пишутся `spec.appspec`, `manifest.json` и
+`meta.json` с `kind = "bundle"`, `bundle_sha256`, `manifest_sha256` и
+`manifest_ipfs_cid`.
 
 ~~~sh
 appspec repo add vscodium-bundle.appspec --version 1.0
@@ -195,6 +198,10 @@ appspec repo export-oci --registry ghcr.io/user appspec-index
 
 - `<registry>/<target>:latest` — artifact manifest, `artifactType = application/vnd.appspec.index.v1+json`, blob — index.json
 - `<registry>/<name>:<ver>` — artifact manifest, `artifactType = application/vnd.appspec.sif.v1+json`, blob — SIF
+- bundle-версии — `application/vnd.appspec.bundle.v1+json`; один JSON-блоб
+  (`schema`, `kind`, `spec`, `manifest`), чтобы sha256 spec/manifest
+  оставались проверяемыми. `repo pull --from oci://...` восстанавливает
+  bundle и рекурсивно тянет зависимости.
 
 ## Спека: `[dependencies]` и `[build].base_digest`
 

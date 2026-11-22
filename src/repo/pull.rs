@@ -57,17 +57,6 @@ pub fn pull(local_root: &RepoRoot, name_ver: &str, opts: PullOpts) -> Result<()>
     bail!("repo pull requires --from URL|PATH|ipns://, --profile NAME, or --via ipfs")
 }
 
-fn ensure_sif_pull(name: &str, ver: &str, v: &IndexVersion) -> Result<()> {
-    if v.is_bundle() {
-        bail!(
-            "bundle pull is not supported yet: {}:{} (bundle-as-artifact pull is the next step)",
-            name,
-            ver
-        );
-    }
-    Ok(())
-}
-
 fn pull_one(
     local_root: &RepoRoot,
     name: &str,
@@ -859,6 +848,72 @@ fn pull_bundle_from_http(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
+fn pull_bundle_from_oci(
+    local_root: &RepoRoot,
+    name: &str,
+    ver: &str,
+    url: &str,
+    registry_base: &str,
+    index: &IndexV1,
+    v: &IndexVersion,
+    opts: &PullOpts,
+) -> Result<()> {
+    if opts.sif_out.is_some() {
+        bail!("`--sif` is not applicable to bundles");
+    }
+    let manifest_sha = v
+        .manifest_sha256
+        .as_deref()
+        .ok_or_else(|| anyhow!("bundle {}:{} has no manifest_sha256", name, ver))?;
+    let (spec, manifest_bytes) =
+        super::oci::fetch_bundle_from_oci(registry_base, name, ver, &v.spec_sha256, manifest_sha)?;
+
+    let meta = build_meta(name, v);
+    let (bundle_blob, manifest_blob) = if opts.spec_only {
+        (None, None)
+    } else {
+        (Some(spec.as_slice()), Some(manifest_bytes.as_slice()))
+    };
+    write_bundle_version(
+        local_root,
+        name,
+        ver,
+        &spec,
+        &manifest_bytes,
+        &meta,
+        bundle_blob,
+        manifest_blob,
+    )?;
+
+    if !opts.spec_only {
+        for (n, vv) in manifest_repo_refs(&manifest_bytes)? {
+            let local_meta = local_root
+                .packages_dir()
+                .join(&n)
+                .join(&vv)
+                .join("meta.json");
+            if local_meta.is_file() {
+                continue;
+            }
+            if index
+                .packages
+                .get(&n)
+                .and_then(|p| p.versions.get(&vv))
+                .is_none()
+            {
+                eprintln!("warning: bundle dependency {}:{} not in OCI index", n, vv);
+                continue;
+            }
+            pull_from_oci(local_root, &n, &vv, url, opts)?;
+        }
+    }
+
+    let _ = super::index_build::rebuild_all(local_root);
+    println!("pulled: {}:{} (bundle, oci {})", name, ver, url);
+    Ok(())
+}
+
 // ===========================================================================
 // OCI (E9)
 // ===========================================================================
@@ -894,7 +949,9 @@ fn pull_from_oci(
         .versions
         .get(ver)
         .ok_or_else(|| anyhow!("{}:{} not in OCI index", name, ver))?;
-    ensure_sif_pull(name, ver, v)?;
+    if v.is_bundle() {
+        return pull_bundle_from_oci(local_root, name, ver, url, &registry_base, &index, v, opts);
+    }
 
     let meta = build_meta(name, v);
 

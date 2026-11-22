@@ -478,6 +478,79 @@ fn pin_bundle_pins_spec_and_manifest() {
 }
 
 #[test]
+fn export_oci_dry_run_includes_bundle_artifact() {
+    let (tmp, root) = make_repo();
+    let bundle = write_bundle(tmp.path(), "testbundle", "base:0.0.1-1", "git:0.0.1-1");
+    appspec()
+        .args([
+            "repo",
+            "add",
+            bundle.to_str().unwrap(),
+            "--version",
+            "1.0",
+            "--root",
+            root.to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+
+    appspec()
+        .args([
+            "repo",
+            "export-oci",
+            "appspec-index",
+            "--registry",
+            "ghcr.io/test",
+            "--dry-run",
+            "--root",
+            root.to_str().unwrap(),
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "application/vnd.appspec.bundle.v1+json",
+        ))
+        .stdout(predicate::str::contains("org.appspec.kind=bundle"));
+}
+
+#[test]
+fn bundle_version_from_toml_is_used() {
+    let (tmp, root) = make_repo();
+    let p = tmp.path().join("bundle.appspec");
+    fs::write(
+        &p,
+        r#"[bundle]
+name        = "testbundle"
+version     = "0.1.0"
+description = "version in TOML"
+
+[bundle.base]
+spec  = "base:0.0.1-1"
+entry = "exec /bin/sh"
+
+[[components]]
+name    = "git"
+spec    = "git:0.0.1-1"
+provide = "git"
+"#,
+    )
+    .unwrap();
+
+    appspec()
+        .args([
+            "repo",
+            "add",
+            p.to_str().unwrap(),
+            "--root",
+            root.to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+
+    assert!(root.join("packages/testbundle/0.1.0-1/meta.json").is_file());
+}
+
+#[test]
 fn add_bundle_requires_version() {
     let (_tmp, root) = make_repo();
     let bundle = write_bundle(_tmp.path(), "testbundle", "base:0.0.1-1", "git:0.0.1-1");
@@ -491,13 +564,25 @@ fn add_bundle_requires_version() {
         ])
         .assert()
         .failure()
-        .stderr(predicate::str::contains("--version` is required"));
+        .stderr(predicate::str::contains("version is required"));
+}
+
+fn write_local_appspec(dir: &Path, name: &str, version: &str) {
+    fs::write(
+        dir.join(format!("{name}.appspec")),
+        format!(
+            "[package]\nname = \"{name}\"\nversion = \"{version}\"\n\n[build]\nbase = \"alpine:3.21\"\ntemplate = \"alpine\"\n\n[runtime]\n"
+        ),
+    )
+    .unwrap();
 }
 
 #[test]
-fn add_bundle_rejects_local_sources() {
-    let (_tmp, root) = make_repo();
-    let bundle = write_bundle(_tmp.path(), "testbundle", "./base.appspec", "git:0.0.1-1");
+fn add_bundle_maps_local_specs_to_repo_packages() {
+    let (tmp, root) = make_repo();
+    write_local_appspec(tmp.path(), "base", "0.0.1");
+    write_local_appspec(tmp.path(), "git", "0.0.1");
+    let bundle = write_bundle(tmp.path(), "testbundle", "./base.appspec", "./git.appspec");
     appspec()
         .args([
             "repo",
@@ -509,10 +594,25 @@ fn add_bundle_rejects_local_sources() {
             root.to_str().unwrap(),
         ])
         .assert()
-        .failure()
-        .stderr(predicate::str::contains("local path"));
+        .success()
+        .stdout(predicate::str::contains("(bundle"));
 
-    let bundle = write_bundle(_tmp.path(), "testbundle2", "base:0.0.1-1", "./git.appspec");
+    let manifest: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(root.join("packages/testbundle/1.0-1/manifest.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(manifest["base"]["resolved"], "repo:base:0.0.1-1");
+    assert_eq!(
+        manifest["components"][0]["source"]["resolved"],
+        "repo:git:0.0.1-1"
+    );
+}
+
+#[test]
+fn add_bundle_rejects_local_spec_not_in_repo() {
+    let (tmp, root) = make_repo();
+    write_local_appspec(tmp.path(), "missing", "1.0");
+    let bundle = write_bundle(tmp.path(), "testbundle", "./missing.appspec", "git:0.0.1-1");
     appspec()
         .args([
             "repo",
@@ -525,5 +625,5 @@ fn add_bundle_rejects_local_sources() {
         ])
         .assert()
         .failure()
-        .stderr(predicate::str::contains("local path"));
+        .stderr(predicate::str::contains("not in the repo"));
 }
