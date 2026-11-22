@@ -869,6 +869,126 @@ fn resolve_run_sources(from: Option<&str>, profile: Option<&str>) -> Result<Vec<
     Ok(Vec::new())
 }
 
+fn pin_bundle_source(
+    table: &mut toml::value::Table,
+    source: &crate::bundle::manifest::ManifestSource,
+) -> Result<()> {
+    for key in ["spec", "sif", "cid", "manifest", "repo"] {
+        table.remove(key);
+    }
+    if let Some(r) = source.resolved.strip_prefix("repo:") {
+        table.insert("spec".into(), toml::Value::String(r.to_string()));
+    } else if let Some(c) = source.resolved.strip_prefix("cid:") {
+        table.insert("cid".into(), toml::Value::String(c.to_string()));
+    } else {
+        bail!(
+            "bundle manifest source `{}` is not portable",
+            source.resolved
+        );
+    }
+    Ok(())
+}
+
+/// Run a bundle package from a repository: pull if needed, replace refs with
+/// the manifest's canonical `name:version-release`, build and launch.
+#[allow(clippy::too_many_arguments)]
+fn cmd_run_bundle_package(
+    local_root: &crate::repo::layout::RepoRoot,
+    name: &str,
+    ver_key: &str,
+    _v: &crate::repo::meta::IndexVersion,
+    origin: &str,
+    trusted_keys: &[PathBuf],
+    allow_unsigned: bool,
+    dry_run: bool,
+) -> Result<()> {
+    let pkg_dir = local_root.packages_dir().join(name).join(ver_key);
+    if !pkg_dir.join("manifest.json").is_file() || !pkg_dir.join("spec.appspec").is_file() {
+        log(format!("pull bundle {}:{} from {}", name, ver_key, origin));
+        let opts = crate::repo::pull::PullOpts {
+            sources: vec![origin.to_string()],
+            via: None,
+            spec_only: false,
+            sif_out: None,
+            trusted_key: trusted_keys.first().cloned(),
+            allow_unsigned,
+        };
+        crate::repo::pull::pull(local_root, &format!("{}:{}", name, ver_key), opts)?;
+    }
+
+    let spec_text = fs::read_to_string(pkg_dir.join("spec.appspec"))?;
+    let manifest_text = fs::read_to_string(pkg_dir.join("manifest.json"))?;
+    let manifest: crate::bundle::manifest::BundleManifestV1 =
+        serde_json::from_str(&manifest_text).context("parsing bundle manifest.json")?;
+    let mut value: toml::Value =
+        toml::from_str(&spec_text).context("parsing published bundle spec")?;
+
+    if let Some(base) = value
+        .get_mut("bundle")
+        .and_then(|b| b.get_mut("base"))
+        .and_then(|b| b.as_table_mut())
+    {
+        pin_bundle_source(base, &manifest.base)?;
+    }
+    if let Some(components) = value.get_mut("components").and_then(|c| c.as_array_mut()) {
+        for c in components {
+            let Some(table) = c.as_table_mut() else {
+                continue;
+            };
+            let cname = table
+                .get("name")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            if let Some(mc) = manifest.components.iter().find(|x| x.name == cname) {
+                pin_bundle_source(table, &mc.source)?;
+            }
+        }
+    }
+
+    let safe = format!("{}.{}", name, ver_key).replace('/', "_");
+    let run_dir = run_cache_dir().join(format!("bundle.{}", safe));
+    fs::create_dir_all(&run_dir)?;
+    let spec_path = run_dir.join("bundle.appspec");
+    fs::write(&spec_path, toml::to_string_pretty(&value)?)?;
+    log(format!("bundle spec: {}", spec_path.display()));
+
+    let args = bundle::commands::BuildArgs {
+        spec: spec_path.display().to_string(),
+        output: None,
+        no_build: false,
+        no_lock: true,
+        locked: false,
+        repo: Some(local_root.path.clone()),
+        trusted_keys: trusted_keys.to_vec(),
+        allow_unsigned,
+    };
+    let code = bundle::commands::build(args)?;
+    if code != 0 {
+        bail!("bundle build завершился с кодом {code}");
+    }
+
+    let bname = bundle_name(&spec_path)?;
+    stop_bundle_base_instances(&bname);
+    let launcher = run_dir.join(format!("run.{}.sh", bname));
+    if !launcher.is_file() {
+        bail!("launcher не найден после сборки: {}", launcher.display());
+    }
+    if dry_run {
+        log("dry-run: not executing");
+        return Ok(());
+    }
+    log(format!("Running {}", launcher.display()));
+    let status = Command::new("/bin/sh")
+        .arg(&launcher)
+        .status()
+        .context("failed to spawn bundle launcher")?;
+    if !status.success() {
+        bail!("bundle launcher вернул ошибку");
+    }
+    Ok(())
+}
+
 fn cmd_run_package(
     target: &str,
     from: Option<&str>,
@@ -921,6 +1041,18 @@ fn cmd_run_package(
             local_root.path.display()
         )
     })?;
+    if ver.is_bundle() {
+        return cmd_run_bundle_package(
+            &local_root,
+            &name,
+            &ver_key,
+            &ver,
+            &origin,
+            trusted_keys,
+            allow_unsigned,
+            dry_run,
+        );
+    }
     log(format!(
         "resolved: {}:{} (sha256={}, ipfs_cid={})",
         name,

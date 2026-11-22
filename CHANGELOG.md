@@ -5,7 +5,38 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.6.2] - 2026-11-22
+## [0.6.3] - 2026-11-22
+
+### Added
+
+- **`repo pull` supports bundle packages** (`kind = "bundle"`) from:
+  - local path — copies `spec.appspec`, `manifest.json`, bundle/manifest
+    blobs and recursively pulls base/components by canonical repo refs;
+  - HTTP — same, fetching `/packages/...` and `/blobs/sha256/...`;
+  - IPFS/IPNS — fetches spec and manifest by `ipfs_cid` /
+    `manifest_ipfs_cid` and recursively pulls dependencies.
+- **`appspec run <bundle-name>`**:
+  - resolves the bundle from the local/remote index and pulls it if needed;
+  - rewrites base/component sources using the manifest's canonical
+    `name:version-release` refs;
+  - builds the launcher with the local repo (`bundle build --no-lock`) and
+    runs it; `--dry-run` stops after building the launcher.
+- Bundle pull also works with `--spec-only` (spec + manifest, no blobs/deps).
+
+### Fixed
+
+- **`repo add <bundle>` idempotency:** `manifest.json` is deterministic
+  (no `built_at`/`generator`). Previously the timestamp changed the manifest
+  hash, so a second add in a different second failed with a false
+  "different sha256" conflict. Provenance remains in `meta.json`/`index.json`.
+
+### Notes
+
+- `repo pin` for bundles (bundle + manifest blobs) and OCI export of
+  bundles are still not implemented; `pin` reports bundle entries as
+  skipped and `oci export`/`pull` give explicit errors.
+
+## [0.6.2] - 2026-11-21
 
 ### Added
 

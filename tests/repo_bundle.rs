@@ -9,6 +9,7 @@ use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 use tempfile::TempDir;
 
 fn appspec() -> Command {
@@ -141,9 +142,6 @@ entry = "exec /bin/sh"
 name    = "git"
 spec    = "{git}"
 provide = "git"
-
-[[extensions]]
-name = "publisher.ext"
 "#
         ),
     )
@@ -222,7 +220,7 @@ fn add_bundle_is_idempotent_and_check_passes() {
     let (_tmp, root) = make_repo();
     let bundle = write_bundle(_tmp.path(), "testbundle", "base:0.0.1-1", "git:0.0.1-1");
 
-    for _ in 0..2 {
+    for i in 0..2 {
         appspec()
             .args([
                 "repo",
@@ -235,6 +233,11 @@ fn add_bundle_is_idempotent_and_check_passes() {
             ])
             .assert()
             .success();
+        if i == 0 {
+            // Regression: manifest must not include timestamps, otherwise
+            // a second add in a different second looks like a conflict.
+            std::thread::sleep(Duration::from_millis(1100));
+        }
     }
     let out = appspec()
         .args([
@@ -317,6 +320,99 @@ fn add_bundle_alias_and_gc_keep_blobs() {
         let blob = root.join("blobs/sha256").join(&sha[..2]).join(&sha[2..]);
         assert!(blob.is_file(), "gc removed bundle blob {}", blob.display());
     }
+}
+
+#[test]
+fn pull_bundle_from_path_recurses_into_components() {
+    let (tmp, src) = make_repo();
+    let bundle = write_bundle(tmp.path(), "testbundle", "base:0.0.1-1", "git:0.0.1-1");
+    appspec()
+        .args([
+            "repo",
+            "add",
+            bundle.to_str().unwrap(),
+            "--version",
+            "1.0",
+            "--root",
+            src.to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+
+    let dst = tmp.path().join("dst");
+    appspec()
+        .args(["repo", "init", dst.to_str().unwrap()])
+        .assert()
+        .success();
+
+    appspec()
+        .args([
+            "repo",
+            "pull",
+            "testbundle:1.0-1",
+            "--from",
+            src.to_str().unwrap(),
+            "--root",
+            dst.to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+
+    for rel in [
+        "testbundle/1.0-1/manifest.json",
+        "testbundle/1.0-1/spec.appspec",
+        "testbundle/1.0-1/meta.json",
+        "base/0.0.1-1/meta.json",
+        "git/0.0.1-1/meta.json",
+    ] {
+        assert!(dst.join("packages").join(rel).is_file(), "missing {rel}");
+    }
+
+    appspec()
+        .args(["repo", "check", "--root", dst.to_str().unwrap()])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("check: ok"));
+}
+
+#[test]
+fn run_bundle_package_dry_run_builds_launcher() {
+    let (tmp, root) = make_repo();
+    let bundle = write_bundle(tmp.path(), "testbundle", "base:0.0.1-1", "git:0.0.1-1");
+    appspec()
+        .args([
+            "repo",
+            "add",
+            bundle.to_str().unwrap(),
+            "--version",
+            "1.0",
+            "--root",
+            root.to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+
+    let cache = tmp.path().join("cache");
+    appspec()
+        .args([
+            "run",
+            "testbundle:1.0-1",
+            "--root",
+            root.to_str().unwrap(),
+            "--allow-unsigned",
+            "--dry-run",
+        ])
+        .env("XDG_CACHE_HOME", &cache)
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("dry-run: not executing"));
+
+    let launcher = cache.join("appspec/run/bundle.testbundle.1.0-1/run.testbundle.sh");
+    assert!(
+        launcher.is_file(),
+        "launcher missing: {}",
+        launcher.display()
+    );
 }
 
 #[test]

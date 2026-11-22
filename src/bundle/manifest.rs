@@ -26,8 +26,9 @@ pub struct BundleManifestV1 {
     pub components: Vec<ManifestComponent>,
     #[serde(default)]
     pub extensions: Vec<ManifestExtension>,
-    pub built_at: String,
-    pub generator: String,
+    // No timestamps/generator here: the manifest must be deterministic so
+    // `repo add` is idempotent for the same bundle + index. Provenance lives
+    // in meta.json / index.json (`built_at`, `generator`).
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -106,8 +107,6 @@ mod tests {
                 url: None,
                 requires: vec![],
             }],
-            built_at: "2026-11-21T00:00:00Z".into(),
-            generator: "appspec test".into(),
         };
         let json = serde_json::to_string_pretty(&m).unwrap();
         assert!(json.contains("\"schema\": 1"), "{json}");
