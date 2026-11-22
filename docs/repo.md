@@ -100,7 +100,7 @@ appspec repo init [PATH] [--name NAME] [--description TEXT] [--token NAME]
 
 | Команда | Что делает |
 |---|---|
-| `repo add <SIF\|bundle.appspec>… [--arch A] [--force] [--release-suffix N] [--pin-ipfs]` | Добавить SIF или bundle |
+| `repo add <SIF\|app.appspec\|bundle.appspec>… [--arch A] [--force] [--release-suffix N] [--pin-ipfs] [--no-build]` | Добавить SIF, app spec или bundle |
 | `repo add-bundle <bundle.appspec> --version V [--release R] [--epoch N]` | Явный alias для bundle |
 | `repo ls [PKG] [--json]` | Список пакетов / версий |
 | `repo show PKG:VER [--json] [--spec] [--sif PATH]` | Метаданные / спек / копия SIF |
@@ -111,6 +111,16 @@ appspec repo init [PATH] [--name NAME] [--description TEXT] [--token NAME]
 
 `repo add` идемпотентен по ключу `(name, version, release, epoch, arch)`.
 `--release-suffix N` даёт `release = "<original>.N"` (например `1.2`).
+
+`repo add app.appspec` читает app-спек, находит его SIF (`[runtime].sif_file`
+или `<name>.sif`), при необходимости пересобирает (`appspec build --force`)
+и добавляет SIF как обычно. `--no-build` запрещает сборку: отсутствующий SIF
+даёт ошибку, устаревший используется с warning.
+
+~~~sh
+appspec repo add vscodium.appspec
+appspec repo add vscodium.appspec --no-build --force
+~~~
 
 Bundle-спек (`[bundle]`) определяется автоматически. Версия берётся из
 `[bundle] version` (или `--version`); `release` по умолчанию `1`.

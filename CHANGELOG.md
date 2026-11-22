@@ -5,6 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.6] - 2026-11-23
+
+### Added
+
+- **`appspec repo add package.appspec`** now accepts an app spec:
+  1. reads the spec and resolves its SIF (`[runtime].sif_file` or
+     `<name>.sif`);
+  2. rebuilds it if missing or older than the spec;
+  3. adds the resulting SIF exactly like `repo add package.sif`.
+  `--no-build` disables rebuilding (missing SIF is an error, stale SIF is
+  used with a warning). `--arch`, `--release-suffix`, `--force`,
+  `--pin-ipfs` apply to the resulting SIF.
+- Mixed arguments work: SIFs, `.appspec` app specs and `[bundle]` specs
+  can be passed to one `repo add` (add specs first, then bundles).
+- `repo add` classifies inputs by TOML: `[package]` → app spec,
+  `[bundle]` → bundle, both → error.
+
 ## [0.6.5] - 2026-11-22
 
 ### Added
