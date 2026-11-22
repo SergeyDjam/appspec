@@ -311,15 +311,29 @@ appspec repo add vscodium-bundle.appspec --version 1.0
 appspec repo add-bundle vscodium-bundle.appspec --version 1.0 --release 2
 ```
 
-`repo add` распознаёт `[bundle]` автоматически. Для публикации источники
-base/components должны быть repo-ref (`foo`, `foo:1.0`, `foo:1.0-1`) или
-`cid`; локальные `spec`/`sif`/`manifest` и локальные файлы расширений
-отклоняются. В пакет пишутся `spec.appspec`, `manifest.json` (резолвнутые
-refs + хеши) и `meta.json` с `kind = "bundle"`.
+`repo add` распознаёт `[bundle]` автоматически. Версия берётся из
+`[bundle] version` (плюс необязательные `release`/`epoch`) или из
+`--version`/`--release`/`--epoch` (CLI важнее). В пакет пишутся
+`spec.appspec`, `manifest.json` (резолвнутые refs + хеши) и `meta.json`
+с `kind = "bundle"`.
+
+Источники base/components:
+
+- repo-ref (`foo`, `foo:1.0`, `foo:1.0-1`) или `cid` — как есть;
+- локальный `spec = "./foo.appspec"` — ищется пакет с тем же
+  `name`/`version` в репозитории; если его нет, добавьте SIF заранее
+  (`appspec repo add foo.sif`). В манифест попадёт канонический
+  `foo:<version>-<release>`;
+- `sif`/`manifest` — по-прежнему не публикуются (это локальные пути).
+
+Локальный файл расширения (`[[extensions]].file`) при публикации пинится
+в IPFS (`ipfs add --pin`) и сохраняется в манифесте как `cid`. Без `ipfs`
+используйте `cid` или `url`.
 
 С 0.6.3 работают `repo pull` bundle (path/HTTP/IPFS/IPNS, с рекурсивным
 pull зависимостей) и `appspec run <bundle-name>`: манифест подставляет
 канонические `name:version-release`, launcher собирается локально.
 С 0.6.4 `repo pin` для bundle пинит оба блоба (bundle spec + manifest) и
-обновляет `ipfs_cid`/`manifest_ipfs_cid`; OCI-экспорт bundle пока не
-реализован. `repo ls|show|check|gc` понимают `kind = "bundle"`.
+обновляет `ipfs_cid`/`manifest_ipfs_cid`. С 0.6.5 `repo export-oci` и
+`repo pull --from oci://` поддерживают bundle (агрегированный JSON:
+spec + manifest); `repo ls|show|check|gc` понимают `kind = "bundle"`.

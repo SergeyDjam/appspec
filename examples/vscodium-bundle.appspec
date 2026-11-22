@@ -18,6 +18,7 @@
 [bundle]
 name        = "vscodium-dev"
 description = "VSCodium + git + offline/online extensions"
+version     = "0.1.0"
 strict      = false
 base        = { spec = "./vscodium.appspec" }
 

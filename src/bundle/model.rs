@@ -113,6 +113,14 @@ pub struct BundleMeta {
     pub name: String,
     #[serde(default)]
     pub description: String,
+    /// Optional version/release/epoch for `repo add` (0.6.5).
+    /// CLI `--version` / `--release` / `--epoch` override these.
+    #[serde(default)]
+    pub version: Option<String>,
+    #[serde(default)]
+    pub release: Option<String>,
+    #[serde(default)]
+    pub epoch: Option<u32>,
     #[serde(default)]
     pub strict: bool,
     pub base: BaseSection,

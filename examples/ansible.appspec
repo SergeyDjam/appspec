@@ -9,6 +9,8 @@
 [package]
 name        = "ansible"
 version     = "2.21.0"
+release     = "1"
+epoch       = 0
 description = "ansible-core + OpenSSH client (containerized provisioning)"
 
 [build]
@@ -29,6 +31,8 @@ extra = [
     "bash",
     "coreutils",
     "ca-certificates",
+    "curl",
+    "wget",
 ]
 
 [build.collect]

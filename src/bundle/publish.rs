@@ -55,10 +55,53 @@ fn read_index(root: &RepoRoot) -> Result<IndexV1> {
     serde_json::from_str(&text).with_context(|| "parsing repo index.json".to_string())
 }
 
+fn manifest_from_local_spec(
+    scope: &str,
+    orig: &str,
+    spec_path: &Path,
+    root: &RepoRoot,
+) -> Result<ManifestSource> {
+    let spec = crate::load_spec(spec_path)
+        .with_context(|| format!("{scope}: parsing {}", spec_path.display()))?;
+    let pkg = normalize_name(&spec.package.name);
+    let ver_spec = match &spec.package.release {
+        Some(r) => format!("{}-{}", spec.package.version, r),
+        None => spec.package.version.clone(),
+    };
+    let index = read_index(root)?;
+    let (ver_key, v) = crate::repo::run_package::pick_version(&index, &pkg, Some(&ver_spec))
+        .map_err(|_| {
+            anyhow!(
+                "{scope}: local `{orig}` is {pkg}:{ver_spec}, which is not in the repo; \
+                 first publish its SIF with `appspec repo add <{pkg}.sif>`"
+            )
+        })?;
+    let canonical = format!("{pkg}:{ver_key}");
+    let blob = blob_path(&root.path, &v.sif_sha256);
+    if !blob.is_file() {
+        bail!(
+            "{scope}: repo blob missing: {} (run `appspec repo pull {canonical}` first)",
+            blob.display()
+        );
+    }
+    Ok(ManifestSource {
+        spec: orig.to_string(),
+        resolved: format!("repo:{canonical}"),
+        sif_sha256: Some(v.sif_sha256.clone()),
+        spec_sha256: Some(v.spec_sha256.clone()),
+        ipfs_cid: v.ipfs_cid.clone(),
+    })
+}
+
 /// Convert a bundle source to a portable manifest source.
-/// Local `spec`/`sif`/`manifest` paths are rejected: a published bundle must
-/// use repo refs or IPFS CIDs.
-fn manifest_source(scope: &str, src: &SourceSpec, root: &RepoRoot) -> Result<ManifestSource> {
+/// Local `spec` paths are mapped to the matching repo package (same package
+/// name/version); `sif`/`manifest` remain rejected.
+fn manifest_source(
+    scope: &str,
+    src: &SourceSpec,
+    root: &RepoRoot,
+    base_dir: &Path,
+) -> Result<ManifestSource> {
     if let Some(s) = &src.spec {
         return match classify_spec_source(s) {
             SpecSource::RepoRef(_) => {
@@ -83,13 +126,23 @@ fn manifest_source(scope: &str, src: &SourceSpec, root: &RepoRoot) -> Result<Man
                     ipfs_cid: v.ipfs_cid.clone(),
                 })
             }
-            SpecSource::Ambiguous(_) => bail!(
-                "{scope}: `{s}` is ambiguous; use an explicit repo ref (`name[:ver]`) \
-                 or a local path with `./`"
-            ),
-            SpecSource::LocalPath(_) => bail!(
-                "{scope}: local path `{s}` is not publishable; use `name[:ver]` repo ref or `cid`"
-            ),
+            SpecSource::LocalPath(_) => {
+                let sp = super::loader::resolve_relative(s, base_dir);
+                if !sp.is_file() {
+                    bail!("{scope}: local spec not found: {}", sp.display());
+                }
+                manifest_from_local_spec(scope, s, &sp, root)
+            }
+            SpecSource::Ambiguous(_) => {
+                let sp = super::loader::resolve_relative(s, base_dir);
+                if sp.is_file() {
+                    manifest_from_local_spec(scope, s, &sp, root)
+                } else {
+                    bail!(
+                        "{scope}: `{s}` not found locally; use an explicit repo ref (`name[:ver]`)"
+                    )
+                }
+            }
         };
     }
     if let Some(cid) = &src.cid {
@@ -110,12 +163,30 @@ fn manifest_source(scope: &str, src: &SourceSpec, root: &RepoRoot) -> Result<Man
     bail!("{scope}: missing source")
 }
 
-fn manifest_extension(e: &Extension) -> Result<ManifestExtension> {
-    if e.file.is_some() {
-        bail!(
-            "extension `{}`: local file is not publishable; use `cid` or `url`",
-            e.name
-        );
+fn manifest_extension(e: &Extension, base_dir: &Path) -> Result<ManifestExtension> {
+    if let Some(file) = &e.file {
+        let path = super::loader::resolve_relative(file, base_dir);
+        if !path.is_file() {
+            bail!("extension `{}`: file not found: {}", e.name, path.display());
+        }
+        if !crate::repo::ipfs::which_ipfs() {
+            bail!(
+                "extension `{}`: local file `{}` requires `ipfs` to publish as CID; \
+                 install ipfs or replace `file` with `cid`/`url`",
+                e.name,
+                path.display()
+            );
+        }
+        let cid = crate::repo::ipfs::add_file(&path, true)
+            .with_context(|| format!("pinning extension `{}` ({})", e.name, path.display()))?;
+        eprintln!("pinned extension `{}` → {}", e.name, cid);
+        return Ok(ManifestExtension {
+            name: e.name.clone(),
+            source: Some(format!("cid:{cid}")),
+            cid: Some(cid),
+            url: None,
+            requires: e.requires.clone(),
+        });
     }
     let (source, cid, url) = if let Some(c) = &e.cid {
         (Some(format!("cid:{c}")), Some(c.clone()), None)
@@ -158,10 +229,20 @@ pub fn add_bundle(root: &RepoRoot, path: &Path, opts: &AddOpts) -> Result<AddOut
     let file: BundleFile = load_bundle(path)?;
     let version = opts
         .version
+        .or(file.bundle.version.as_deref())
         .filter(|s| !s.is_empty())
-        .ok_or_else(|| anyhow!("`--version` is required for `repo add <bundle.appspec>`"))?;
-    let release = opts.release.filter(|s| !s.is_empty()).unwrap_or("1");
-    let epoch = opts.epoch.unwrap_or(0);
+        .ok_or_else(|| {
+            anyhow!(
+                "bundle version is required: set `[bundle] version = \"...\"` \
+                 or pass `--version`"
+            )
+        })?;
+    let release = opts
+        .release
+        .or(file.bundle.release.as_deref())
+        .filter(|s| !s.is_empty())
+        .unwrap_or("1");
+    let epoch = opts.epoch.or(file.bundle.epoch).unwrap_or(0);
     if version.contains('/') || release.contains('/') {
         bail!("version/release must not contain `/`");
     }
@@ -170,20 +251,29 @@ pub fn add_bundle(root: &RepoRoot, path: &Path, opts: &AddOpts) -> Result<AddOut
     if name.is_empty() {
         bail!("[bundle].name is empty after normalization");
     }
+    let base_dir = path
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
 
-    let base = manifest_source("base", &file.bundle.base.source, root)?;
+    let base = manifest_source("base", &file.bundle.base.source, root, base_dir)?;
     let mut components = Vec::with_capacity(file.components.len());
     for c in &file.components {
         components.push(ManifestComponent {
             name: c.name.clone(),
             provide: c.provide(),
             mode: component_mode(c).to_string(),
-            source: manifest_source(&format!("component `{}`", c.name), &c.source, root)?,
+            source: manifest_source(
+                &format!("component `{}`", c.name),
+                &c.source,
+                root,
+                base_dir,
+            )?,
         });
     }
     let mut extensions = Vec::with_capacity(file.extensions.len());
     for e in &file.extensions {
-        extensions.push(manifest_extension(e)?);
+        extensions.push(manifest_extension(e, base_dir)?);
     }
 
     let bundle_sha256 = sha256_hex(&raw);

@@ -5,6 +5,37 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.5] - 2026-11-22
+
+### Added
+
+- **OCI export/import for bundle packages:**
+  - `repo export-oci` pushes `kind = "bundle"` as an artifact with type
+    `application/vnd.appspec.bundle.v1+json`; the blob is an
+    `OciBundlePayload` containing the original `spec.appspec` and raw
+    `manifest.json`, so their sha256 values stay verifiable;
+    annotations include `org.appspec.kind=bundle`, `bundle_sha256`,
+    `manifest_sha256`, `arch`, `epoch`.
+  - `repo pull --from oci://...` restores bundle spec + manifest, writes
+    blobs/meta and recursively pulls base/components through the same OCI
+    index. `--spec-only` works for OCI bundles.
+- `export-oci --dry-run` prints the bundle push command.
+- **Bundle version from TOML:** `repo add` uses `[bundle] version`
+  (and optional `release`/`epoch`) when `--version`/`--release`/`--epoch`
+  are not passed.
+- **Local bundle specs are publishable:** `spec = "./vscodium.appspec"`
+  is resolved to the matching repo package by package name + version
+  (`vscodium:0.1.0` → canonical `vscodium:0.1.0-N`). If the package is not
+  in the repo, the error names it and suggests `appspec repo add`.
+- **Local extension files are published as CIDs:** `[[extensions]].file`
+  is pinned with `ipfs add --pin` and stored in the manifest as `cid`.
+  Without `ipfs`, the error suggests using `cid`/`url`.
+
+### Notes
+
+- Aggregate OCI payload is a single JSON blob (not a multi-layer
+  artifact), matching the existing single-blob pull implementation.
+
 ## [0.6.4] - 2026-11-22
 
 ### Added
@@ -156,6 +187,10 @@ running bundles are the next steps (B/C).
   отдельным атомарным sandbox'ом.
 
 ### Fixed
+
+- **`vscodium.appspec`: `wget` и `curl` добавлены в `[build.apt].extra`.**
+  В `template = "full"` список `tools` не гарантирует наличие этих
+  утилит в rootfs, из-за чего в base-instance не было `wget`/`curl`.
 
 - **Bridge для `bins`/`binary` ищет `/usr/bin/NAME` и `/bin/NAME`.** Alpine
   кладёт `bash` в `/bin/bash`, а спецификация `bins = ["bash"]` по
