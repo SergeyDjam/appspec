@@ -320,5 +320,6 @@ refs + хеши) и `meta.json` с `kind = "bundle"`.
 С 0.6.3 работают `repo pull` bundle (path/HTTP/IPFS/IPNS, с рекурсивным
 pull зависимостей) и `appspec run <bundle-name>`: манифест подставляет
 канонические `name:version-release`, launcher собирается локально.
-`repo pin` bundle (bundle + manifest блобы) и OCI-экспорт bundle пока не
-реализованы; `repo ls|show|check|gc` понимают `kind = "bundle"`.
+С 0.6.4 `repo pin` для bundle пинит оба блоба (bundle spec + manifest) и
+обновляет `ipfs_cid`/`manifest_ipfs_cid`; OCI-экспорт bundle пока не
+реализован. `repo ls|show|check|gc` понимают `kind = "bundle"`.

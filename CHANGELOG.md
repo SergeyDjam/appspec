@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.4] - 2026-11-22
+
+### Added
+
+- **`repo pin` supports bundle packages:** both the bundle spec blob
+  (`bundle_sha256`) and the resolved `manifest.json` blob
+  (`manifest_sha256`) are added/pinned to IPFS. The command updates
+  `meta.ipfs_cid` and `meta.manifest_ipfs_cid` and reindexes as usual.
+  `--dry-run`, `--dht`, batch `pin ls` and timeout handling apply.
+
+### Notes
+
+- OCI export/pull of bundles is still not implemented (export skips
+  bundles with a warning, pull gives an explicit error).
+
 ## [0.6.3] - 2026-11-22
 
 ### Added
