@@ -38,17 +38,6 @@ pub struct AddOutcome {
     pub already_present: bool,
 }
 
-/// True if the file is a bundle spec (contains `[bundle]`).
-pub fn is_bundle_spec(path: &Path) -> bool {
-    let Ok(text) = std::fs::read_to_string(path) else {
-        return false;
-    };
-    let Ok(v) = toml::from_str::<toml::Value>(&text) else {
-        return false;
-    };
-    v.get("bundle").is_some()
-}
-
 fn read_index(root: &RepoRoot) -> Result<IndexV1> {
     let text = std::fs::read_to_string(root.index_path())
         .with_context(|| format!("reading {}", root.index_path().display()))?;

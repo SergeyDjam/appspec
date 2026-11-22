@@ -469,6 +469,9 @@ pub struct AddArgs {
     pub release_suffix: Option<String>,
     #[arg(long)]
     pub pin_ipfs: bool,
+    /// Do not build a missing/stale SIF when adding a `.appspec`.
+    #[arg(long)]
+    pub no_build: bool,
     /// Bundle version (required when adding a `[bundle]` spec).
     #[arg(long)]
     pub version: Option<String>,

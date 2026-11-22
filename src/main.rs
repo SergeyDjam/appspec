@@ -709,18 +709,75 @@ fn is_package_name(s: &str) -> bool {
 
 /// `repo add` accepts SIFs and bundle specs. Bundle publishing lives in
 /// `bundle::publish` (repo integration tests compile `src/repo` standalone).
+enum AddKind {
+    Sif,
+    AppSpec,
+    Bundle,
+}
+
+fn classify_add(path: &Path) -> Result<AddKind> {
+    let Ok(text) = fs::read_to_string(path) else {
+        return Ok(AddKind::Sif);
+    };
+    let Ok(v) = toml::from_str::<toml::Value>(&text) else {
+        return Ok(AddKind::Sif);
+    };
+    match (v.get("bundle").is_some(), v.get("package").is_some()) {
+        (true, true) => bail!(
+            "{}: contains both [bundle] and [package] — cannot classify",
+            path.display()
+        ),
+        (true, false) => Ok(AddKind::Bundle),
+        (false, true) => Ok(AddKind::AppSpec),
+        (false, false) => Ok(AddKind::Sif),
+    }
+}
+
+/// `.appspec` → SIF (build if missing/stale, unless `--no-build`).
+fn resolve_app_spec_sif(path: &Path, allow_build: bool) -> Result<PathBuf> {
+    let file_name = path
+        .file_name()
+        .ok_or_else(|| anyhow!("invalid spec path: {}", path.display()))?
+        .to_string_lossy()
+        .to_string();
+    let base_dir = path
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    let src = bundle::model::SourceSpec {
+        spec: Some(file_name),
+        ..Default::default()
+    };
+    let cache = run_cache_dir();
+    let resolved = bundle::loader::resolve_source(
+        &src,
+        &cache,
+        base_dir,
+        allow_build,
+        &format!("repo add {}", path.display()),
+        None,
+        &[],
+        false,
+    )?;
+    Ok(resolved.sif)
+}
+
 fn cmd_repo_add(mut a: repo::commands::AddArgs) -> Result<i32> {
     let mut sif = Vec::new();
+    let mut specs = Vec::new();
     let mut bundles = Vec::new();
     for p in a.sif.drain(..) {
-        if bundle::publish::is_bundle_spec(&p) {
-            bundles.push(p);
-        } else {
-            sif.push(p);
+        match classify_add(&p)? {
+            AddKind::Sif => sif.push(p),
+            AddKind::AppSpec => specs.push(p),
+            AddKind::Bundle => bundles.push(p),
         }
     }
+    for spec in specs {
+        sif.push(resolve_app_spec_sif(&spec, !a.no_build)?);
+    }
     if sif.is_empty() && bundles.is_empty() {
-        bail!("no SIF or bundle arguments");
+        bail!("no SIF, .appspec or bundle arguments");
     }
 
     if !sif.is_empty() {
