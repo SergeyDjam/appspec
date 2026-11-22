@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use super::http::http_request;
 use super::layout::RepoRoot;
 use super::meta::{IndexV1, IndexVersion, MetaV1};
-use super::util::{atomic_write, sha256_hex};
+use super::util::{atomic_write, blob_path, sha256_hex};
 
 pub struct PullOpts {
     /// Упорядоченный список источников (fallback chain).
@@ -126,7 +126,9 @@ fn pull_from_http(
         .versions
         .get(ver)
         .ok_or_else(|| anyhow!("{}:{} not in remote index", name, ver))?;
-    ensure_sif_pull(name, ver, v)?;
+    if v.is_bundle() {
+        return pull_bundle_from_http(local_root, name, ver, base, v, opts);
+    }
 
     let spec_url = format!("{}/packages/{}/{}/spec.appspec", base, name, ver);
     let (s, _h, spec_body) = http_request(&spec_url, "GET", &[], None)?;
@@ -221,11 +223,7 @@ fn pull_from_path(
     }
     let meta: MetaV1 = serde_json::from_str(&std::fs::read_to_string(&meta_path)?)?;
     if meta.is_bundle() {
-        bail!(
-            "bundle pull is not supported yet: {}:{} (bundle-as-artifact pull is the next step)",
-            name,
-            ver
-        );
+        return pull_bundle_from_path(local_root, name, ver, &src_root, &meta, opts);
     }
     let spec_src = meta_path.parent().unwrap().join("spec.appspec");
     let blob_src = super::util::blob_path(&src_root.path, &meta.sif_sha256);
@@ -290,7 +288,9 @@ fn pull_via_ipfs(local_root: &RepoRoot, name: &str, ver: &str, opts: &PullOpts) 
         .versions
         .get(ver)
         .ok_or_else(|| anyhow!("{}:{} not in local index", name, ver))?;
-    ensure_sif_pull(name, ver, v)?;
+    if v.is_bundle() {
+        return pull_bundle_from_ipfs(local_root, name, ver, v, &index, None, opts);
+    }
 
     let cid = v.ipfs_cid.as_deref().ok_or_else(|| {
         anyhow!(
@@ -341,7 +341,9 @@ fn pull_from_ipfs_index(
         .versions
         .get(ver)
         .ok_or_else(|| anyhow!("{}:{} not in IPFS index", name, ver))?;
-    ensure_sif_pull(name, ver, v)?;
+    if v.is_bundle() {
+        return pull_bundle_from_ipfs(local_root, name, ver, v, &index, Some(index_cid), opts);
+    }
 
     let cid = v.ipfs_cid.as_deref().ok_or_else(|| {
         anyhow!(
@@ -397,7 +399,9 @@ fn pull_from_ipns(
         .versions
         .get(ver)
         .ok_or_else(|| anyhow!("{}:{} not in IPNS index (ipns://{})", name, ver, ipns_name))?;
-    ensure_sif_pull(name, ver, v)?;
+    if v.is_bundle() {
+        return pull_bundle_from_ipfs(local_root, name, ver, v, &index, Some(&index_cid), opts);
+    }
 
     let cid = v.ipfs_cid.as_deref().ok_or_else(|| {
         anyhow!(
@@ -532,6 +536,327 @@ fn build_meta(name: &str, v: &IndexVersion) -> MetaV1 {
         ipfs_cid: v.ipfs_cid.clone(),
         raw_labels: Default::default(),
     }
+}
+
+// ===========================================================================
+// Bundle pull (0.6.2)
+// ===========================================================================
+
+#[derive(serde::Deserialize)]
+struct ManifestRef {
+    resolved: String,
+}
+
+#[derive(serde::Deserialize)]
+struct ManifestComponentRef {
+    source: ManifestRef,
+}
+
+#[derive(serde::Deserialize)]
+struct ManifestRefs {
+    base: ManifestRef,
+    #[serde(default)]
+    components: Vec<ManifestComponentRef>,
+}
+
+fn manifest_repo_refs(bytes: &[u8]) -> Result<Vec<(String, String)>> {
+    let manifest: ManifestRefs = serde_json::from_slice(bytes)?;
+    let mut out = Vec::new();
+    let sources =
+        std::iter::once(&manifest.base).chain(manifest.components.iter().map(|c| &c.source));
+    for src in sources {
+        if let Some(rest) = src.resolved.strip_prefix("repo:") {
+            if let Some((name, ver)) = rest.split_once(':') {
+                out.push((name.to_string(), ver.to_string()));
+            }
+        }
+    }
+    Ok(out)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn pull_bundle_from_ipfs(
+    local_root: &RepoRoot,
+    name: &str,
+    ver: &str,
+    v: &IndexVersion,
+    index: &IndexV1,
+    index_cid: Option<&str>,
+    opts: &PullOpts,
+) -> Result<()> {
+    if opts.sif_out.is_some() {
+        bail!("`--sif` is not applicable to bundles");
+    }
+    let spec_cid = v
+        .ipfs_cid
+        .as_deref()
+        .ok_or_else(|| anyhow!("no ipfs_cid for bundle {}:{}", name, ver))?;
+    let manifest_cid = v
+        .manifest_ipfs_cid
+        .as_deref()
+        .ok_or_else(|| anyhow!("no manifest_ipfs_cid for bundle {}:{}", name, ver))?;
+    let spec = super::ipfs::cat(spec_cid)?;
+    let manifest_bytes = super::ipfs::cat(manifest_cid)?;
+    if sha256_hex(&spec) != v.spec_sha256 {
+        bail!("bundle spec sha256 mismatch for {}:{}", name, ver);
+    }
+    let manifest_sha = v
+        .manifest_sha256
+        .as_deref()
+        .ok_or_else(|| anyhow!("bundle index has no manifest_sha256"))?;
+    if sha256_hex(&manifest_bytes) != manifest_sha {
+        bail!("manifest sha256 mismatch for {}:{}", name, ver);
+    }
+
+    let (bundle_blob, manifest_blob) = if opts.spec_only {
+        (None, None)
+    } else {
+        (Some(spec.as_slice()), Some(manifest_bytes.as_slice()))
+    };
+    let meta = build_meta(name, v);
+    write_bundle_version(
+        local_root,
+        name,
+        ver,
+        &spec,
+        &manifest_bytes,
+        &meta,
+        bundle_blob,
+        manifest_blob,
+    )?;
+
+    if !opts.spec_only {
+        for (n, vv) in manifest_repo_refs(&manifest_bytes)? {
+            let local_meta = local_root
+                .packages_dir()
+                .join(&n)
+                .join(&vv)
+                .join("meta.json");
+            if local_meta.is_file() {
+                continue;
+            }
+            if let Some(cid) = index_cid {
+                pull_from_ipfs_index(local_root, &n, &vv, cid, opts)?;
+                continue;
+            }
+            let Some(pkg) = index.packages.get(&n) else {
+                eprintln!("warning: bundle dependency {}:{} not in index", n, vv);
+                continue;
+            };
+            let Some(cv) = pkg.versions.get(&vv) else {
+                eprintln!("warning: bundle dependency {}:{} not in index", n, vv);
+                continue;
+            };
+            if cv.is_bundle() {
+                pull_bundle_from_ipfs(local_root, &n, &vv, cv, index, None, opts)?;
+            } else if let Some(cid) = cv.ipfs_cid.as_deref() {
+                pull_blob_from_ipfs(local_root, &n, &vv, cid, cv, opts)?;
+            } else {
+                eprintln!(
+                    "warning: bundle dependency {}:{} has no ipfs_cid; pull it manually",
+                    n, vv
+                );
+            }
+        }
+    }
+
+    let _ = super::index_build::rebuild_all(local_root);
+    println!("pulled: {}:{} (bundle)", name, ver);
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn write_bundle_version(
+    local_root: &RepoRoot,
+    name: &str,
+    ver: &str,
+    spec: &[u8],
+    manifest: &[u8],
+    meta: &MetaV1,
+    bundle_blob: Option<&[u8]>,
+    manifest_blob: Option<&[u8]>,
+) -> Result<()> {
+    write_version(local_root, name, ver, spec, meta, None)?;
+    let dir = local_root.packages_dir().join(name).join(ver);
+    atomic_write(&dir.join("manifest.json"), manifest)?;
+    let sha = meta.bundle_sha256.as_deref().unwrap_or("");
+    atomic_write(&dir.join("sha256"), sha.as_bytes())?;
+    if let Some(bytes) = bundle_blob {
+        if !sha.is_empty() {
+            atomic_write(&blob_path(&local_root.path, sha), bytes)?;
+        }
+    }
+    if let Some(bytes) = manifest_blob {
+        if let Some(msha) = meta.manifest_sha256.as_deref() {
+            atomic_write(&blob_path(&local_root.path, msha), bytes)?;
+        }
+    }
+    Ok(())
+}
+
+fn pull_bundle_from_path(
+    local_root: &RepoRoot,
+    name: &str,
+    ver: &str,
+    src_root: &RepoRoot,
+    meta: &MetaV1,
+    opts: &PullOpts,
+) -> Result<()> {
+    if opts.sif_out.is_some() {
+        bail!("`--sif` is not applicable to bundles");
+    }
+    let dir = src_root.packages_dir().join(name).join(ver);
+    let spec = std::fs::read(dir.join("spec.appspec"))?;
+    let manifest_bytes = std::fs::read(dir.join("manifest.json"))?;
+    if sha256_hex(&spec) != meta.spec_sha256 {
+        bail!("bundle spec sha256 mismatch in {}", dir.display());
+    }
+    let manifest_sha = meta
+        .manifest_sha256
+        .as_deref()
+        .ok_or_else(|| anyhow!("bundle meta has no manifest_sha256"))?;
+    if sha256_hex(&manifest_bytes) != manifest_sha {
+        bail!("manifest sha256 mismatch in {}", dir.display());
+    }
+
+    let (bundle_blob, manifest_blob) = if opts.spec_only {
+        (None, None)
+    } else {
+        let bsha = meta
+            .bundle_sha256
+            .as_deref()
+            .ok_or_else(|| anyhow!("bundle meta has no bundle_sha256"))?;
+        let b = std::fs::read(blob_path(&src_root.path, bsha))?;
+        if sha256_hex(&b) != bsha {
+            bail!("bundle blob sha256 mismatch for {}", bsha);
+        }
+        let mb = std::fs::read(blob_path(&src_root.path, manifest_sha))?;
+        if sha256_hex(&mb) != manifest_sha {
+            bail!("manifest blob sha256 mismatch for {}", manifest_sha);
+        }
+        (Some(b), Some(mb))
+    };
+
+    write_bundle_version(
+        local_root,
+        name,
+        ver,
+        &spec,
+        &manifest_bytes,
+        meta,
+        bundle_blob.as_deref(),
+        manifest_blob.as_deref(),
+    )?;
+
+    if !opts.spec_only {
+        for (n, v) in manifest_repo_refs(&manifest_bytes)? {
+            let local_meta = local_root
+                .packages_dir()
+                .join(&n)
+                .join(&v)
+                .join("meta.json");
+            if !local_meta.is_file() {
+                pull_from_path(local_root, &n, &v, &src_root.path, opts)?;
+            }
+        }
+    }
+
+    let _ = super::index_build::rebuild_all(local_root);
+    println!("pulled: {}:{} (bundle)", name, ver);
+    Ok(())
+}
+
+fn fetch_http_bytes(base: &str, path: &str) -> Result<Vec<u8>> {
+    let url = format!("{}{}", base.trim_end_matches('/'), path);
+    let (status, _h, body) = http_request(&url, "GET", &[], None)?;
+    if status != 200 {
+        bail!("GET {} returned {}", url, status);
+    }
+    Ok(body)
+}
+
+fn pull_bundle_from_http(
+    local_root: &RepoRoot,
+    name: &str,
+    ver: &str,
+    base: &str,
+    v: &IndexVersion,
+    opts: &PullOpts,
+) -> Result<()> {
+    if opts.sif_out.is_some() {
+        bail!("`--sif` is not applicable to bundles");
+    }
+    let spec_path = format!("/packages/{}/{}/spec.appspec", name, ver);
+    let manifest_path = format!("/packages/{}/{}/manifest.json", name, ver);
+    let spec = fetch_http_bytes(base, &spec_path)?;
+    let manifest_bytes = fetch_http_bytes(base, &manifest_path)?;
+    if sha256_hex(&spec) != v.spec_sha256 {
+        bail!("bundle spec sha256 mismatch for {}:{}", name, ver);
+    }
+    let manifest_sha = v
+        .manifest_sha256
+        .as_deref()
+        .ok_or_else(|| anyhow!("bundle index has no manifest_sha256"))?;
+    if sha256_hex(&manifest_bytes) != manifest_sha {
+        bail!("manifest sha256 mismatch for {}:{}", name, ver);
+    }
+
+    let (bundle_blob, manifest_blob) = if opts.spec_only {
+        (None, None)
+    } else {
+        let bsha = v
+            .bundle_sha256
+            .as_deref()
+            .ok_or_else(|| anyhow!("bundle index has no bundle_sha256"))?;
+        let b = fetch_http_bytes(
+            base,
+            &format!("/blobs/sha256/{}/{}", &bsha[..2], &bsha[2..]),
+        )?;
+        if sha256_hex(&b) != bsha {
+            bail!("bundle blob sha256 mismatch for {}", bsha);
+        }
+        let mb = fetch_http_bytes(
+            base,
+            &format!(
+                "/blobs/sha256/{}/{}",
+                &manifest_sha[..2],
+                &manifest_sha[2..]
+            ),
+        )?;
+        if sha256_hex(&mb) != manifest_sha {
+            bail!("manifest blob sha256 mismatch for {}", manifest_sha);
+        }
+        (Some(b), Some(mb))
+    };
+
+    let meta = build_meta(name, v);
+    write_bundle_version(
+        local_root,
+        name,
+        ver,
+        &spec,
+        &manifest_bytes,
+        &meta,
+        bundle_blob.as_deref(),
+        manifest_blob.as_deref(),
+    )?;
+
+    if !opts.spec_only {
+        for (n, vv) in manifest_repo_refs(&manifest_bytes)? {
+            let local_meta = local_root
+                .packages_dir()
+                .join(&n)
+                .join(&vv)
+                .join("meta.json");
+            if !local_meta.is_file() {
+                pull_from_http(local_root, &n, &vv, base, opts)?;
+            }
+        }
+    }
+
+    let _ = super::index_build::rebuild_all(local_root);
+    println!("pulled: {}:{} (bundle)", name, ver);
+    Ok(())
 }
 
 // ===========================================================================

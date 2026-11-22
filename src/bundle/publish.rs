@@ -199,8 +199,6 @@ pub fn add_bundle(root: &RepoRoot, path: &Path, opts: &AddOpts) -> Result<AddOut
         base,
         components,
         extensions,
-        built_at: now_iso8601(),
-        generator: format!("appspec {}", env!("CARGO_PKG_VERSION")),
     };
     let manifest_bytes = serde_json::to_vec_pretty(&manifest)?;
     let manifest_sha256 = sha256_hex(&manifest_bytes);

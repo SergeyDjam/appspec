@@ -317,5 +317,8 @@ base/components должны быть repo-ref (`foo`, `foo:1.0`, `foo:1.0-1`) �
 отклоняются. В пакет пишутся `spec.appspec`, `manifest.json` (резолвнутые
 refs + хеши) и `meta.json` с `kind = "bundle"`.
 
-`repo pull`/`run` bundle и `repo pin` bundle пока не реализованы (следующий
-шаг); `repo ls|show|check|gc` уже понимают `kind = "bundle"`.
+С 0.6.3 работают `repo pull` bundle (path/HTTP/IPFS/IPNS, с рекурсивным
+pull зависимостей) и `appspec run <bundle-name>`: манифест подставляет
+канонические `name:version-release`, launcher собирается локально.
+`repo pin` bundle (bundle + manifest блобы) и OCI-экспорт bundle пока не
+реализованы; `repo ls|show|check|gc` понимают `kind = "bundle"`.

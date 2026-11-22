@@ -494,6 +494,11 @@ appspec run foo:2.2.0-1               # точно 2.2.0 release=1
 Файл (не пакет): `appspec run ./foo.appspec`, `/abs/foo.appspec`,
 `foo.appspec`.
 
+Если версия имеет `kind = "bundle"`, `run` подтягивает bundle (spec +
+manifest + зависимости), заменяет источники на канонические
+`name:version-release` из `manifest.json`, собирает launcher локально и
+запускает его. `--dry-run` останавливается после сборки launcher'а.
+
 ### Флаги
 
 | Флаг | Что |
