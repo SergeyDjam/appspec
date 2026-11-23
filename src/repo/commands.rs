@@ -472,6 +472,9 @@ pub struct AddArgs {
     /// Do not build a missing/stale SIF when adding a `.appspec`.
     #[arg(long)]
     pub no_build: bool,
+    /// Do not auto-publish local specs referenced by a bundle.
+    #[arg(long)]
+    pub no_deps: bool,
     /// Bundle version (required when adding a `[bundle]` spec).
     #[arg(long)]
     pub version: Option<String>,

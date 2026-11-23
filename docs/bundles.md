@@ -320,10 +320,12 @@ appspec repo add-bundle vscodium-bundle.appspec --version 1.0 --release 2
 Источники base/components:
 
 - repo-ref (`foo`, `foo:1.0`, `foo:1.0-1`) или `cid` — как есть;
-- локальный `spec = "./foo.appspec"` — ищется пакет с тем же
-  `name`/`version` в репозитории; если его нет, добавьте SIF заранее
-  (`appspec repo add foo.sif`). В манифест попадёт канонический
-  `foo:<version>-<release>`;
+- локальный `spec = "./foo.appspec"` — если пакета с тем же
+  `name`/`version` нет в репозитории, `repo add` сам соберёт/найдёт SIF и
+  добавит его (как `repo add foo.appspec`), затем переиндексирует и
+  продолжит публикацию bundle. Уже существующие пакеты не трогаются.
+  `--no-deps` отключает авто-публикацию, `--no-build` запрещает сборку
+  отсутствующих SIF. В манифест попадёт `foo:<version>-<release>`;
 - `sif`/`manifest` — по-прежнему не публикуются (это локальные пути).
 
 Локальный файл расширения (`[[extensions]].file`) при публикации пинится
@@ -333,6 +335,7 @@ appspec repo add-bundle vscodium-bundle.appspec --version 1.0 --release 2
 С 0.6.3 работают `repo pull` bundle (path/HTTP/IPFS/IPNS, с рекурсивным
 pull зависимостей) и `appspec run <bundle-name>`: манифест подставляет
 канонические `name:version-release`, launcher собирается локально.
+
 С 0.6.4 `repo pin` для bundle пинит оба блоба (bundle spec + manifest) и
 обновляет `ipfs_cid`/`manifest_ipfs_cid`. С 0.6.5 `repo export-oci` и
 `repo pull --from oci://` поддерживают bundle (агрегированный JSON:

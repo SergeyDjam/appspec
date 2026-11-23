@@ -144,6 +144,32 @@ fn add_appspec_does_not_need_version_flag() {
 }
 
 #[test]
+fn add_bundle_auto_publishes_local_dependencies() {
+    let f = fixture(true);
+    let bundle = f.dir.join("bundle.appspec");
+    fs::write(
+        &bundle,
+        r#"[bundle]
+name    = "appbundle"
+version = "1.0"
+
+[bundle.base]
+spec  = "./app.appspec"
+entry = "exec /bin/sh"
+"#,
+    )
+    .unwrap();
+
+    f.cmd()
+        .args(["repo", "add", bundle.to_str().unwrap()])
+        .assert()
+        .success();
+
+    assert!(f.repo.join("packages/app/0.1.0-1/meta.json").is_file());
+    assert!(f.repo.join("packages/appbundle/1.0-1/meta.json").is_file());
+}
+
+#[test]
 fn add_appspec_and_sif_together() {
     let f = fixture(true);
     let sif = f.dir.join("app.sif");

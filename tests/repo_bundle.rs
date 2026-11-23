@@ -622,6 +622,7 @@ fn add_bundle_rejects_local_spec_not_in_repo() {
             "1.0",
             "--root",
             root.to_str().unwrap(),
+            "--no-deps",
         ])
         .assert()
         .failure()
