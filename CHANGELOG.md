@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.7] - 2026-11-23
+
+### Added
+
+- **Bundle dependencies are auto-published:** for local `spec = "./x.appspec"`
+  references missing from the repo, `repo add bundle.appspec` first
+  builds/locates the SIF and adds it, then reindexes and publishes the
+  bundle. Existing packages with their blob present are left untouched.
+  `--no-deps` disables auto-publishing; `--no-build` still forbids building
+  missing SIFs. `--force`/`--pin-ipfs` apply to dependencies too.
+
+
 ## [0.6.6] - 2026-11-23
 
 ### Added
@@ -21,6 +33,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   can be passed to one `repo add` (add specs first, then bundles).
 - `repo add` classifies inputs by TOML: `[package]` → app spec,
   `[bundle]` → bundle, both → error.
+
 
 ## [0.6.5] - 2026-11-22
 

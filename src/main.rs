@@ -762,6 +762,87 @@ fn resolve_app_spec_sif(path: &Path, allow_build: bool) -> Result<PathBuf> {
     Ok(resolved.sif)
 }
 
+fn bundle_local_spec_paths(path: &Path) -> Result<Vec<PathBuf>> {
+    let file = bundle::loader::load_bundle(path)?;
+    let base_dir = path
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    let mut sources: Vec<&bundle::model::SourceSpec> = vec![&file.bundle.base.source];
+    sources.extend(file.components.iter().map(|c| &c.source));
+    let mut out: Vec<PathBuf> = Vec::new();
+    for src in sources {
+        let Some(s) = &src.spec else { continue };
+        match bundle::loader::classify_spec_source(s) {
+            bundle::loader::SpecSource::LocalPath(_) | bundle::loader::SpecSource::Ambiguous(_) => {
+                let p = bundle::loader::resolve_relative(s, base_dir);
+                if p.is_file() && !out.contains(&p) {
+                    out.push(p);
+                }
+            }
+            _ => {}
+        }
+    }
+    Ok(out)
+}
+
+fn publish_bundle_deps(
+    root: &repo::layout::RepoRoot,
+    bundles: &[PathBuf],
+    allow_build: bool,
+    pin_ipfs: bool,
+    force: bool,
+) -> Result<bool> {
+    let mut changed = false;
+    for bundle in bundles {
+        for spec in bundle_local_spec_paths(bundle)? {
+            // If the package is already in the repo with a blob, keep it;
+            // publishing a dependency is only needed for missing entries.
+            if let Ok(spec_obj) = crate::load_spec(&spec) {
+                let pkg = spec_obj.package.name.to_ascii_lowercase();
+                let ver_spec = match &spec_obj.package.release {
+                    Some(r) => format!("{}-{}", spec_obj.package.version, r),
+                    None => spec_obj.package.version.clone(),
+                };
+                if let Ok(text) = fs::read_to_string(root.index_path()) {
+                    if let Ok(index) = serde_json::from_str::<crate::repo::meta::IndexV1>(&text) {
+                        if let Ok((_, v)) =
+                            crate::repo::run_package::pick_version(&index, &pkg, Some(&ver_spec))
+                        {
+                            if repo::util::blob_path(&root.path, &v.sif_sha256).is_file() {
+                                continue;
+                            }
+                        }
+                    }
+                }
+            }
+            let sif = resolve_app_spec_sif(&spec, allow_build)?;
+            let out = repo::add::add_one(
+                root,
+                repo::add::AddParams {
+                    sif: &sif,
+                    arch: None,
+                    release_suffix: None,
+                    force,
+                    pin_ipfs,
+                    tag: None,
+                },
+            )?;
+            if !out.already_present {
+                log(format!(
+                    "dependency added: {}:{}-{}",
+                    out.name, out.version, out.release
+                ));
+                changed = true;
+            }
+        }
+    }
+    if changed {
+        repo::index_build::rebuild_all(root)?;
+    }
+    Ok(changed)
+}
+
 fn cmd_repo_add(mut a: repo::commands::AddArgs) -> Result<i32> {
     let mut sif = Vec::new();
     let mut specs = Vec::new();
@@ -791,6 +872,11 @@ fn cmd_repo_add(mut a: repo::commands::AddArgs) -> Result<i32> {
 
     let root = repo::commands::require_local_root(a.root.clone(), None, "add")?;
     let _lock = repo::util::FileLock::acquire(&root.lock_path())?;
+    let mut changed = if a.no_deps {
+        false
+    } else {
+        publish_bundle_deps(&root, &bundles, !a.no_build, a.pin_ipfs, a.force)?
+    };
     let opts = bundle::publish::AddOpts {
         version: a.version.as_deref(),
         release: a.bundle_release.as_deref(),
@@ -798,7 +884,7 @@ fn cmd_repo_add(mut a: repo::commands::AddArgs) -> Result<i32> {
         force: a.force,
         pin_ipfs: a.pin_ipfs,
     };
-    let changed = bundle::publish::add_bundles(&root, &bundles, &opts)?;
+    changed |= bundle::publish::add_bundles(&root, &bundles, &opts)?;
     if changed {
         repo::index_build::rebuild_all(&root)?;
     }

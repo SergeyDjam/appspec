@@ -125,8 +125,10 @@ appspec repo add vscodium.appspec --no-build --force
 Bundle-спек (`[bundle]`) определяется автоматически. Версия берётся из
 `[bundle] version` (или `--version`); `release` по умолчанию `1`.
 Источники base/components могут быть repo-ref (`foo`, `foo:1.0`,
-`foo:1.0-1`), `cid` или локальный `spec = "./foo.appspec"` — тогда пакет
-с тем же name/version должен уже быть в репозитории. Локальные
+`foo:1.0-1`), `cid` или локальный `spec = "./foo.appspec"`. Для локального
+spec недостающий пакет автоматически публикуется (`repo add foo.appspec`:
+сборка/поиск SIF → add → reindex), после чего bundle добавляется;
+`--no-deps` отключает это, `--no-build` запрещает сборку. Локальные
 `sif`/`manifest` не публикуются. Локальный файл расширения пинится в IPFS
 и сохраняется как `cid`. В пакет пишутся `spec.appspec`, `manifest.json` и
 `meta.json` с `kind = "bundle"`, `bundle_sha256`, `manifest_sha256` и
