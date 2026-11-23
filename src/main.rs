@@ -786,6 +786,31 @@ fn bundle_local_spec_paths(path: &Path) -> Result<Vec<PathBuf>> {
     Ok(out)
 }
 
+fn force_build_spec(path: &Path) -> Result<()> {
+    let exe = std::env::current_exe().context("determining appspec executable")?;
+    let status = Command::new(exe)
+        .arg("build")
+        .arg("--force")
+        .arg(path)
+        .status()
+        .with_context(|| format!("spawning `appspec build --force {}`", path.display()))?;
+    if !status.success() {
+        bail!("`appspec build --force {}` failed", path.display());
+    }
+    Ok(())
+}
+
+fn bundle_dep_params<'a>(sif: &'a Path, force: bool, pin_ipfs: bool) -> repo::add::AddParams<'a> {
+    repo::add::AddParams {
+        sif,
+        arch: None,
+        release_suffix: None,
+        force,
+        pin_ipfs,
+        tag: None,
+    }
+}
+
 fn publish_bundle_deps(
     root: &repo::layout::RepoRoot,
     bundles: &[PathBuf],
@@ -816,18 +841,28 @@ fn publish_bundle_deps(
                     }
                 }
             }
-            let sif = resolve_app_spec_sif(&spec, allow_build)?;
-            let out = repo::add::add_one(
-                root,
-                repo::add::AddParams {
-                    sif: &sif,
-                    arch: None,
-                    release_suffix: None,
-                    force,
-                    pin_ipfs,
-                    tag: None,
-                },
-            )?;
+            let mut sif = resolve_app_spec_sif(&spec, allow_build)?;
+            let out = match repo::add::add_one(root, bundle_dep_params(&sif, force, pin_ipfs)) {
+                Ok(o) => o,
+                Err(e) if allow_build && format!("{e:#}").contains("missing required label") => {
+                    log(format!(
+                        "dependency SIF {} has no labels; rebuilding {}",
+                        sif.display(),
+                        spec.display()
+                    ));
+                    force_build_spec(&spec)?;
+                    sif = resolve_app_spec_sif(&spec, true)?;
+                    repo::add::add_one(root, bundle_dep_params(&sif, force, pin_ipfs))
+                        .with_context(|| {
+                            format!("auto-publishing {} (SIF {})", spec.display(), sif.display())
+                        })?
+                }
+                Err(e) => {
+                    return Err(e).with_context(|| {
+                        format!("auto-publishing {} (SIF {})", spec.display(), sif.display())
+                    })
+                }
+            };
             if !out.already_present {
                 log(format!(
                     "dependency added: {}:{}-{}",

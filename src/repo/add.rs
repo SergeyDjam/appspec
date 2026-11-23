@@ -40,7 +40,8 @@ pub fn add_one(root: &RepoRoot, p: AddParams) -> Result<AddOutcome> {
     let sif_size = sif_bytes.len() as u64;
 
     // 2. inspect
-    let labels = inspect::inspect(p.sif)?;
+    let labels =
+        inspect::inspect(p.sif).with_context(|| format!("inspecting SIF {}", p.sif.display()))?;
 
     // 3. обязательные лейблы
     let name_orig = labels.require("org.appspec.package.name")?.to_string();
