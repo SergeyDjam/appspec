@@ -166,9 +166,10 @@ jobs:
 
           mkdir -p "dist/${NAME}"
           cp "$BIN" "dist/${NAME}/appspec"
+          cp LICENSE "dist/${NAME}/"
           cp README.md "dist/${NAME}/"
           cp -r docs      "dist/${NAME}/"
-          cp -r examples  "dist/${NAME}/"
+          cp -r examples  "dist/${NAME}/*.appspec"
           cp -r templates "dist/${NAME}/"
 
           tar -C dist -czf "dist/${NAME}.tar.gz" "${NAME}"

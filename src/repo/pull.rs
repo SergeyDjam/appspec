@@ -451,7 +451,8 @@ fn pull_blob_from_ipfs(
             name, ver
         );
         let _ = std::fs::remove_file(&spec_path);
-        let _ = std::fs::remove_file(spec_path.with_file_name("meta.json"));
+        // Keep meta.json: the SIF blob is enough for `bundle run`, and
+        // dropping meta would also drop the package from index.json.
     }
 
     let _ = super::index_build::rebuild_all(local_root);

@@ -1067,6 +1067,30 @@ fn pin_bundle_source(
     Ok(())
 }
 
+fn infer_extension_kind(table: &toml::value::Table) -> &'static str {
+    let candidate = table
+        .get("file")
+        .or_else(|| table.get("url"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    if candidate.ends_with(".vsix") {
+        "vsix"
+    } else if candidate.ends_with(".zip")
+        || candidate.ends_with(".tar")
+        || candidate.ends_with(".tar.gz")
+        || candidate.ends_with(".tgz")
+        || candidate.ends_with(".tar.xz")
+        || candidate.ends_with(".tar.bz2")
+    {
+        "archive"
+    } else if !candidate.is_empty() {
+        "file"
+    } else {
+        "vsix"
+    }
+}
+
 /// Run a bundle package from a repository: pull if needed, replace refs with
 /// the manifest's canonical `name:version-release`, build and launch.
 #[allow(clippy::too_many_arguments)]
@@ -1120,6 +1144,34 @@ fn cmd_run_bundle_package(
                 .to_string();
             if let Some(mc) = manifest.components.iter().find(|x| x.name == cname) {
                 pin_bundle_source(table, &mc.source)?;
+            }
+        }
+    }
+    if let Some(extensions) = value.get_mut("extensions").and_then(|e| e.as_array_mut()) {
+        for ext in extensions {
+            let Some(table) = ext.as_table_mut() else {
+                continue;
+            };
+            let name = table
+                .get("name")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            let Some(me) = manifest.extensions.iter().find(|x| x.name == name) else {
+                continue;
+            };
+            let kind = me
+                .kind
+                .clone()
+                .unwrap_or_else(|| infer_extension_kind(table).to_string());
+            table.remove("file");
+            table.remove("cid");
+            table.remove("url");
+            table.insert("type".into(), toml::Value::String(kind));
+            if let Some(cid) = &me.cid {
+                table.insert("cid".into(), toml::Value::String(cid.clone()));
+            } else if let Some(url) = &me.url {
+                table.insert("url".into(), toml::Value::String(url.clone()));
             }
         }
     }
@@ -1195,17 +1247,22 @@ fn cmd_run_package(
         }
     }
 
-    // 2. try remote sources
-    if resolved.is_none() {
-        let sources = resolve_run_sources(from, profile)?;
-        for src in &sources {
-            if let Ok(text) = crate::repo::commands::read_index_text_from(src) {
-                if let Ok(idx) = serde_json::from_str::<crate::repo::meta::IndexV1>(&text) {
-                    if let Ok((k, v)) =
-                        crate::repo::run_package::pick_version(&idx, &name, ver_spec.as_deref())
-                    {
+    // 2. query remote sources even if the local cache has a version: choose
+    // the newest across local + remote. Otherwise a stale local index wins
+    // forever (e.g. 0.1.0 vs 0.1.1 in IPNS).
+    let sources = resolve_run_sources(from, profile)?;
+    for src in &sources {
+        if let Ok(text) = crate::repo::commands::read_index_text_from(src) {
+            if let Ok(idx) = serde_json::from_str::<crate::repo::meta::IndexV1>(&text) {
+                if let Ok((k, v)) =
+                    crate::repo::run_package::pick_version(&idx, &name, ver_spec.as_deref())
+                {
+                    let better = match &resolved {
+                        Some((_, cur, _)) => v.sort_key() > cur.sort_key(),
+                        None => true,
+                    };
+                    if better {
                         resolved = Some((k.clone(), v.clone(), src.clone()));
-                        break;
                     }
                 }
             }

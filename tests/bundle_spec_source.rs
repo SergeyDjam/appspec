@@ -259,6 +259,125 @@ fn repo_ref_latest_and_version_only() {
 }
 
 #[test]
+fn repo_entry_recovered_from_sif_labels() {
+    use base64::Engine as _;
+    use sha2::{Digest, Sha256};
+
+    let (_tmp_repo, repo_path) = make_repo_with_foo();
+    // Simulate an IPFS pull: SIF + meta exist, spec.appspec is absent.
+    fs::remove_file(repo_path.join("packages/foo/1.0-1/spec.appspec")).unwrap();
+
+    let spec_text = "[package]\nname = \"foo\"\nversion = \"1.0\"\n\n[runtime]\nsif_file = \"foo.sif\"\nsetup = \"#!/bin/sh\\nexec /bin/sh\"\n";
+    let mut h = Sha256::new();
+    h.update(spec_text.as_bytes());
+    let spec_sha = format!("{:x}", h.finalize());
+    let labels = serde_json::json!({
+        "data": { "attributes": { "labels": {
+            "org.appspec.package.name": "foo",
+            "org.appspec.package.version": "1.0",
+            "org.appspec.package.release": "1",
+            "org.appspec.package.epoch": "0",
+            "org.appspec.package.arch": "amd64",
+            "org.appspec.spec.content.base64":
+                base64::engine::general_purpose::STANDARD.encode(spec_text.as_bytes()),
+            "org.appspec.spec.sha256": spec_sha,
+            "org.appspec.spec.filename": "spec.appspec"
+        }}}
+    });
+
+    let bin = _tmp_repo.path().join("bin");
+    fs::create_dir_all(&bin).unwrap();
+    let labels_path = _tmp_repo.path().join("labels.json");
+    fs::write(&labels_path, serde_json::to_vec(&labels).unwrap()).unwrap();
+    let apptainer = bin.join("apptainer");
+    fs::write(
+        &apptainer,
+        format!("#!/bin/sh\ncat '{}'\n", labels_path.display()),
+    )
+    .unwrap();
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&apptainer, fs::Permissions::from_mode(0o755)).unwrap();
+    }
+
+    let tmp = TempDir::new().unwrap();
+    let bundle = tmp.path().join("bundle.appspec");
+    fs::write(
+        &bundle,
+        "[bundle]\nname = \"labels-entry\"\n\n[bundle.base]\nspec = \"foo:1.0-1\"\n",
+    )
+    .unwrap();
+
+    appspec()
+        .args([
+            "bundle",
+            "build",
+            bundle.to_str().unwrap(),
+            "--repo",
+            repo_path.to_str().unwrap(),
+            "--allow-unsigned",
+            "--no-build",
+        ])
+        .env(
+            "PATH",
+            format!(
+                "{}:{}",
+                bin.display(),
+                std::env::var("PATH").unwrap_or_default()
+            ),
+        )
+        .env("APPSPEC_APPTAINER", &apptainer)
+        .assert()
+        .success();
+
+    let launcher = fs::read_to_string(tmp.path().join("run.labels-entry.sh")).unwrap();
+    let encoded = launcher
+        .lines()
+        .find(|l| l.starts_with("printf %s ") && l.contains("base64 -d"))
+        .and_then(|l| l.trim_start_matches("printf %s ").split(" |").next())
+        .expect("setup base64 line");
+    let setup = String::from_utf8(
+        base64::engine::general_purpose::STANDARD
+            .decode(encoded)
+            .unwrap(),
+    )
+    .unwrap();
+    assert!(
+        setup.contains("exec /bin/sh"),
+        "entry not recovered from labels:\n{setup}"
+    );
+}
+
+#[test]
+fn bundle_component_macros_expand() {
+    let tmp = TempDir::new().unwrap();
+    write_local_spec(tmp.path(), "base.appspec");
+    fs::write(tmp.path().join("git.sif"), b"fake").unwrap();
+    let p = tmp.path().join("bundle.appspec");
+    fs::write(
+        &p,
+        r#"[bundle]
+name = "macro-bundle"
+
+[bundle.base]
+spec  = "./base.appspec"
+entry = "exec /bin/sh"
+
+[[components]]
+name    = "git"
+sif     = "./git.sif"
+provide = "git"
+binary  = "%{_bindir}/git"
+"#,
+    )
+    .unwrap();
+    appspec()
+        .args(["bundle", "check", p.to_str().unwrap()])
+        .assert()
+        .success();
+}
+
+#[test]
 fn lock_stores_canonical_ref_and_has_no_drift() {
     let (_tmp_repo, repo_path) = make_repo_with_foo();
     let tmp = TempDir::new().unwrap();

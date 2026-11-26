@@ -514,6 +514,64 @@ fn export_oci_dry_run_includes_bundle_artifact() {
 }
 
 #[test]
+fn add_bundle_inlines_utf8_component_files() {
+    let (tmp, root) = make_repo();
+    fs::write(tmp.path().join("wrapper.sh"), "#!/bin/sh\necho wrapper\n").unwrap();
+    let bundle = tmp.path().join("bundle.appspec");
+    fs::write(
+        &bundle,
+        r#"[bundle]
+name    = "testbundle"
+version = "1.0"
+
+[bundle.base]
+spec  = "base:0.0.1-1"
+entry = "exec /bin/sh"
+
+[[components]]
+name = "git"
+spec = "git:0.0.1-1"
+provide = "git"
+binary = "%{_bindir}/git"
+
+[[components.files]]
+to    = "/opt/appspec/wrapper.sh"
+from  = "./wrapper.sh"
+scope = "instance"
+mode  = 0o755
+"#,
+    )
+    .unwrap();
+
+    appspec()
+        .args([
+            "repo",
+            "add",
+            bundle.to_str().unwrap(),
+            "--root",
+            root.to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+
+    let stored = fs::read_to_string(root.join("packages/testbundle/1.0-1/spec.appspec")).unwrap();
+    assert!(
+        stored.contains("content ="),
+        "content not inlined:\n{stored}"
+    );
+    assert!(!stored.contains("from ="), "from not removed:\n{stored}");
+    assert!(stored.contains("echo wrapper"));
+    assert!(
+        stored.contains("binary = \"/usr/bin/git\""),
+        "macro not expanded:\n{stored}"
+    );
+    assert!(
+        !stored.contains("%{_bindir}"),
+        "macro left in spec:\n{stored}"
+    );
+}
+
+#[test]
 fn bundle_version_from_toml_is_used() {
     let (tmp, root) = make_repo();
     let p = tmp.path().join("bundle.appspec");
