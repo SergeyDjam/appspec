@@ -5,6 +5,72 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.13] - 2026-11-26
+
+### Fixed
+
+- **VSIX extensions fetched by CID/URL are unzipped even when the cache
+  file has no extension** (`<cid>.bin`). `prepare_as_archive` now treats
+  `parse_vsix` as "this is a zip" instead of relying on the filename, so
+  `tar: Это не похоже на tar-архив` no longer breaks bundle builds.
+- Manifest extensions now store `kind` (`vsix`/`file`/`archive`), and
+  `run` materializes it as `type = ...`; older manifests fall back to
+  inferring the kind from the original `file`/`url`.
+
+## [0.6.12] - 2026-11-26
+
+### Fixed
+
+- **Base entry/runtime recovery when `spec.appspec` is missing.** Packages
+  pulled from IPFS have only the SIF blob; `resolve_repo_source` now falls
+  back to `apptainer inspect --labels` and decodes
+  `org.appspec.spec.content.base64`. This restores `[runtime].setup` →
+  `[bundle.base].entry` (and inherited runtime binds/home), fixing
+  `не удалось определить entry для base` for IPNS-pulled bundles.
+
+## [0.6.11] - 2026-11-26
+
+### Fixed
+
+- **`appspec run <package>` chooses the newest version across local and
+  remote indexes.** Previously a cached local index won unconditionally:
+  `run vscodium-dev` kept using `0.1.0-1` even when IPNS advertised
+  `0.1.1-1`, so it never pulled the fixed bundle (inlined wrapper, new
+  manifest). Now all configured remote sources are queried and the maximum
+  `sort_key` wins. Exact refs still resolve to the same key.
+
+## [0.6.10] - 2026-11-26
+
+### Fixed
+
+- **Macros in bundle specs are expanded** (`%{_bindir}`, `%{_sbindir}`,
+  `%{_libdir}`, `%{name}`, `%{version}`, custom `[macros]`). Previously
+  `bundle build`/`check` saw literal `%{_bindir}/git` and failed
+  `binary должен быть абсолютным`.
+  `load_bundle` now expands macros before deserializing; bundle publishing
+  stores the expanded spec. Builtins `name`/`version` come from
+  `[bundle].name`/`.version`; other path builtins use the same defaults as
+  specs (`/usr/bin`, `/usr/sbin`, `/usr/lib64`, …).
+
+## [0.6.9] - 2026-11-26
+
+### Fixed
+
+- **IPFS pull keeps packages in the index.** When `spec.appspec` is not
+  available from IPFS, `repo pull` no longer deletes `meta.json` along with
+  it. The SIF blob is enough for `bundle build`/`run`, and dropping meta
+  removed the package from the freshly rebuilt `index.json` (causing
+  `... not in repo index` errors for bundles pulled from IPNS).
+- **`run <bundle>` rewrites extensions from the manifest.** Published
+  bundles may reference a local `.vsix` that was converted to a CID; the
+  materialized spec now replaces `file`/`cid`/`url` in `[[extensions]]`
+  with the manifest's actual source instead of looking for a missing local
+  file.
+- **Bundle publish inlines UTF-8 `[[components.files]].from` files** into
+  `content` in the stored spec. Self-contained specs no longer need
+  adjacent local files such as `libvirtd-wrapper.sh`. Binary files still
+  require `content`/URL/CID.
+
 ## [0.6.8] - 2026-11-23
 
 ### Fixed

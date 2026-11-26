@@ -56,6 +56,9 @@ pub struct ManifestComponent {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ManifestExtension {
     pub name: String,
+    /// `vsix` | `file` | `archive` (otherwise inferred at run time).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<String>,
     /// `cid:...` / `url:...`, or `None` for Open VSX online.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source: Option<String>,
@@ -102,6 +105,7 @@ mod tests {
             }],
             extensions: vec![ManifestExtension {
                 name: "publisher.ext".into(),
+                kind: Some("vsix".into()),
                 source: None,
                 cid: None,
                 url: None,

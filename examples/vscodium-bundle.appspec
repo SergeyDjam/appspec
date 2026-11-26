@@ -18,9 +18,10 @@
 [bundle]
 name        = "vscodium-dev"
 description = "VSCodium + git + offline/online extensions"
-version     = "0.1.0"
+version     = "0.1.2"
 strict      = false
 base        = { spec = "./vscodium.appspec" }
+aliases    = ["vscodium-bundle"]
 
 # --- Компоненты --------------------------------------------------------
 
@@ -29,7 +30,7 @@ name    = "git"
 spec    = "./git.appspec"
 mount   = "/opt/utils/git"
 provide = "git"
-binary  = "/usr/bin/git"
+binary  = "%{_bindir}/git"
 target  = "/usr/local/bin/git"
 mounts  = ["PWD", "HOME", "/proc", "/dev", "/tmp", "SSH_AUTH_SOCK"]
 forward = ["TERM", "LANG", "LC_ALL", "SSH_AUTH_SOCK"]
@@ -74,7 +75,7 @@ requires = ["uv"]
 name    = "kubectl"
 spec    = "./kubectl.appspec"
 provide = "kubectl"
-binary  = "/usr/bin/kubectl"
+binary  = "%{_bindir}/kubectl"
 target  = "/usr/local/bin/kubectl"
 mounts  = ["PWD", "HOME", "/proc", "/dev", "/tmp"]
 forward = ["TERM", "LANG", "LC_ALL"]
@@ -140,7 +141,7 @@ expect_contains = "OpenTofu"
 name    = "ansible"
 spec    = "./ansible.appspec"
 provide = "ansible-playbook"
-binary  = "/usr/bin/ansible-playbook"
+binary  = "%{_bindir}/ansible-playbook"
 target  = "/usr/local/bin/ansible-playbook"
 bins = [
     "ansible",
@@ -225,7 +226,7 @@ exec chroot --skip-chdir "$SANDBOX" /bin/sh -c '
     cd "$1" 2>/dev/null || cd /
     shift
     exec "$@"
-' sh "$CWD" /usr/bin/mkisofs "$@"
+' sh "$CWD" %{_bindir}/mkisofs "$@"
 """
 
 [[components.files]]
@@ -271,7 +272,7 @@ name    = "podman-compose"
 spec    = "./podman.appspec"
 mount   = "/opt/utils/podman-compose"
 provide = "podman-compose"
-binary  = "/usr/bin/podman-compose"
+binary  = "%{_bindir}/podman-compose"
 target  = "/usr/local/bin/podman-compose"
 mounts  = ["PWD", "HOME", "/proc", "/dev", "/tmp"]
 forward = ["TERM", "LANG", "LC_ALL"]

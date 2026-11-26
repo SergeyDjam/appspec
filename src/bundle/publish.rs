@@ -171,6 +171,7 @@ fn manifest_extension(e: &Extension, base_dir: &Path) -> Result<ManifestExtensio
         eprintln!("pinned extension `{}` → {}", e.name, cid);
         return Ok(ManifestExtension {
             name: e.name.clone(),
+            kind: Some(e.kind().as_str().to_string()),
             source: Some(format!("cid:{cid}")),
             cid: Some(cid),
             url: None,
@@ -186,6 +187,7 @@ fn manifest_extension(e: &Extension, base_dir: &Path) -> Result<ManifestExtensio
     };
     Ok(ManifestExtension {
         name: e.name.clone(),
+        kind: Some(e.kind().as_str().to_string()),
         source,
         cid,
         url,
@@ -201,13 +203,51 @@ fn component_mode(c: &super::model::Component) -> &'static str {
     }
 }
 
+/// Inline UTF-8 `[[components.files]].from` files into `content` so the
+/// published spec is self-contained (no adjacent local files needed).
+fn inline_component_files(value: &mut toml::Value, base_dir: &Path) -> Result<()> {
+    let Some(components) = value.get_mut("components").and_then(|c| c.as_array_mut()) else {
+        return Ok(());
+    };
+    for c in components {
+        let Some(table) = c.as_table_mut() else {
+            continue;
+        };
+        let Some(files) = table.get_mut("files").and_then(|f| f.as_array_mut()) else {
+            continue;
+        };
+        for fr in files {
+            let Some(ft) = fr.as_table_mut() else {
+                continue;
+            };
+            let Some(from) = ft.get("from").and_then(|v| v.as_str()).map(str::to_string) else {
+                continue;
+            };
+            let p = super::loader::resolve_relative(&from, base_dir);
+            if !p.is_file() {
+                bail!("bundle file `{from}` not found: {}", p.display());
+            }
+            let bytes = std::fs::read(&p)
+                .with_context(|| format!("reading bundle file {}", p.display()))?;
+            let text = String::from_utf8(bytes).map_err(|_| {
+                anyhow!("bundle file `{from}` is binary; use `content`, `cid` or `url` instead")
+            })?;
+            ft.remove("from");
+            ft.insert("content".into(), toml::Value::String(text));
+        }
+    }
+    Ok(())
+}
+
 /// Publish one bundle spec. Does not rebuild the index.
 pub fn add_bundle(root: &RepoRoot, path: &Path, opts: &AddOpts) -> Result<AddOutcome> {
     let raw =
         std::fs::read(path).with_context(|| format!("reading bundle spec {}", path.display()))?;
     let text = std::str::from_utf8(&raw).context("bundle spec is not valid UTF-8")?;
-    let value: toml::Value =
+    let mut value: toml::Value =
         toml::from_str(text).with_context(|| format!("parsing bundle spec {}", path.display()))?;
+    crate::macros::expand_all(&mut value)
+        .with_context(|| format!("expanding macros in {}", path.display()))?;
     if value.get("package").is_some() {
         bail!(
             "{}: contains both [bundle] and [package] — not a bundle spec",
@@ -245,6 +285,9 @@ pub fn add_bundle(root: &RepoRoot, path: &Path, opts: &AddOpts) -> Result<AddOut
         .filter(|p| !p.as_os_str().is_empty())
         .unwrap_or_else(|| Path::new("."));
 
+    inline_component_files(&mut value, base_dir)?;
+    let spec_bytes = toml::to_string_pretty(&value)?.into_bytes();
+
     let base = manifest_source("base", &file.bundle.base.source, root, base_dir)?;
     let mut components = Vec::with_capacity(file.components.len());
     for c in &file.components {
@@ -265,8 +308,8 @@ pub fn add_bundle(root: &RepoRoot, path: &Path, opts: &AddOpts) -> Result<AddOut
         extensions.push(manifest_extension(e, base_dir)?);
     }
 
-    let bundle_sha256 = sha256_hex(&raw);
-    let bundle_size = raw.len() as u64;
+    let bundle_sha256 = sha256_hex(&spec_bytes);
+    let bundle_size = spec_bytes.len() as u64;
     let manifest = BundleManifestV1 {
         schema: MANIFEST_SCHEMA,
         name: name.clone(),
@@ -324,7 +367,7 @@ pub fn add_bundle(root: &RepoRoot, path: &Path, opts: &AddOpts) -> Result<AddOut
 
     // blobs for the bundle spec and manifest
     let blob = blob_path(&root.path, &bundle_sha256);
-    let created = create_exclusive(&blob, &raw)?;
+    let created = create_exclusive(&blob, &spec_bytes)?;
     if !created && sha256_file(&blob)? != bundle_sha256 {
         bail!("existing blob {} has wrong sha256", blob.display());
     }
@@ -338,7 +381,7 @@ pub fn add_bundle(root: &RepoRoot, path: &Path, opts: &AddOpts) -> Result<AddOut
     }
 
     std::fs::create_dir_all(&pkg_dir)?;
-    atomic_write(&pkg_dir.join("spec.appspec"), &raw)?;
+    atomic_write(&pkg_dir.join("spec.appspec"), &spec_bytes)?;
     atomic_write(&pkg_dir.join("manifest.json"), &manifest_bytes)?;
     atomic_write(&pkg_dir.join("sha256"), bundle_sha256.as_bytes())?;
 

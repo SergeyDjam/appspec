@@ -7,7 +7,12 @@ use super::model::*;
 pub fn load_bundle(path: &Path) -> Result<BundleFile> {
     let text = std::fs::read_to_string(path)
         .with_context(|| format!("bundle spec не читается: {}", path.display()))?;
-    let mut file: BundleFile = toml::from_str(&text)
+    let mut value: toml::Value = toml::from_str(&text)
+        .with_context(|| format!("bundle spec не парсится: {}", path.display()))?;
+    crate::macros::expand_all(&mut value)
+        .with_context(|| format!("expanding macros in {}", path.display()))?;
+    let mut file: BundleFile = value
+        .try_into()
         .with_context(|| format!("bundle spec не парсится: {}", path.display()))?;
     file.normalize()
         .with_context(|| format!("normalizing bundle {}", path.display()))?;
@@ -357,6 +362,17 @@ pub fn resolve_source(
     unreachable!()
 }
 
+/// Recover a spec from SIF labels when `spec.appspec` is not present in the
+/// repo (e.g. pulled from IPFS). Needed for `[runtime].setup` → base entry.
+fn spec_from_sif_labels(sif: &Path) -> Option<crate::spec::Spec> {
+    let labels = crate::repo::inspect::inspect(sif).ok()?;
+    let b64 = labels.get("org.appspec.spec.content.base64")?;
+    use base64::Engine as _;
+    let bytes = base64::engine::general_purpose::STANDARD.decode(b64).ok()?;
+    let text = std::str::from_utf8(&bytes).ok()?;
+    crate::load_spec_from_text(text).ok()
+}
+
 fn resolve_repo_source(
     pv: &str,
     label: &str,
@@ -403,11 +419,10 @@ fn resolve_repo_source(
         // Fallback to canonical name for legacy repos.
         pkg_dir.join("spec.appspec")
     };
-    let runtime = if spec_path.is_file() {
-        crate::load_spec(&spec_path).ok().map(|s| s.runtime)
-    } else {
-        None
-    };
+    let spec = crate::load_spec(&spec_path)
+        .ok()
+        .or_else(|| spec_from_sif_labels(&sif));
+    let runtime = spec.map(|s| s.runtime);
     let setup = runtime.as_ref().and_then(|r| r.setup.clone());
     Ok(ResolvedSource {
         sif,
@@ -698,7 +713,9 @@ fn prepare_as_archive(
     parse_vsix: bool,
 ) -> Result<PreparedExtension> {
     let src_lower = src.to_string_lossy().to_ascii_lowercase();
-    let is_zip = src_lower.ends_with(".zip") || src_lower.ends_with(".vsix");
+    // CID/URL cache files may have no extension (`<cid>.bin`); `parse_vsix`
+    // means the caller already knows it is a VSIX zip.
+    let is_zip = parse_vsix || src_lower.ends_with(".zip") || src_lower.ends_with(".vsix");
 
     let tmp_root = ext_dir_root.join(format!(".tmp-extract-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&tmp_root);

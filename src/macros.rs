@@ -177,8 +177,11 @@ fn parse_macro(inner: &str) -> (String, Option<String>, bool) {
 fn compute_builtins(root: &toml::Value) -> BTreeMap<String, String> {
     let mut m = BTreeMap::new();
 
-    // [package]
-    let pkg = root.get("package").and_then(|v| v.as_table());
+    // [package] for app specs, [bundle] for bundle specs.
+    let pkg = root
+        .get("package")
+        .and_then(|v| v.as_table())
+        .or_else(|| root.get("bundle").and_then(|v| v.as_table()));
     let name = pkg
         .and_then(|p| p.get("name"))
         .and_then(|v| v.as_str())

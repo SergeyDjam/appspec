@@ -74,6 +74,14 @@ provide = "git"
 `bundle.lock.toml` хранит канонический ref (`foo:1.2.3-1`) независимо от
 того, что было написано в `spec`.
 
+### Макросы
+
+RPM-style макросы раскрываются и в bundle-спеке (0.6.10):
+`%{_bindir}`, `%{_sbindir}`, `%{_libdir}`, `%{name}`, `%{version}` и
+пользовательские `[macros]`. `name`/`version` берутся из `[bundle]`;
+пути — со стандартными значениями (`/usr/bin`, `/usr/sbin`, `/usr/lib64`, …).
+Опубликованный `spec.appspec` содержит уже раскрытые значения.
+
 ## Секция components
 
 | Ключ | Тип | Default | Описание |
@@ -189,6 +197,10 @@ Codegen распознаёт podman-подобные компоненты по:
 | requires | [string] | Имена CLI, которые должны быть в base |
 
 Ровно один из file, cid, url — либо ничего (значит online через Open VSX).
+Для расширений из CID/URL тип (`vsix`/`file`/`archive`) сохраняется в
+манифесте; если в старом манифесте его нет, тип выводится из исходного
+`file`/`url`. Кэш CID (`.bin`) для VSIX всё равно распаковывается через
+`unzip`, а не `tar` (0.6.13).
 
 Подготовленные расширения хранятся в BUNDLE_CACHE/extensions/ID-VERSION.
 В base-инстанс монтируется BUNDLE_DIR/extensions как каталог расширений
@@ -332,11 +344,20 @@ appspec repo add-bundle vscodium-bundle.appspec --version 1.0 --release 2
 в IPFS (`ipfs add --pin`) и сохраняется в манифесте как `cid`. Без `ipfs`
 используйте `cid` или `url`.
 
+При публикации UTF-8 файлы из `[[components.files]].from` встраиваются в
+сохранённый `spec.appspec` как `content`, чтобы bundle был
+самодостаточным (например `libvirtd-wrapper.sh`). Бинарные файлы нужно
+передавать через `content`/URL/CID.
+
 С 0.6.3 работают `repo pull` bundle (path/HTTP/IPFS/IPNS, с рекурсивным
 pull зависимостей) и `appspec run <bundle-name>`: манифест подставляет
 канонические `name:version-release`, launcher собирается локально.
 
 С 0.6.4 `repo pin` для bundle пинит оба блоба (bundle spec + manifest) и
-обновляет `ipfs_cid`/`manifest_ipfs_cid`. С 0.6.5 `repo export-oci` и
+обновляет `ipfs_cid`/`manifest_ipfs_cid`.
+
+Если пакет получен из IPFS и `spec.appspec` рядом нет, base entry и
+`[runtime]` восстанавливаются из лейблов SIF (`apptainer inspect`), так что
+`[runtime].setup` → `[bundle.base].entry` продолжает работать (0.6.12). С 0.6.5 `repo export-oci` и
 `repo pull --from oci://` поддерживают bundle (агрегированный JSON:
 spec + manifest); `repo ls|show|check|gc` понимают `kind = "bundle"`.
