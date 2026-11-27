@@ -150,6 +150,7 @@ fn install_package_from_repo() {
 
     let bin = f._tmp.path().join("bin");
     let data = f._tmp.path().join("data");
+    let cache = f._tmp.path().join("cache");
     f.cmd()
         .args([
             "install",
@@ -160,6 +161,7 @@ fn install_package_from_repo() {
         ])
         .env("XDG_BIN_HOME", &bin)
         .env("XDG_DATA_HOME", &data)
+        .env("XDG_CACHE_HOME", &cache)
         .assert()
         .success();
 
