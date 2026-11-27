@@ -999,18 +999,54 @@ fn cmd_run(
     }
 }
 
+fn writable_dir(p: &Path) -> bool {
+    if fs::create_dir_all(p).is_err() {
+        return false;
+    }
+    let probe = p.join(format!(".write-probe-{}", std::process::id()));
+    match fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&probe)
+    {
+        Ok(_) => {
+            let _ = fs::remove_file(&probe);
+            true
+        }
+        Err(_) => false,
+    }
+}
+
+/// Writable cache directory for launchers/install staging.
+/// Falls back to `$XDG_RUNTIME_DIR` and `/tmp` when the home cache is
+/// read-only (e.g. CI runners with an unwritable `$HOME`).
 fn run_cache_dir() -> PathBuf {
+    let mut candidates: Vec<PathBuf> = Vec::new();
     if let Ok(v) = std::env::var("XDG_CACHE_HOME") {
         if !v.is_empty() {
-            return PathBuf::from(v).join("appspec/run");
+            candidates.push(PathBuf::from(v).join("appspec/run"));
         }
     }
     if let Ok(h) = std::env::var("HOME") {
         if !h.is_empty() {
-            return PathBuf::from(h).join(".cache/appspec/run");
+            candidates.push(PathBuf::from(h).join(".cache/appspec/run"));
         }
     }
-    PathBuf::from("/tmp/appspec-run")
+    if let Ok(v) = std::env::var("XDG_RUNTIME_DIR") {
+        if !v.is_empty() {
+            candidates.push(PathBuf::from(v).join("appspec/run"));
+        }
+    }
+    let uid = unsafe { libc::geteuid() };
+    candidates.push(PathBuf::from(format!("/tmp/appspec-run-{uid}")));
+    candidates.push(PathBuf::from("/tmp/appspec-run"));
+
+    for c in &candidates {
+        if writable_dir(c) {
+            return c.clone();
+        }
+    }
+    candidates.remove(0)
 }
 
 fn open_local_repo_for_run(root: Option<&Path>) -> Result<crate::repo::layout::RepoRoot> {
