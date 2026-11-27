@@ -332,7 +332,7 @@ $ appspec repo serve --listen 127.0.0.1:8844
 * `source.ipfs` — задел; read-команды возвращают `ipfs:// show not supported in v1`.
 * `token = "keyring:…"` — v2.
 * `proxy` в профиле — задел; v1 использует `HTTP_PROXY`/`HTTPS_PROXY` из env.
-* `repo serve` и `repo add` на одном `<root>` используют **два разных** лока (server `write_lock` vs `<root>/.lock`). Параллельная запись возможна; фикс — Phase 2 (единый lock).
+* `repo serve` и `repo add` на одном `<root>` теперь используют **единый** `<root>/.lock` (0.6.14); server `write_lock` остаётся только для сериализации потоков внутри одного процесса.
 
 ---
 

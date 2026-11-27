@@ -376,6 +376,66 @@ fn pull_bundle_from_path_recurses_into_components() {
 }
 
 #[test]
+fn install_bundle_from_repo() {
+    let (tmp, root) = make_repo();
+    let bundle = write_bundle(tmp.path(), "testbundle", "base:0.0.1-1", "git:0.0.1-1");
+    appspec()
+        .args([
+            "repo",
+            "add",
+            bundle.to_str().unwrap(),
+            "--version",
+            "1.0",
+            "--root",
+            root.to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+
+    let bin = tmp.path().join("bin");
+    let cache = tmp.path().join("cache");
+    let data = tmp.path().join("data");
+    appspec()
+        .args([
+            "install",
+            "testbundle",
+            "--root",
+            root.to_str().unwrap(),
+            "--no-desktop",
+        ])
+        .env("XDG_BIN_HOME", &bin)
+        .env("XDG_CACHE_HOME", &cache)
+        .env("XDG_DATA_HOME", &data)
+        .assert()
+        .success();
+
+    let launcher = bin.join("testbundle");
+    assert!(launcher.is_file(), "bundle launcher not installed");
+    let text = fs::read_to_string(&launcher).unwrap();
+    assert!(text.contains("#!/bin/sh"));
+
+    // `run <package>` must use the installed launcher without touching the
+    // repository (dry-run stops before executing it).
+    appspec()
+        .args(["run", "testbundle", "--dry-run"])
+        .env("XDG_BIN_HOME", &bin)
+        .env("XDG_CACHE_HOME", &cache)
+        .env("XDG_DATA_HOME", &data)
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("using installed launcher"));
+
+    appspec()
+        .args(["uninstall", "testbundle"])
+        .env("XDG_BIN_HOME", &bin)
+        .env("XDG_CACHE_HOME", &cache)
+        .env("XDG_DATA_HOME", &data)
+        .assert()
+        .success();
+    assert!(!launcher.exists(), "bundle launcher not removed");
+}
+
+#[test]
 fn run_bundle_package_dry_run_builds_launcher() {
     let (tmp, root) = make_repo();
     let bundle = write_bundle(tmp.path(), "testbundle", "base:0.0.1-1", "git:0.0.1-1");

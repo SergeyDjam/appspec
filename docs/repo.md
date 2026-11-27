@@ -215,6 +215,36 @@ appspec repo export-oci --registry ghcr.io/user appspec-index
   оставались проверяемыми. `repo pull --from oci://...` восстанавливает
   bundle и рекурсивно тянет зависимости.
 
+### Установка пакета из репозитория
+
+```sh
+appspec install vscodium-dev
+appspec install vscodium --from ipns://k51...
+appspec install git:2.47.2-1 --root /srv/appspec-repo
+```
+
+Без локального `.appspec` команда резолвит пакет (local + remote, самая
+новая версия), при необходимости делает pull и:
+
+- SIF-пакет ставит через обычный install (SIF, setup, launcher, desktop);
+- bundle собирает launcher и кладёт его в `$XDG_BIN_HOME`/`~/.local/bin`
+  (или `/usr/local/bin` для `--global`).
+
+Флаги источника: `--from`, `--profile`, `--root`, `--trusted-key`,
+`--allow-unsigned`. `--custom` требует локальный спек.
+
+Удаление установленного пакета:
+
+```sh
+appspec uninstall vscodium-dev
+appspec uninstall vscodium --global
+```
+
+Bundle удаляет установленный launcher; SIF — все файлы из install-manifest
+(SIF, setup, launcher, desktop/icons) и state. Для старых установок есть
+fallback по `<bin-dir>/<name>` и install-manifest. Путь к локальному
+`.appspec` работает как раньше.
+
 ## Спека: `[dependencies]` и `[build].base_digest`
 
 ### `[dependencies]` (E7)
@@ -513,9 +543,20 @@ appspec run foo:2.2.0-1               # точно 2.2.0 release=1
 Файл (не пакет): `appspec run ./foo.appspec`, `/abs/foo.appspec`,
 `foo.appspec`.
 
-`run` сравнивает локальный index и все настроенные remote-источники и
-берёт **самую новую** версию (exact-ref резолвится в тот же ключ). Это
-важно, когда локальный кэш содержит старую версию пакета.
+Порядок `run`:
+
+1. установленный launcher (`~/.local/bin/<name>` / install manifest) —
+   запускается сразу, без обращения к индексам;
+2. локальный index → самая новая локальная версия;
+3. remote-источники.
+
+`--refresh` игнорирует установленный launcher и заново резолвит из
+репозитория. То же делают `--from`/`--profile`/`--root` и exact-ref
+(`foo:1.0-1`).
+
+При резолве из индексов `run` сравнивает локальный index и все
+настроенные remote-источники и берёт **самую новую** версию. Это важно,
+когда локальный кэш содержит старую версию пакета.
 
 Если версия имеет `kind = "bundle"`, `run` подтягивает bundle (spec +
 manifest + зависимости), заменяет источники на канонические
