@@ -63,6 +63,9 @@ enum Cmd {
         /// Принять неподписанный index.json
         #[arg(long)]
         allow_unsigned: bool,
+        /// Ignore installed launchers and resolve/pull from the repository
+        #[arg(long)]
+        refresh: bool,
         /// Только подготовить (pull + launcher), не запускать
         #[arg(long)]
         dry_run: bool,
@@ -87,9 +90,10 @@ enum Cmd {
         purge: bool,
     },
 
-    /// Установить SIF + launcher + desktop-интеграцию
+    /// Установить SIF/bundle: локальный `.appspec` или пакет из репозитория
     Install {
-        spec: PathBuf,
+        /// Путь к `.appspec` или имя пакета (`foo`, `foo:1.0`)
+        spec: String,
         #[arg(long, conflicts_with_all = ["global", "custom"])]
         user: bool,
         #[arg(long, conflicts_with_all = ["user", "custom"])]
@@ -100,11 +104,27 @@ enum Cmd {
         no_desktop: bool,
         #[arg(long)]
         ipfs: bool,
+        /// Источник для пакета: PATH | http:// | ipns:// | ipfs:// | oci://
+        #[arg(long)]
+        from: Option<String>,
+        /// Профиль из repos.toml
+        #[arg(long)]
+        profile: Option<String>,
+        /// Локальный репозиторий (sink)
+        #[arg(long)]
+        root: Option<PathBuf>,
+        /// ed25519 pubkey для проверки index.json (repeatable)
+        #[arg(long = "trusted-key")]
+        trusted_keys: Vec<PathBuf>,
+        /// Принять неподписанный index.json
+        #[arg(long)]
+        allow_unsigned: bool,
     },
 
-    /// Удалить всё, что было установлено
+    /// Удалить установленный пакет или локальный `.appspec`
     Uninstall {
-        spec: PathBuf,
+        /// Путь к `.appspec` или имя установленного пакета
+        spec: String,
         #[arg(long, conflicts_with = "global")]
         user: bool,
         #[arg(long, conflicts_with = "user")]
@@ -161,6 +181,7 @@ fn main() {
             root,
             trusted_keys,
             allow_unsigned,
+            refresh,
             dry_run,
         } => cmd_run(
             &spec,
@@ -169,6 +190,7 @@ fn main() {
             root.as_deref(),
             &trusted_keys,
             allow_unsigned,
+            refresh,
             dry_run,
         )
         .map(|_| 0),
@@ -176,7 +198,7 @@ fn main() {
         Cmd::All { spec, force } => {
             let s = spec.display().to_string();
             cmd_build(&spec, force)
-                .and_then(|_| cmd_run(&s, None, None, None, &[], false, false))
+                .and_then(|_| cmd_run(&s, None, None, None, &[], false, false, false))
                 .map(|_| 0)
         }
         Cmd::Clean { spec, purge } => cmd_clean(&spec, purge).map(|_| 0),
@@ -188,6 +210,11 @@ fn main() {
             custom,
             no_desktop,
             ipfs,
+            from,
+            profile,
+            root,
+            trusted_keys,
+            allow_unsigned,
         } => {
             let _ = user;
             let scope = if global {
@@ -197,18 +224,27 @@ fn main() {
             } else {
                 install::Scope::User
             };
-            install::install(
-                &spec,
-                install::InstallOpts {
-                    scope,
-                    with_desktop: !no_desktop,
-                    with_ipfs: ipfs,
-                },
-            )
-            .map(|m| {
-                log(format!("installed: {} (scope={})", m.name, m.scope));
-                0
-            })
+            let opts = install::InstallOpts {
+                scope,
+                with_desktop: !no_desktop,
+                with_ipfs: ipfs,
+            };
+            if looks_like_spec_path(&spec) {
+                install::install(Path::new(&spec), opts).map(|m| {
+                    log(format!("installed: {} (scope={})", m.name, m.scope));
+                    0
+                })
+            } else {
+                install_package(
+                    &spec,
+                    opts,
+                    from.as_deref(),
+                    profile.as_deref(),
+                    root.as_deref(),
+                    &trusted_keys,
+                    allow_unsigned,
+                )
+            }
         }
 
         Cmd::Uninstall { spec, user, global } => {
@@ -218,7 +254,11 @@ fn main() {
             } else {
                 install::Scope::User
             };
-            install::uninstall(&spec, scope).map(|_| 0)
+            if looks_like_spec_path(&spec) {
+                install::uninstall(Path::new(&spec), scope).map(|_| 0)
+            } else {
+                uninstall_package(&spec, scope)
+            }
         }
 
         Cmd::IpfsPublish { spec, no_pin } => cmd_ipfs_publish(&spec, no_pin).map(|_| 0),
@@ -926,6 +966,7 @@ fn cmd_repo_add(mut a: repo::commands::AddArgs) -> Result<i32> {
     Ok(0)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn cmd_run(
     spec: &str,
     from: Option<&str>,
@@ -933,6 +974,7 @@ fn cmd_run(
     root: Option<&Path>,
     trusted_keys: &[PathBuf],
     allow_unsigned: bool,
+    refresh: bool,
     dry_run: bool,
 ) -> Result<()> {
     if is_package_name(spec) {
@@ -943,6 +985,7 @@ fn cmd_run(
             root,
             trusted_keys,
             allow_unsigned,
+            refresh,
             dry_run,
         );
     }
@@ -1199,7 +1242,6 @@ fn cmd_run_bundle_package(
     }
 
     let bname = bundle_name(&spec_path)?;
-    stop_bundle_base_instances(&bname);
     let launcher = run_dir.join(format!("run.{}.sh", bname));
     if !launcher.is_file() {
         bail!("launcher не найден после сборки: {}", launcher.display());
@@ -1208,6 +1250,7 @@ fn cmd_run_bundle_package(
         log("dry-run: not executing");
         return Ok(());
     }
+    stop_bundle_base_instances(&bname);
     log(format!("Running {}", launcher.display()));
     let status = Command::new("/bin/sh")
         .arg(&launcher)
@@ -1219,44 +1262,28 @@ fn cmd_run_bundle_package(
     Ok(())
 }
 
-fn cmd_run_package(
-    target: &str,
+fn resolve_package_target(
+    local_root: &crate::repo::layout::RepoRoot,
+    name: &str,
+    ver_spec: Option<&str>,
     from: Option<&str>,
     profile: Option<&str>,
-    root: Option<&Path>,
-    trusted_keys: &[PathBuf],
-    allow_unsigned: bool,
-    dry_run: bool,
-) -> Result<()> {
-    let (name, ver_spec) = crate::repo::run_package::parse_package_ref(target)?;
-    log(format!("run: package={} ver_spec={:?}", name, ver_spec));
-
-    let local_root = open_local_repo_for_run(root)?;
-
-    // 1. try local index
+) -> Result<Option<(String, crate::repo::meta::IndexVersion, String)>> {
     let mut resolved: Option<(String, crate::repo::meta::IndexVersion, String)> = None;
     if local_root.index_path().is_file() {
         if let Ok(text) = fs::read_to_string(local_root.index_path()) {
             if let Ok(idx) = serde_json::from_str::<crate::repo::meta::IndexV1>(&text) {
-                if let Ok((k, v)) =
-                    crate::repo::run_package::pick_version(&idx, &name, ver_spec.as_deref())
-                {
+                if let Ok((k, v)) = crate::repo::run_package::pick_version(&idx, name, ver_spec) {
                     resolved = Some((k.clone(), v.clone(), local_root.path.display().to_string()));
                 }
             }
         }
     }
-
-    // 2. query remote sources even if the local cache has a version: choose
-    // the newest across local + remote. Otherwise a stale local index wins
-    // forever (e.g. 0.1.0 vs 0.1.1 in IPNS).
     let sources = resolve_run_sources(from, profile)?;
     for src in &sources {
         if let Ok(text) = crate::repo::commands::read_index_text_from(src) {
             if let Ok(idx) = serde_json::from_str::<crate::repo::meta::IndexV1>(&text) {
-                if let Ok((k, v)) =
-                    crate::repo::run_package::pick_version(&idx, &name, ver_spec.as_deref())
-                {
+                if let Ok((k, v)) = crate::repo::run_package::pick_version(&idx, name, ver_spec) {
                     let better = match &resolved {
                         Some((_, cur, _)) => v.sort_key() > cur.sort_key(),
                         None => true,
@@ -1268,14 +1295,391 @@ fn cmd_run_package(
             }
         }
     }
+    Ok(resolved)
+}
 
-    let (ver_key, ver, origin) = resolved.ok_or_else(|| {
-        anyhow!(
-            "package `{}` not found (local={}, or in remote sources)",
-            name,
-            local_root.path.display()
+fn looks_like_spec_path(s: &str) -> bool {
+    s.contains('/')
+        || s.starts_with('.')
+        || s.starts_with('~')
+        || s.ends_with(".appspec")
+        || Path::new(s).is_file()
+}
+
+fn read_install_registry(scope: crate::install::Scope, name: &str) -> Option<serde_json::Value> {
+    let path = installed_registry_path(scope, name).ok()?;
+    let text = fs::read_to_string(path).ok()?;
+    serde_json::from_str(&text).ok()
+}
+
+fn remove_installed_files(state_dir: &Path) -> Result<usize> {
+    let manifest_path = state_dir.join("manifest.json");
+    let Ok(text) = fs::read_to_string(&manifest_path) else {
+        return Ok(0);
+    };
+    let v: serde_json::Value = serde_json::from_str(&text)?;
+    let mut removed = 0;
+    if let Some(files) = v.get("files").and_then(|f| f.as_array()) {
+        for f in files {
+            let Some(s) = f.as_str() else { continue };
+            let p = PathBuf::from(s);
+            if p.is_file() {
+                fs::remove_file(&p)?;
+                removed += 1;
+            } else if p.is_dir() {
+                fs::remove_dir_all(&p)?;
+                removed += 1;
+            }
+        }
+    }
+    if state_dir.exists() {
+        let _ = fs::remove_dir_all(state_dir);
+    }
+    Ok(removed)
+}
+
+fn uninstall_package(name: &str, scope: crate::install::Scope) -> Result<i32> {
+    let mut removed = 0usize;
+    let registry = read_install_registry(scope, name);
+    let mut launcher = registry
+        .as_ref()
+        .and_then(|v| v.get("launcher"))
+        .and_then(|v| v.as_str())
+        .map(PathBuf::from);
+
+    // SIF install manifest (works for installs made before the registry).
+    let base = match scope {
+        crate::install::Scope::User => std::env::var_os("XDG_DATA_HOME")
+            .map(PathBuf::from)
+            .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local/share"))),
+        crate::install::Scope::Global => Some(PathBuf::from("/var/lib")),
+        crate::install::Scope::Custom => None,
+    };
+    if let Some(base) = base {
+        removed += remove_installed_files(&base.join("appspec").join(name))?;
+    }
+
+    if launcher.is_none() {
+        if let Ok(bin) = install_bin_dir(scope) {
+            let p = bin.join(name);
+            if p.is_file() {
+                launcher = Some(p);
+            }
+        }
+    }
+    if let Some(l) = launcher {
+        if l.is_file() {
+            fs::remove_file(&l)?;
+            removed += 1;
+            log(format!("removed {}", l.display()));
+        }
+    }
+
+    if let Ok(path) = installed_registry_path(scope, name) {
+        if path.is_file() {
+            let _ = fs::remove_file(&path);
+            removed += 1;
+        }
+    }
+
+    if removed == 0 {
+        bail!("not installed: {}", name);
+    }
+    log(format!("uninstalled: {}", name));
+    Ok(0)
+}
+
+fn installed_registry_dir(scope: crate::install::Scope) -> Result<PathBuf> {
+    match scope {
+        crate::install::Scope::User => {
+            let base = std::env::var_os("XDG_DATA_HOME")
+                .map(PathBuf::from)
+                .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local/share")))
+                .ok_or_else(|| anyhow!("$HOME/XDG_DATA_HOME не установлен"))?;
+            Ok(base.join("appspec/installed"))
+        }
+        crate::install::Scope::Global => Ok(PathBuf::from("/var/lib/appspec/installed")),
+        crate::install::Scope::Custom => {
+            bail!("scope = custom для реестра установленных пакетов не поддерживается")
+        }
+    }
+}
+
+fn installed_registry_path(scope: crate::install::Scope, name: &str) -> Result<PathBuf> {
+    let safe: String = name
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '.' || c == '-' || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    Ok(installed_registry_dir(scope)?.join(format!("{safe}.json")))
+}
+
+fn write_install_registry(
+    scope: crate::install::Scope,
+    name: &str,
+    kind: &str,
+    version: &str,
+    launcher: &Path,
+) -> Result<()> {
+    let path = installed_registry_path(scope, name)?;
+    if let Some(p) = path.parent() {
+        fs::create_dir_all(p)?;
+    }
+    let record = serde_json::json!({
+        "name": name,
+        "kind": kind,
+        "version": version,
+        "launcher": launcher.display().to_string(),
+        "installed_at": crate::repo::util::now_iso8601(),
+    });
+    fs::write(&path, serde_json::to_vec_pretty(&record)?)
+        .with_context(|| format!("writing {}", path.display()))?;
+    Ok(())
+}
+
+fn find_installed_launcher(name: &str) -> Option<PathBuf> {
+    for scope in [crate::install::Scope::User, crate::install::Scope::Global] {
+        if let Ok(path) = installed_registry_path(scope, name) {
+            if let Ok(text) = fs::read_to_string(&path) {
+                if let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) {
+                    if let Some(l) = v.get("launcher").and_then(|x| x.as_str()) {
+                        let p = PathBuf::from(l);
+                        if p.is_file() {
+                            return Some(p);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    // Fallback for launchers installed before the registry existed:
+    // `<bin-dir>/<package>` (bundles use the package name).
+    for dir in [
+        std::env::var_os("XDG_BIN_HOME").map(PathBuf::from),
+        std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local/bin")),
+        Some(PathBuf::from("/usr/local/bin")),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        let p = dir.join(name);
+        if p.is_file() {
+            return Some(p);
+        }
+    }
+
+    // Fallback: install manifest of a SIF package
+    // ($XDG_DATA_HOME/appspec/<name>/manifest.json).
+    for base in [
+        std::env::var_os("XDG_DATA_HOME").map(PathBuf::from),
+        std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local/share")),
+        Some(PathBuf::from("/var/lib")),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        let path = base.join(format!("appspec/{name}/manifest.json"));
+        if let Ok(text) = fs::read_to_string(&path) {
+            if let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) {
+                if let Some(l) = v.get("launcher").and_then(|x| x.as_str()) {
+                    let p = PathBuf::from(l);
+                    if p.is_file() {
+                        return Some(p);
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
+fn install_bin_dir(scope: crate::install::Scope) -> Result<PathBuf> {
+    match scope {
+        crate::install::Scope::User => {
+            if let Some(v) = std::env::var_os("XDG_BIN_HOME") {
+                return Ok(PathBuf::from(v));
+            }
+            let home = std::env::var_os("HOME")
+                .map(PathBuf::from)
+                .ok_or_else(|| anyhow!("$HOME не установлен"))?;
+            Ok(home.join(".local/bin"))
+        }
+        crate::install::Scope::Global => Ok(PathBuf::from("/usr/local/bin")),
+        crate::install::Scope::Custom => bail!(
+            "scope = custom для пакета без локального `.appspec` не поддерживается; \
+             передайте путь к спеку"
+        ),
+    }
+}
+
+fn spec_text_from_sif(sif: &Path) -> Result<String> {
+    let labels = crate::repo::inspect::inspect(sif)?;
+    let b64 = labels
+        .get("org.appspec.spec.content.base64")
+        .ok_or_else(|| anyhow!("SIF has no org.appspec.spec.content.base64 label"))?;
+    use base64::Engine as _;
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(b64)
+        .context("decoding SIF spec label")?;
+    String::from_utf8(bytes).context("SIF spec label is not UTF-8")
+}
+
+fn install_package(
+    target: &str,
+    opts: crate::install::InstallOpts,
+    from: Option<&str>,
+    profile: Option<&str>,
+    root: Option<&Path>,
+    trusted_keys: &[PathBuf],
+    allow_unsigned: bool,
+) -> Result<i32> {
+    let (name, ver_spec) = crate::repo::run_package::parse_package_ref(target)?;
+    let local_root = open_local_repo_for_run(root)?;
+    let (ver_key, ver, origin) =
+        resolve_package_target(&local_root, &name, ver_spec.as_deref(), from, profile)?
+            .ok_or_else(|| {
+                anyhow!(
+                    "package `{}` not found (local={}, or in remote sources)",
+                    name,
+                    local_root.path.display()
+                )
+            })?;
+    let scope = opts.scope;
+
+    let pkg_dir = local_root.packages_dir().join(&name).join(&ver_key);
+    let blob = if ver.sif_sha256.len() >= 2 {
+        Some(
+            local_root
+                .path
+                .join("blobs/sha256")
+                .join(&ver.sif_sha256[..2])
+                .join(&ver.sif_sha256[2..]),
         )
-    })?;
+    } else {
+        None
+    };
+
+    if ver.is_bundle() {
+        cmd_run_bundle_package(
+            &local_root,
+            &name,
+            &ver_key,
+            &ver,
+            &origin,
+            trusted_keys,
+            allow_unsigned,
+            true,
+        )?;
+        let spec_path = pkg_dir.join("spec.appspec");
+        let bname = bundle_name(&spec_path)?;
+        let run_dir =
+            run_cache_dir().join(format!("bundle.{}.{}", name, ver_key.replace('/', "_")));
+        let launcher = run_dir.join(format!("run.{}.sh", bname));
+        if !launcher.is_file() {
+            bail!("launcher не найден после сборки: {}", launcher.display());
+        }
+        let bin_dir = install_bin_dir(scope)?;
+        fs::create_dir_all(&bin_dir)?;
+        let dst = bin_dir.join(&bname);
+        fs::copy(&launcher, &dst)
+            .with_context(|| format!("copy {} → {}", launcher.display(), dst.display()))?;
+        set_exec(&dst)?;
+        write_install_registry(scope, &name, "bundle", &ver_key, &dst)?;
+        log(format!("installed bundle launcher: {}", dst.display()));
+        return Ok(0);
+    }
+
+    if blob.as_ref().map(|p| !p.is_file()).unwrap_or(true) {
+        log(format!("pull {}:{} from {}", name, ver_key, origin));
+        let pull_opts = crate::repo::pull::PullOpts {
+            sources: vec![origin.clone()],
+            via: None,
+            spec_only: false,
+            sif_out: None,
+            trusted_key: trusted_keys.first().cloned(),
+            allow_unsigned,
+        };
+        crate::repo::pull::pull(&local_root, &format!("{}:{}", name, ver_key), pull_opts)?;
+    }
+    let sif = blob.ok_or_else(|| anyhow!("package has no sif_sha256: {}:{}", name, ver_key))?;
+    if !sif.is_file() {
+        bail!("SIF blob missing after pull: {}", sif.display());
+    }
+
+    let spec_text = match fs::read_to_string(pkg_dir.join("spec.appspec")) {
+        Ok(t) => t,
+        Err(_) => spec_text_from_sif(&sif)?,
+    };
+    let spec = crate::load_spec_from_text(&spec_text)?;
+    let work = run_cache_dir().join(format!("install.{}.{}", name, ver_key.replace('/', "_")));
+    fs::create_dir_all(&work)?;
+    let spec_path = work.join("spec.appspec");
+    fs::write(&spec_path, &spec_text)?;
+    let sif_name = spec.sif_file();
+    fs::copy(&sif, work.join(&sif_name))
+        .with_context(|| format!("copy {} → {}/{}", sif.display(), work.display(), sif_name))?;
+    let manifest = crate::install::install(&spec_path, opts)?;
+    let _ = fs::remove_dir_all(&work);
+    write_install_registry(scope, &name, "sif", &ver_key, &manifest.launcher)?;
+    log(format!(
+        "installed: {} (scope={})",
+        manifest.name, manifest.scope
+    ));
+    Ok(0)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn cmd_run_package(
+    target: &str,
+    from: Option<&str>,
+    profile: Option<&str>,
+    root: Option<&Path>,
+    trusted_keys: &[PathBuf],
+    allow_unsigned: bool,
+    refresh: bool,
+    dry_run: bool,
+) -> Result<()> {
+    let (name, ver_spec) = crate::repo::run_package::parse_package_ref(target)?;
+    log(format!("run: package={} ver_spec={:?}", name, ver_spec));
+
+    if !refresh
+        && from.is_none()
+        && profile.is_none()
+        && root.is_none()
+        && matches!(ver_spec.as_deref(), None | Some("latest"))
+    {
+        if let Some(launcher) = find_installed_launcher(&name) {
+            log(format!("using installed launcher: {}", launcher.display()));
+            if dry_run {
+                log("dry-run: not executing");
+                return Ok(());
+            }
+            let status = Command::new("/bin/sh")
+                .arg(&launcher)
+                .status()
+                .with_context(|| format!("spawning {}", launcher.display()))?;
+            if !status.success() {
+                bail!("installed launcher вернул ошибку");
+            }
+            return Ok(());
+        }
+    }
+
+    let local_root = open_local_repo_for_run(root)?;
+    let (ver_key, ver, origin) =
+        resolve_package_target(&local_root, &name, ver_spec.as_deref(), from, profile)?
+            .ok_or_else(|| {
+                anyhow!(
+                    "package `{}` not found (local={}, or in remote sources)",
+                    name,
+                    local_root.path.display()
+                )
+            })?;
     if ver.is_bundle() {
         return cmd_run_bundle_package(
             &local_root,

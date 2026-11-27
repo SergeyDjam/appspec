@@ -144,6 +144,44 @@ fn add_appspec_does_not_need_version_flag() {
 }
 
 #[test]
+fn install_package_from_repo() {
+    let f = fixture(true);
+    run_add(&f, &[]).success();
+
+    let bin = f._tmp.path().join("bin");
+    let data = f._tmp.path().join("data");
+    let cache = f._tmp.path().join("cache");
+    f.cmd()
+        .args([
+            "install",
+            "app",
+            "--root",
+            f.repo.to_str().unwrap(),
+            "--no-desktop",
+        ])
+        .env("XDG_BIN_HOME", &bin)
+        .env("XDG_DATA_HOME", &data)
+        .env("XDG_CACHE_HOME", &cache)
+        .assert()
+        .success();
+
+    assert!(bin.join("app").is_file(), "launcher not installed");
+    assert!(
+        data.join("apptainer/app.sif").is_file(),
+        "SIF not installed"
+    );
+
+    f.cmd()
+        .args(["uninstall", "app"])
+        .env("XDG_BIN_HOME", &bin)
+        .env("XDG_DATA_HOME", &data)
+        .assert()
+        .success();
+    assert!(!bin.join("app").exists(), "launcher not removed");
+    assert!(!data.join("apptainer/app.sif").exists(), "SIF not removed");
+}
+
+#[test]
 fn add_bundle_auto_publishes_local_dependencies() {
     let f = fixture(true);
     let bundle = f.dir.join("bundle.appspec");

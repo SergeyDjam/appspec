@@ -5,6 +5,65 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.17] - 2026-11-27
+
+### Added
+
+- **`appspec uninstall <package>`** removes a package installed by name:
+  - reads `$XDG_DATA_HOME/appspec/installed/<name>.json` (global:
+    `/var/lib/appspec/installed`);
+  - bundle: removes the installed launcher;
+  - SIF: removes all files from the install manifest (SIF, setup, launcher,
+    desktop/icons) and the state dir;
+  - falls back to `<bin-dir>/<name>` and
+    `$XDG_DATA_HOME/appspec/<name>/manifest.json` for installs made before
+    the registry existed.
+  Local `.appspec` paths still use the old path-based uninstall.
+
+## [0.6.16] - 2026-11-27
+
+### Changed
+
+- **`appspec run <package>` prefers installed launchers.** New behaviour:
+  1. installed package (`~/.local/bin/<name>` or the SIF install manifest)
+     → run it directly;
+  2. otherwise local index → newest local version;
+  3. otherwise/`--refresh` → remote sources.
+  `--refresh` bypasses installed launchers and re-resolves from repositories.
+  Exact refs (`foo:1.0-1`) and explicit `--from`/`--profile`/`--root` also
+  bypass the installed shortcut.
+- `appspec install <package>` writes
+  `$XDG_DATA_HOME/appspec/installed/<name>.json` with kind, version and
+  launcher path (global: `/var/lib/appspec/installed`).
+
+## [0.6.15] - 2026-11-27
+
+### Added
+
+- **`appspec install <package>` from the repository** (no local `.appspec`
+  required):
+  - resolves the newest version across local cache and configured remote
+    sources (`--from`/`--profile`/`$APPSPEC_REPO`) and pulls it if needed;
+  - **SIF packages** go through the normal install path: SIF, `setup.sh`,
+    launcher, optional desktop/icon (spec is recovered from SIF labels when
+    `spec.appspec` is absent);
+  - **bundle packages** build their launcher and install it to
+    `$XDG_BIN_HOME` (or `~/.local/bin`; `/usr/local/bin` for `--global`).
+  - New flags: `--from`, `--profile`, `--root`, `--trusted-key`,
+    `--allow-unsigned`. `--custom` requires a local spec.
+
+`appspec uninstall` still accepts a spec path, not a package name.
+
+## [0.6.14] - 2026-11-27
+
+### Changed
+
+- **Single repository lock.** `repo serve` push handlers now take the same
+  `<root>/.lock` flock as `repo add`, `repo pin`, `repo sign` and
+  `publish-index`. The in-process `write_lock` mutex remains only to
+  serialize server threads. This closes the documented race between HTTP
+  push and a local `repo add` on the same root.
+
 ## [0.6.13] - 2026-11-26
 
 ### Fixed

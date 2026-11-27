@@ -225,6 +225,12 @@ fn handle_push(req: &Request, state: &Arc<ServerState>) -> Response {
     // ServerState уже держит Config в памяти — повторный discovery
     // не нужен и может привести к race при hot-reload server config.
     let root = RepoRoot::open_with_config(&state.root_path, state.config.clone());
+    let _file_lock = match super::util::FileLock::acquire(&root.lock_path()) {
+        Ok(l) => l,
+        Err(e) => {
+            return Response::internal(&format!("lock {}: {e:#}", root.lock_path().display()))
+        }
+    };
 
     let result = super::add::add_one(
         &root,
